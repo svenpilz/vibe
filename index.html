@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Berlin Micromapping — area:highway visualizer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; overflow: hidden; font-family: system-ui, sans-serif; }
+    #map { width: 100%; height: 100%; display: block; cursor: grab; background: #1a1a1e; }
+    #map.dragging { cursor: grabbing; }
+
+    #panel {
+      position: fixed; top: 12px; left: 12px; width: 280px;
+      background: rgba(24, 24, 28, 0.92); color: #eee;
+      border-radius: 10px; padding: 14px;
+      backdrop-filter: blur(8px);
+      font-size: 13px; line-height: 1.45;
+      max-height: calc(100vh - 24px); overflow-y: auto;
+    }
+    #panel h1 { font-size: 15px; margin-bottom: 8px; }
+    #panel .sub { color: #999; margin-bottom: 10px; font-size: 12px; }
+
+    .layer { display: flex; align-items: center; gap: 8px; padding: 3px 0; user-select: none; }
+    .layer input { accent-color: #7ec8ff; }
+    .layer .swatch { width: 14px; height: 14px; border-radius: 3px; flex: none; border: 1px solid rgba(255,255,255,0.25); }
+    .layer label { cursor: pointer; flex: 1; }
+    .layer .count { color: #888; font-size: 11px; }
+
+    #status { position: fixed; bottom: 12px; left: 12px; color: #9aa; font-size: 12px;
+      background: rgba(24,24,28,0.85); padding: 6px 10px; border-radius: 6px; }
+
+    #info {
+      position: fixed; top: 12px; right: 12px; width: 300px;
+      background: rgba(24, 24, 28, 0.92); color: #eee;
+      border-radius: 10px; padding: 14px; font-size: 12.5px;
+      display: none; line-height: 1.5; max-height: calc(100vh - 24px); overflow-y: auto;
+    }
+    #info h3 { font-size: 13px; margin-bottom: 6px; color: #7ec8ff; }
+    #info .tag { display: flex; gap: 8px; }
+    #info .tag .k { color: #ffb86c; min-width: 110px; }
+    #info .tag .v { color: #ddd; word-break: break-all; }
+    #info .close { float: right; cursor: pointer; color: #888; padding: 0 4px; }
+
+    #legend {
+      position: fixed; bottom: 12px; right: 12px;
+      background: rgba(24,24,28,0.92); color: #ccc; border-radius: 8px;
+      padding: 10px 12px; font-size: 11.5px; max-width: 230px;
+    }
+    #legend .row { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
+    #legend .sw { width: 22px; height: 12px; border-radius: 2px; border: 1px solid #444; flex: none; }
+    a { color: #7ec8ff; }
+  </style>
+</head>
+<body>
+  <canvas id="map"></canvas>
+
+  <div id="panel">
+    <h1>Berlin Micromapping</h1>
+    <div class="sub">area:highway polygons with surface details from centerlines, footways, crossings, kerbs. Source: <a href="https://download.geofabrik.de/europe/germany/berlin.html" target="_blank">Geofabrik Berlin PBF</a></div>
+    <div id="layers"></div>
+    <div class="sub" id="zoomhint">scroll to zoom · drag to pan · click a feature for tags</div>
+  </div>
+
+  <div id="info"></div>
+  <div id="status">loading data…</div>
+
+  <div id="legend">
+    <div style="color:#888; margin-bottom:4px">surface colors</div>
+    <div id="legendSurfaces"></div>
+  </div>
+
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>
