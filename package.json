@@ -1,0 +1,24 @@
+{
+  "name": "berlin-micromap",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Render OpenStreetMap PBF (Geofabrik Berlin) with area:highway polygons, centerline surface details, footways, crossings and kerbs",
+  "scripts": {
+    "download": "tsx scripts/download.ts",
+    "extract": "tsx scripts/extract.ts",
+    "data": "tsx scripts/download.ts && tsx scripts/extract.ts",
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "make-fixture": "tsx tests/make-fixture.ts",
+    "test": "tsx tests/run.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "pbf": "^5.1.2",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0",
+    "vite": "^5.4.0"
+  }
+}
