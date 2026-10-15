@@ -9,7 +9,7 @@
  *              pedestrian/service etc.), carrying surface/surface:colour/width.
  *   footways  : highway=footway/sidewalk lines with surface + width.
  *   crossings : footway=crossing ways with crossing:markings (zebra/dashes/...).
- *   kerbs     : barrier=kerb nodes with kerb=* details.
+ *   kerbs     : barrier=kerb nodes AND ways with kerb=* details.
  */
 import { OSMPBFParser, createOSMData, type OSMTags, type OSMWay } from "../src/osm-pbf";
 import { mkdirSync, writeFileSync, writeSync, openSync } from "node:fs";
@@ -52,6 +52,14 @@ interface KerbFeature {
   tactilePaving?: string;
   lat: number;
   lon: number;
+}
+interface KerbWayFeature {
+  type: "kerbway";
+  id: string;
+  kerb: string;
+  tactilePaving?: string;
+  coords: number[][];
+  bbox: [number, number, number, number];
 }
 
 function q(coords: [number, number][]): number[][] {
@@ -138,6 +146,7 @@ const areas: AreaFeature[] = [];
 const centerlines: LineFeature[] = [];
 const footways: LineFeature[] = [];
 const crossings: LineFeature[] = [];
+const kerbWays: KerbWayFeature[] = [];
 
 let wayCount = 0;
 for (const way of data.ways.values()) {
@@ -161,6 +170,22 @@ for (const way of data.ways.values()) {
       lit: tags["lit"],
       outer: [qc],
       holes: [],
+      bbox: bboxOfQ(qc),
+    });
+    continue;
+  }
+
+  const isKerbWay = tags["barrier"] === "kerb" || tags["kerb"] !== undefined;
+  if (isKerbWay) {
+    const coords = wayCoords(way);
+    if (!coords) continue;
+    const qc = q(coords);
+    kerbWays.push({
+      type: "kerbway",
+      id: `w${way.id}`,
+      kerb: tags["kerb"] ?? tags["barrier"],
+      tactilePaving: tags["tactile_paving"],
+      coords: qc,
       bbox: bboxOfQ(qc),
     });
     continue;
@@ -269,7 +294,7 @@ console.log(`centerlines: ${centerlines.length}`);
 console.log(`footways: ${footways.length}`);
 console.log(`crossings: ${crossings.length}`);
 
-// ---- kerbs --------------------------------------------------------------
+// ---- kerbs (nodes) ------------------------------------------------------
 const kerbs: KerbFeature[] = [];
 for (const [id, tags] of data.nodeTags) {
   if (tags["barrier"] === "kerb" || tags["kerb"] !== undefined) {
@@ -285,7 +310,7 @@ for (const [id, tags] of data.nodeTags) {
     });
   }
 }
-console.log(`kerbs: ${kerbs.length}`);
+console.log(`kerbs: ${kerbs.length} nodes, ${kerbWays.length} ways`);
 
 // free parse structures before building the area index
 // @ts-ignore
@@ -316,7 +341,7 @@ for (const cl of centerlines) {
 console.log(`surfaces inherited from centerlines: ${inherited}`);
 
 // ---- write jsonl --------------------------------------------------------
-type AnyFeature = AreaFeature | LineFeature | KerbFeature;
+type AnyFeature = AreaFeature | LineFeature | KerbFeature | KerbWayFeature;
 mkdirSync("data", { recursive: true });
 const fd = openSync(OUT, "w");
 let count = 0;
@@ -329,6 +354,7 @@ for (const c of centerlines) pushLine(c);
 for (const f of footways) pushLine(f);
 for (const c of crossings) pushLine(c);
 for (const k of kerbs) pushLine(k);
+for (const k of kerbWays) pushLine(k);
 const { closeSync } = await import("node:fs");
 closeSync(fd);
 console.log(`wrote ${OUT}: ${count} features`);
