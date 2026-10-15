@@ -30,7 +30,6 @@ const layers = {
   footways: true,
   crossings: true,
   kerbs: true,
-  arealOutline: true,
 };
 
 // ---------------- projection ----------------
@@ -137,13 +136,14 @@ function draw() {
       }
       ctx.fill("evenodd");
 
-      if (layers.arealOutline && view.scale > 3000) {
-        ctx.strokeStyle = "rgba(255,255,255,0.35)";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        for (const ring of area.outer) drawRing(ring, true);
-        ctx.stroke();
-      }
+      // stroke the ring in the fill color, wide enough to cover both the
+      // antialiased boundary pixels and small (cm-scale) geometric gaps
+      // between neighboring OSM polygons, so areas read as one continuous
+      // surface instead of showing white seams
+      ctx.lineWidth = 4;
+      ctx.lineJoin = "round";
+      ctx.strokeStyle = ctx.fillStyle as string;
+      ctx.stroke();
     }
   }
 
@@ -181,12 +181,14 @@ function draw() {
       const widthM = cr.width ?? 3;
       ctx.lineCap = "butt";
       if (stripe) {
+        // base
         ctx.strokeStyle = "#5a5a60";
         ctx.lineWidth = Math.max(2, widthM * px * 0.5);
         ctx.beginPath();
         strokePolyline(cr.coords);
         ctx.stroke();
 
+        // stripes perpendicular to direction
         const m = (cr.crossingMarkings ?? "").toLowerCase();
         if (m.includes("zebra")) {
           drawZebra(cr, widthM, stripe);
@@ -473,7 +475,6 @@ function buildLayerPanel() {
   const wrap = document.getElementById("layers")!;
   const defs: { key: keyof typeof layers; label: string; swatch: string }[] = [
     { key: "areas", label: "highway areas (surface fill)", swatch: "#6d6055" },
-    { key: "arealOutline", label: "area outlines", swatch: "rgba(255,255,255,0.35)" },
     { key: "centerlines", label: "centerlines (surface)", swatch: "#7a6a52" },
     { key: "footways", label: "footways / sidewalks", swatch: "#cfcfd6" },
     { key: "crossings", label: "crossings (markings)", swatch: "#e8e8e8" },
