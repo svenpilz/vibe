@@ -1,0 +1,92 @@
+/**
+ * Shared feature types (quantized to 1e-7 degree units).
+ * Coordinates are [lonQ, latQ] with Q = 1e-7 degrees.
+ */
+
+export type Q = number;
+
+export interface AreaFeature {
+  type: "area";
+  id: string;
+  highway: string;
+  surface?: string;
+  surfaceColour?: string;
+  name?: string;
+  wheelchair?: string;
+  lit?: string;
+  outer: Q[][][];
+  holes: Q[][][];
+  bbox: [number, number, number, number];
+}
+
+export interface LineFeature {
+  type: "centerline" | "footway" | "crossing";
+  id: string;
+  highway?: string;
+  footway?: string;
+  crossing?: string;
+  crossingMarkings?: string;
+  surface?: string;
+  surfaceColour?: string;
+  width?: number;
+  lit?: string;
+  name?: string;
+  coords: Q[][];
+  bbox: [number, number, number, number];
+}
+
+export interface KerbFeature {
+  type: "kerb";
+  id: string;
+  kerb: string;
+  tactilePaving?: string;
+  lat: Q;
+  lon: Q;
+}
+
+export type Feature = AreaFeature | LineFeature | KerbFeature;
+
+export interface Dataset {
+  areas: AreaFeature[];
+  centerlines: LineFeature[];
+  footways: LineFeature[];
+  crossings: LineFeature[];
+  kerbs: KerbFeature[];
+}
+
+export const SURFACE_COLORS: Record<string, string> = {
+  asphalt: "#3d3d42",
+  concrete: "#8d8d93",
+  "concrete:plates": "#9a9aa0",
+  sett: "#7a6a52",
+  paving_stones: "#75685a",
+  "paving_stones:lanes": "#75685a",
+  cobblestone: "#6d6055",
+  "cobblestone:flattened": "#6d6055",
+  unhewn_cobblestone: "#5e5347",
+  granite: "#83756a",
+  gravel: "#a89c85",
+  fine_gravel: "#b3a892",
+  compacted: "#96917f",
+  ground: "#7d745f",
+  dirt: "#806f52",
+  sand: "#cbb384",
+  grass: "#5d7a44",
+  grass_paver: "#688052",
+  metal: "#9aa4ad",
+  wood: "#8a6f4d",
+  pebblestone: "#9b9284",
+  woodchips: "#8a6f4d",
+};
+
+export function surfaceColor(surface?: string): string {
+  if (!surface) return "#4a4a50";
+  if (SURFACE_COLORS[surface]) return SURFACE_COLORS[surface];
+  const base = surface.split(";")[0].split(":")[0];
+  return SURFACE_COLORS[base] ?? "#4a4a50";
+}
+
+export function normalizeSurface(s?: string): string | undefined {
+  if (!s) return undefined;
+  return s.split(";")[0].split(":")[0];
+}
