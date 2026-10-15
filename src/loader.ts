@@ -35,7 +35,7 @@ export async function loadDataset(onProgress?: (msg: string) => void): Promise<D
     text = await res.text();
   }
   onProgress?.("parsing…");
-  const ds: Dataset = { areas: [], centerlines: [], footways: [], crossings: [], kerbs: [] };
+  const ds: Dataset = { areas: [], centerlines: [], footways: [], crossings: [], kerbs: [], kerbWays: [] };
   const lines = text.split("\n");
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
@@ -47,6 +47,7 @@ export async function loadDataset(onProgress?: (msg: string) => void): Promise<D
       case "footway": ds.footways.push(f); break;
       case "crossing": ds.crossings.push(f); break;
       case "kerb": ds.kerbs.push(f); break;
+      case "kerbway": ds.kerbWays.push(f); break;
     }
   }
   onProgress?.("");
