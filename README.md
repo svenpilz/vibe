@@ -1,5 +1,7 @@
 # Berlin Micromapping Visualizer
 
+**Live demo**: https://svenpilz.github.io/vibe/
+
 A TypeScript app that renders [Geofabrik's Berlin `osm.pbf`](https://download.geofabrik.de/europe/germany/berlin.html)
 with a focus on **`area:highway` micromapping**: highway area polygons as outlines, surface details
 (asphalt, sett, paving_stones …) inherited from the corresponding highway **centerlines**, plus
@@ -86,6 +88,10 @@ The loader resolves its data relative to `document.baseURI`, so the site works u
 base path, and it handles both serving modes: hosts that transparently decode `.gz`
 (`Content-Encoding: gzip`) and hosts that serve it as a plain file (client-side
 `DecompressionStream` fallback, then `map.jsonl` as last resort).
+
+GitHub Pages deployment is automated via `.github/workflows/pages.yml` (downloads the PBF,
+extracts, builds, and publishes on every push to `main`). Enable it once in
+**Settings → Pages → Source: GitHub Actions**.
 
 ## Scripts
 
