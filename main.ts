@@ -1,5 +1,5 @@
 import { loadDataset, buildIndex, queryIndex, type Indexed } from "./src/loader";
-import type { AreaFeature, LineFeature, KerbFeature, Dataset, Q } from "./src/features";
+import type { AreaFeature, LineFeature, KerbFeature, KerbWayFeature, Dataset, Q } from "./src/features";
 import { surfaceColor, normalizeSurface } from "./src/features";
 
 const canvas = document.getElementById("map") as HTMLCanvasElement;
@@ -22,6 +22,7 @@ let lineIndexes: {
   crossings: Indexed<LineFeature>;
 } | null = null;
 let kerbGrid: Map<number, KerbFeature[]> | null = null;
+let kerbWayIndex: Indexed<KerbWayFeature> | null = null;
 
 const layers = {
   areas: true,
@@ -45,6 +46,7 @@ function lonToX(lonDeg: number): number {
 function latToY(latDeg: number): number {
   return -(mercY(latDeg) - mercY(view.cy)) * R() + canvas.height / 2;
 }
+/** R: pixels per radian of longitude. Keeps x/y scales equal (no distortion). */
 function R(): number {
   return view.scale * (180 / Math.PI);
 }
@@ -75,17 +77,25 @@ function drawRing(ring: Q[][], close: boolean) {
 
 function strokePolyline(coords: Q[][]) {
   if (coords.length < 2) return;
-  const px = pxPerMeter();
-  const skipDist = 2 / px;
-  ctx.moveTo(lonToX(coords[0][0] / Q), latToY(coords[0][1] / Q));
-  let lastX = coords[0][0], lastY = coords[0][1];
+  let lastX = lonToX(coords[0][0] / Q);
+  let lastY = latToY(coords[0][1] / Q);
+  ctx.moveTo(lastX, lastY);
   for (let i = 1; i < coords.length; i++) {
-    const [x, y] = coords[i];
-    const dx = (x - lastX) / Q, dy = (y - lastY) / Q;
-    if (dx * dx + dy * dy < skipDist * skipDist && i < coords.length - 1) continue;
-    ctx.lineTo(lonToX(x / Q), latToY(y / Q));
+    const x = lonToX(coords[i][0] / Q);
+    const y = latToY(coords[i][1] / Q);
+    const dx = x - lastX, dy = y - lastY;
+    // skip vertices closer than ~2px on screen to the last drawn vertex
+    if (dx * dx + dy * dy < 4 && i < coords.length - 1) continue;
+    ctx.lineTo(x, y);
     lastX = x; lastY = y;
   }
+}
+
+function kerbColor(kerb: string, tactilePaving?: string): string {
+  if (tactilePaving === "yes") return "#e8c04a";
+  if (kerb === "flush" || kerb.startsWith("flush")) return "#9a6ee8";
+  if (kerb === "lowered" || kerb.startsWith("lowered")) return "#4ac8e8";
+  return "#e86e6e";
 }
 
 function crossingStripeColor(markings?: string): string | null {
@@ -113,6 +123,7 @@ function draw() {
   const bbox = viewBboxQ();
   const visibleAreas = layers.areas && areaIndex ? queryIndex(areaIndex, bbox) : [];
 
+  // --- areas ---
   if (layers.areas && areaIndex) {
     for (const area of visibleAreas) {
       const fill = surfaceColor(normalizeSurface(area.surface) ?? undefined);
@@ -136,6 +147,7 @@ function draw() {
     }
   }
 
+  // --- centerlines (surface detail) ---
   if (layers.centerlines && lineIndexes) {
     const px = pxPerMeter();
     for (const cl of queryIndex(lineIndexes.centerlines, bbox)) {
@@ -149,6 +161,7 @@ function draw() {
     }
   }
 
+  // --- footways ---
   if (layers.footways && lineIndexes) {
     const px = pxPerMeter();
     for (const fw of queryIndex(lineIndexes.footways, bbox)) {
@@ -160,6 +173,7 @@ function draw() {
     }
   }
 
+  // --- crossings with markings ---
   if (layers.crossings && lineIndexes) {
     const px = pxPerMeter();
     for (const cr of queryIndex(lineIndexes.crossings, bbox)) {
@@ -198,6 +212,20 @@ function draw() {
     ctx.lineCap = "round";
   }
 
+  // --- kerb ways (lines) ---
+  if (layers.kerbs && kerbWayIndex) {
+    const px = pxPerMeter();
+    ctx.lineCap = "round";
+    for (const kw of queryIndex(kerbWayIndex, bbox)) {
+      ctx.strokeStyle = kerbColor(kw.kerb, kw.tactilePaving);
+      ctx.lineWidth = Math.max(1, 0.3 * px);
+      ctx.beginPath();
+      strokePolyline(kw.coords);
+      ctx.stroke();
+    }
+  }
+
+  // --- kerb nodes ---
   if (layers.kerbs && kerbGrid) {
     const px = pxPerMeter();
     const r = Math.max(1.5, Math.min(10, 0.6 * px));
@@ -210,10 +238,7 @@ function draw() {
         if (x < -10 || y < -10 || x > w + 10 || y > h + 10) continue;
         ctx.beginPath();
         ctx.arc(x, y, r, 0, Math.PI * 2);
-        if (k.tactilePaving === "yes") ctx.fillStyle = "#e8c04a";
-        else if (k.kerb === "flush") ctx.fillStyle = "#9a6ee8";
-        else if (k.kerb === "lowered" || k.kerb.startsWith("lowered")) ctx.fillStyle = "#4ac8e8";
-        else ctx.fillStyle = "#e86e6e";
+        ctx.fillStyle = kerbColor(k.kerb, k.tactilePaving);
         ctx.fill();
       }
     }
@@ -305,7 +330,7 @@ canvas.addEventListener("click", (e) => {
   showInfo(feature);
 });
 
-function pickFeature(px: number, py: number, bbox: [number, number, number, number]): (AreaFeature | LineFeature | KerbFeature) | null {
+function pickFeature(px: number, py: number, bbox: [number, number, number, number]): (AreaFeature | LineFeature | KerbFeature | KerbWayFeature) | null {
   const tol = 6;
   const lon = view.cx + (((px - canvas.width / 2) / R()) * 180) / Math.PI;
   const mercC = mercY(view.cy) - (py - canvas.height / 2) / R();
@@ -313,6 +338,7 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
   const lonQ = Math.round(lon * Q), latQ = Math.round(lat * Q);
   const tolQ = Math.round((tol / view.scale) * Q);
 
+  // areas: point-in-polygon
   if (layers.areas && areaIndex) {
     for (const area of queryIndex(areaIndex, [lonQ, latQ, lonQ, latQ])) {
       let inOuter = false;
@@ -324,6 +350,7 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
     }
   }
 
+  // kerb nodes (points, closest)
   if (layers.kerbs && kerbGrid) {
     let best: KerbFeature | null = null;
     let bestD = tolQ * tolQ * 4;
@@ -342,6 +369,19 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
     if (best) return best;
   }
 
+  // kerb ways: nearest segment within tolerance
+  if (layers.kerbs && kerbWayIndex) {
+    let best: { d: number; f: KerbWayFeature | null } = { d: tolQ * tolQ * 4, f: null };
+    for (const kw of queryIndex(kerbWayIndex, [lonQ - tolQ * 6, latQ - tolQ * 6, lonQ + tolQ * 6, latQ + tolQ * 6])) {
+      for (let i = 1; i < kw.coords.length; i++) {
+        const d = distToSegQ(lonQ, latQ, kw.coords[i - 1], kw.coords[i]);
+        if (d < best.d) { best.d = d; best.f = kw; }
+      }
+    }
+    if (best.f) return best.f;
+  }
+
+  // lines: nearest segment within tolerance
   if (lineIndexes) {
     const check = (feat: LineFeature, bestD: { d: number; f: LineFeature | null }) => {
       for (let i = 1; i < feat.coords.length; i++) {
@@ -384,7 +424,7 @@ function distToSegQ(px: number, py: number, a: Q[], b: Q[]): number {
 }
 
 // ---------------- info panel ----------------
-function showInfo(f: AreaFeature | LineFeature | KerbFeature | null) {
+function showInfo(f: AreaFeature | LineFeature | KerbFeature | KerbWayFeature | null) {
   if (!f) { infoEl.style.display = "none"; return; }
   const rows: [string, string][] = [];
   const push = (k: string, v?: string | number) => {
@@ -401,6 +441,10 @@ function showInfo(f: AreaFeature | LineFeature | KerbFeature | null) {
     push("lit", f.lit);
   } else if (f.type === "kerb") {
     rows.push(["feature", `kerb (${f.id})`]);
+    push("kerb", f.kerb);
+    push("tactile_paving", f.tactilePaving);
+  } else if (f.type === "kerbway") {
+    rows.push(["feature", `kerb way (${f.id})`]);
     push("kerb", f.kerb);
     push("tactile_paving", f.tactilePaving);
   } else {
@@ -433,7 +477,7 @@ function buildLayerPanel() {
     { key: "centerlines", label: "centerlines (surface)", swatch: "#7a6a52" },
     { key: "footways", label: "footways / sidewalks", swatch: "#cfcfd6" },
     { key: "crossings", label: "crossings (markings)", swatch: "#e8e8e8" },
-    { key: "kerbs", label: "kerbs", swatch: "#e86e6e" },
+    { key: "kerbs", label: "kerbs (nodes + ways)", swatch: "#e86e6e" },
   ];
   for (const d of defs) {
     const row = document.createElement("div");
@@ -448,6 +492,7 @@ function buildLayerPanel() {
     wrap.appendChild(row);
   }
 
+  // legend
   const legend = document.getElementById("legendSurfaces")!;
   const surfaces = ["asphalt", "concrete", "sett", "paving_stones", "cobblestone", "gravel", "grass", "compacted"];
   for (const s of surfaces) {
@@ -475,7 +520,7 @@ function countFor(key: keyof typeof layers): string {
     case "centerlines": return dataset.centerlines.length.toLocaleString();
     case "footways": return dataset.footways.length.toLocaleString();
     case "crossings": return dataset.crossings.length.toLocaleString();
-    case "kerbs": return dataset.kerbs.length.toLocaleString();
+    case "kerbs": return (dataset.kerbs.length + dataset.kerbWays.length).toLocaleString();
     default: return "";
   }
 }
@@ -503,6 +548,7 @@ async function main() {
       footways: buildIndex(dataset.footways),
       crossings: buildIndex(dataset.crossings),
     };
+    kerbWayIndex = buildIndex(dataset.kerbWays);
     kerbGrid = new Map();
     for (const k of dataset.kerbs) {
       const key = Math.floor(k.lon / 50000) * 100000 + Math.floor(k.lat / 50000);
@@ -514,13 +560,14 @@ async function main() {
     requestDraw();
     statusEl.textContent = `loaded ${(
       dataset.areas.length + dataset.centerlines.length + dataset.footways.length +
-      dataset.crossings.length + dataset.kerbs.length
+      dataset.crossings.length + dataset.kerbs.length + dataset.kerbWays.length
     ).toLocaleString()} features in ${((performance.now() - t0) / 1000).toFixed(1)}s — zoom ${view.scale > 50000 ? "detailed" : "city"}`;
   } catch (err) {
     statusEl.textContent = `error: ${err instanceof Error ? err.message : err}`;
   }
 }
 
+// expose view control for tests/tools
 (window as any).__setView = (cx: number, cy: number, scale: number) => {
   view = { cx, cy, scale };
   requestDraw();
