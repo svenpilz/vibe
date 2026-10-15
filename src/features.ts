@@ -3,7 +3,7 @@
  * Coordinates are [lonQ, latQ] with Q = 1e-7 degrees.
  */
 
-export type Q = number;
+export type Q = number; // quantized lon/lat unit
 
 export interface AreaFeature {
   type: "area";
@@ -44,7 +44,16 @@ export interface KerbFeature {
   lon: Q;
 }
 
-export type Feature = AreaFeature | LineFeature | KerbFeature;
+export interface KerbWayFeature {
+  type: "kerbway";
+  id: string;
+  kerb: string;
+  tactilePaving?: string;
+  coords: Q[][];
+  bbox: [number, number, number, number];
+}
+
+export type Feature = AreaFeature | LineFeature | KerbFeature | KerbWayFeature;
 
 export interface Dataset {
   areas: AreaFeature[];
@@ -52,6 +61,7 @@ export interface Dataset {
   footways: LineFeature[];
   crossings: LineFeature[];
   kerbs: KerbFeature[];
+  kerbWays: KerbWayFeature[];
 }
 
 export const SURFACE_COLORS: Record<string, string> = {
