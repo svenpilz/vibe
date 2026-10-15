@@ -1,0 +1,6 @@
+node_modules/
+dist/
+data/berlin-latest.osm.pbf
+data/map.jsonl
+data/map.jsonl.gz
+.vibe/
