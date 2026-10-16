@@ -95,6 +95,17 @@ export interface GrassFeature {
   bbox: [number, number, number, number];
 }
 
+export interface StreetLampFeature {
+  type: "streetlamp";
+  id: string;
+  /** OSM layer=* tag (default 0) */
+  layer: number;
+  /** OSM level=* tag (undefined when absent) */
+  level?: number;
+  lat: Q;
+  lon: Q;
+}
+
 export interface LanduseFeature {
   type: "landuse";
   id: string;
@@ -161,7 +172,7 @@ export interface KerbWayFeature {
   bbox: [number, number, number, number];
 }
 
-export type Feature = AreaFeature | BuildingFeature | GrassFeature | LineFeature | KerbFeature | KerbWayFeature | BollardFeature | FenceFeature | LanduseFeature;
+export type Feature = AreaFeature | BuildingFeature | GrassFeature | LineFeature | KerbFeature | KerbWayFeature | BollardFeature | FenceFeature | LanduseFeature | StreetLampFeature;
 
 export interface Dataset {
   areas: AreaFeature[];
@@ -175,6 +186,7 @@ export interface Dataset {
   bollards: BollardFeature[];
   fences: FenceFeature[];
   landuse: LanduseFeature[];
+  streetLamps: StreetLampFeature[];
   laneMarkings: LineFeature[];
 }
 
