@@ -47,6 +47,38 @@ function bboxOfQ(coords: number[][]): [number, number, number, number] {
   return [minX, minY, maxX, maxY];
 }
 
+/** distance along direction d from pt until leaving the area, or null if never */
+function rayExitInArea(pt: number[], d: number[], area: AreaFeature, maxRay: number): number | null {
+  let best: number | null = null;
+  const test = (t: number): void => {
+    const p = [pt[0] + d[0] * t, pt[1] + d[1] * t];
+    if (!pointInAreaQ(p, area)) {
+      if (best === null || t < best) best = t;
+    }
+  };
+  // coarse scan then refine
+  const step = 2000;
+  let prevInside = true;
+  for (let t = step; t <= maxRay; t += step) {
+    const p = [pt[0] + d[0] * t, pt[1] + d[1] * t];
+    const inside = pointInAreaQ(p, area);
+    if (prevInside && !inside) {
+      // binary refine between t-step and t
+      let lo = t - step, hi = t;
+      for (let k = 0; k < 24; k++) {
+        const midT = (lo + hi) / 2;
+        const pm = [pt[0] + d[0] * midT, pt[1] + d[1] * midT];
+        if (pointInAreaQ(pm, area)) lo = midT; else hi = midT;
+      }
+      best = (lo + hi) / 2;
+      break;
+    }
+    prevInside = inside;
+  }
+  void test;
+  return best;
+}
+
 function pointInRingQ(pt: number[], ring: number[][]): boolean {
   let inside = false;
   const x = pt[0], y = pt[1];
@@ -77,6 +109,12 @@ function bboxOverlap(
   b: [number, number, number, number]
 ): boolean {
   return a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
+}
+
+function parseLanes(v: string | undefined): number | undefined {
+  if (v === undefined) return undefined;
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) && n > 0 && n <= 16 ? n : undefined;
 }
 
 function parseLevel(v: string | undefined): number | undefined {
@@ -180,6 +218,7 @@ export function extractFeatures(
         name: tags["name"],
         wheelchair: tags["wheelchair"],
         lit: tags["lit"],
+        junction: areaHighway === "junction" || tags["junction"] !== undefined,
         layer: parseLayer(tags["layer"]),
       level: parseLevel(tags["level"]),
         outer: [qc],
@@ -277,6 +316,8 @@ export function extractFeatures(
           surface: tags["surface"],
           surfaceColour: tags["surface:colour"],
           width: Number.isFinite(widthNum as number) ? widthNum : undefined,
+          lanes: parseLanes(tags["lanes"]),
+          lanesFwd: parseLanes(tags["lanes:forward"]) ?? parseLanes(tags["lanes:backward"]) ?? undefined,
           lit: tags["lit"],
           name: tags["name"],
           layer: parseLayer(tags["layer"]),
@@ -348,6 +389,7 @@ export function extractFeatures(
       name: tags["name"],
       wheelchair: tags["wheelchair"],
       lit: tags["lit"],
+      junction: areaHighway === "junction" || tags["junction"] !== undefined,
       layer: parseLayer(tags["layer"]),
       level: parseLevel(tags["level"]),
       outer: outerRings,
@@ -455,6 +497,45 @@ export function extractFeatures(
       if (area.layer !== cr.layer) continue;
       if (!bboxOverlap(area.bbox, cr.bbox)) continue;
       if (pointInAreaQ(mid, area)) { cr.areaId = area.id; break; }
+    }
+  }
+
+  // assign lane-bearing centerlines to the highway area they run in and
+  // infer the road width from the area: cast rays perpendicular to the
+  // centerline at its midpoint and measure the distance to the area edge.
+  // All lanes share the width equally; lane borders drawn at draw time are
+  // solid between opposite directions, dashed within a direction.
+  onProgress?.(89, "inferring lane widths from highway areas…");
+  const areaGrid4 = buildAreaIndex(areas);
+  for (const cl of centerlines) {
+    if (cl.lanes === undefined) continue;
+    const candidates = queryAreas(areaGrid4, cl.bbox);
+    const mid = cl.coords[Math.floor(cl.coords.length / 2)];
+    for (const area of candidates) {
+      if (area.junction) continue;
+      if (area.layer !== cl.layer) continue;
+      if (!bboxOverlap(area.bbox, cl.bbox)) continue;
+      if (!pointInAreaQ(mid, area)) continue;
+      cl.areaId = area.id;
+      // direction of the centerline at its midpoint
+      const i = Math.floor(cl.coords.length / 2);
+      const dx = cl.coords[i][0] - cl.coords[i - 1][0];
+      const dy = cl.coords[i][1] - cl.coords[i - 1][1];
+      const len = Math.hypot(dx, dy);
+      if (len === 0) break;
+      const ux = dx / len, uy = dy / len;
+      const nx = -uy, ny = ux;
+      // ray length: area bbox diagonal + margin (1e-7 deg ~ 1.1 m, safe upper bound)
+      const [minX, minY, maxX, maxY] = area.bbox;
+      const maxRay = Math.hypot(maxX - minX, maxY - minY) + 1000;
+      const left = rayExitInArea(mid, [nx, ny], area, maxRay);
+      const right = rayExitInArea(mid, [-nx, -ny], area, maxRay);
+      if (left === null || right === null) break;
+      // 1e-7 deg latitude ~ 1.11 m; good enough for lane estimation
+      const widthM = ((left + right) / 1e7) * 111_320 * Math.cos((mid[1] / 1e7) * Math.PI / 180);
+      cl.laneW = widthM / cl.lanes;
+      cl.lanesFwd = cl.lanesFwd ?? Math.ceil(cl.lanes / 2);
+      break;
     }
   }
 

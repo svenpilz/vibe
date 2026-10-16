@@ -14,6 +14,8 @@ export interface AreaFeature {
   name?: string;
   wheelchair?: string;
   lit?: string;
+  /** junction=yes / area:highway=junction */
+  junction?: boolean;
   /** OSM layer=* tag (default 0) */
   layer: number;
   /** OSM level=* tag (undefined when absent) */
@@ -41,6 +43,12 @@ export interface LineFeature {
   level?: number;
   /** id of the highway area the crossing lies in (markings clipped to it) */
   areaId?: string;
+  /** lanes=* total lane count (centerlines only) */
+  lanes?: number;
+  /** lane width in meters inferred from the highway area (centerlines only) */
+  laneW?: number;
+  /** number of lanes forward (same direction of travel, centerlines only) */
+  lanesFwd?: number;
   coords: Q[][];
   bbox: [number, number, number, number];
 }

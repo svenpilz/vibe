@@ -276,6 +276,11 @@ function draw() {
       strokePolyline(cl.coords);
       ctx.stroke();
       ctx.globalAlpha = 1;
+      if (cl.lanes !== undefined && cl.laneW !== undefined && cl.lanes >= 2) {
+        clipToArea(cl.areaId);
+        drawLaneMarkings(cl);
+        ctx.restore();
+      }
     }
   }
 
@@ -488,6 +493,49 @@ function clipToArea(areaId: string | undefined): boolean {
   for (const hole of area.holes) drawRing(hole, true);
   ctx.clip("evenodd");
   return true;
+}
+
+/**
+ * Lane markings for a lane-bearing centerline: the road width is inferred
+ * from the containing highway area (cl.areaId), lanes split it equally.
+ * Border between opposite directions is solid; borders between lanes of
+ * the same direction are dashed. Clipped to the area so markings never
+ * extend past the street outline.
+ */
+function drawLaneMarkings(cl: LineFeature) {
+  if (cl.lanes === undefined || cl.laneW === undefined || cl.lanes! < 2) return;
+  const px = pxPerMeter();
+  const lineW = Math.max(1, 0.12 * px);
+  const fwd = cl.lanesFwd ?? Math.ceil(cl.lanes / 2);
+  const total = cl.lanes;
+
+  ctx.lineWidth = lineW;
+  ctx.lineCap = "butt";
+
+  const px2 = cl.coords;
+  for (let k = 1; k < total; k++) {
+    // -halfRoad .. +halfRoad in lane units; direction border at k === fwd
+    const off = (k - total / 2) * cl.laneW! * px;
+    const solid = k === fwd;
+    ctx.strokeStyle = "#e8e8e8";
+    if (!solid) ctx.setLineDash([Math.max(3, 1.2 * px), Math.max(2, 1.0 * px)]);
+
+    ctx.beginPath();
+    for (let i = 1; i < px2.length; i++) {
+      const [x0, y0] = px2[i - 1];
+      const [x1, y1] = px2[i];
+      const X0 = lonToX(x0 / Q), Y0 = latToY(y0 / Q);
+      const X1 = lonToX(x1 / Q), Y1 = latToY(y1 / Q);
+      const segLen = Math.hypot(X1 - X0, Y1 - Y0);
+      if (segLen === 0) continue;
+      const ux = (X1 - X0) / segLen, uy = (Y1 - Y0) / segLen;
+      const nx = -uy, ny = ux;
+      ctx.moveTo(X0 + nx * off, Y0 + ny * off);
+      ctx.lineTo(X1 + nx * off, Y1 + ny * off);
+    }
+    ctx.stroke();
+    if (!solid) ctx.setLineDash([]);
+  }
 }
 
 // ---------------- interaction ----------------
