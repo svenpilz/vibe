@@ -579,15 +579,17 @@ function drawKerbWays(
     const normals: [number, number][] = [];
     for (let i = 0; i < pts.length; i++) {
       let nx = 0, ny = 0;
+      // right-hand normal in screen coords (y down): direction (dx,dy) ->
+      // (-dy,dx). Walking east, the right side is screen-down (south).
       if (i > 0) {
         const dx = pts[i][0] - pts[i - 1][0], dy = pts[i][1] - pts[i - 1][1];
         const l = Math.hypot(dx, dy);
-        if (l > 0) { nx += dy / l; ny += -dx / l; } // right normal = (dy,-dx)
+        if (l > 0) { nx += -dy / l; ny += dx / l; }
       }
       if (i < pts.length - 1) {
         const dx = pts[i + 1][0] - pts[i][0], dy = pts[i + 1][1] - pts[i][1];
         const l = Math.hypot(dx, dy);
-        if (l > 0) { nx += dy / l; ny += -dx / l; }
+        if (l > 0) { nx += -dy / l; ny += dx / l; }
       }
       const l = Math.hypot(nx, ny);
       normals.push(l > 0 ? [nx / l, ny / l] : [0, 0]);
