@@ -17,7 +17,7 @@
  * layer values present so the UI can offer layer selection.
  */
 import type { OSMData, OSMTags, OSMWay } from "./osm-pbf";
-import type { Q, AreaFeature, BuildingFeature, GrassFeature, LineFeature, KerbFeature, KerbWayFeature, BollardFeature, FenceFeature } from "./features";
+import type { Q, AreaFeature, BuildingFeature, GrassFeature, LineFeature, KerbFeature, KerbWayFeature, BollardFeature, FenceFeature, LanduseFeature } from "./features";
 
 export interface ExtractResult {
   areas: AreaFeature[];
@@ -30,6 +30,7 @@ export interface ExtractResult {
   kerbWays: KerbWayFeature[];
   bollards: BollardFeature[];
   fences: FenceFeature[];
+  landuse: LanduseFeature[];
   laneMarkings: LineFeature[];
   /** all layer values present in the data, sorted ascending */
   layers: number[];
@@ -190,6 +191,14 @@ function parkingOnCarriageway(side: string, tags: OSMTags): boolean {
   return p === "lane";
 }
 
+/** residential building classes (light orange fill); everything else is "other" */
+function buildingUsage(tags: OSMTags): "residential" | "other" {
+  const b = tags["building"];
+  if (b === "residential" || b === "house" || b === "apartments" || b === "detached"
+    || b === "terrace" || b === "semi" || b === "semidetached_house" || b === "bungalow") return "residential";
+  return "other";
+}
+
 function parseLanes(v: string | undefined): number | undefined {
   if (v === undefined) return undefined;
   const n = parseInt(v, 10);
@@ -242,6 +251,7 @@ export function extractFeatures(
   const kerbs: KerbFeature[] = [];
   const bollards: BollardFeature[] = [];
   const fences: FenceFeature[] = [];
+  const landuse: LanduseFeature[] = [];
 
   const wayCoords = (way: OSMWay): [number, number][] | null => {
     const coords: [number, number][] = [];
@@ -270,6 +280,27 @@ export function extractFeatures(
     const areaHighway = tags["area:highway"];
     const highway = tags["highway"];
 
+    const landuseKind = tags["landuse"] === "residential" ? "residential"
+      : tags["landuse"] === "commercial" ? "commercial"
+      : undefined;
+    if (landuseKind && isClosed(way)) {
+      const coords = wayCoords(way);
+      if (coords) {
+        const qc = q(coords);
+        landuse.push({
+          type: "landuse",
+          id: `w${way.id}`,
+          kind: landuseKind,
+          layer: parseLayer(tags["layer"]),
+          level: parseLevel(tags["level"]),
+          outer: [qc],
+          holes: [],
+          bbox: bboxOfQ(qc),
+        });
+      }
+      continue;
+    }
+
     if (tags["building"] !== undefined && isClosed(way)) {
       const coords = wayCoords(way);
       if (coords) {
@@ -278,6 +309,7 @@ export function extractFeatures(
           type: "building",
           id: `w${way.id}`,
           building: tags["building"] || "yes",
+          usage: buildingUsage(tags),
           name: tags["name"],
           layer: parseLayer(tags["layer"]),
           level: parseLevel(tags["level"]),
@@ -498,6 +530,7 @@ export function extractFeatures(
         type: "building",
         id: `r${rel.id}`,
         building: buildingTag || "yes",
+        usage: buildingUsage(tags),
         name: tags["name"],
         layer: parseLayer(tags["layer"]),
         level: parseLevel(tags["level"]),
@@ -802,12 +835,13 @@ export function extractFeatures(
   for (const k of kerbWays) layerSet.add(k.layer);
   for (const b of bollards) layerSet.add(b.layer);
   for (const f of fences) layerSet.add(f.layer);
+  for (const l of landuse) layerSet.add(l.layer);
   for (const k of kerbs) layerSet.add(k.layer);
   const layers = [...layerSet].sort((a, b) => a - b);
 
   // collect all level values (only features with an explicit level=*)
   const levelSet = new Set<number>();
-  for (const arr of [areas, buildings, grass, centerlines, footways, crossings, kerbWays, kerbs, bollards, fences]) {
+  for (const arr of [areas, buildings, grass, centerlines, footways, crossings, kerbWays, kerbs, bollards, fences, landuse]) {
     for (const f of arr) if (f.level !== undefined) levelSet.add(f.level);
   }
   const levels = [...levelSet].sort((a, b) => a - b);
@@ -834,6 +868,7 @@ export function extractFeatures(
   }
   for (const k of kerbWays) expand(k.bbox);
   for (const f of fences) expand(f.bbox);
+  for (const l of landuse) expand(l.bbox);
   for (const b of bollards) {
     if (b.lon < minX) minX = b.lon;
     if (b.lat < minY) minY = b.lat;
@@ -854,6 +889,7 @@ export function extractFeatures(
     kerbWays,
     bollards,
     fences,
+    landuse,
     laneMarkings,
     layers,
     levels,

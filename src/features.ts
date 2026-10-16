@@ -68,6 +68,8 @@ export interface BuildingFeature {
   id: string;
   /** building=* value ("yes" when tag present without a value) */
   building: string;
+  /** residential (building=residential/house/apartments) or other */
+  usage: "residential" | "other";
   name?: string;
   /** OSM layer=* tag (default 0) */
   layer: number;
@@ -81,6 +83,20 @@ export interface GrassFeature {
   type: "grass";
   id: string;
   /** landuse/natural/leisure key of the source (grass, scrub, garden) */
+  kind: string;
+  /** OSM layer=* tag (default 0) */
+  layer: number;
+  /** OSM level=* tag (undefined when absent) */
+  level?: number;
+  outer: Q[][][];
+  holes: Q[][][];
+  bbox: [number, number, number, number];
+}
+
+export interface LanduseFeature {
+  type: "landuse";
+  id: string;
+  /** residential or commercial */
   kind: string;
   /** OSM layer=* tag (default 0) */
   layer: number;
@@ -143,7 +159,7 @@ export interface KerbWayFeature {
   bbox: [number, number, number, number];
 }
 
-export type Feature = AreaFeature | BuildingFeature | GrassFeature | LineFeature | KerbFeature | KerbWayFeature | BollardFeature | FenceFeature;
+export type Feature = AreaFeature | BuildingFeature | GrassFeature | LineFeature | KerbFeature | KerbWayFeature | BollardFeature | FenceFeature | LanduseFeature;
 
 export interface Dataset {
   areas: AreaFeature[];
@@ -156,6 +172,7 @@ export interface Dataset {
   kerbWays: KerbWayFeature[];
   bollards: BollardFeature[];
   fences: FenceFeature[];
+  landuse: LanduseFeature[];
   laneMarkings: LineFeature[];
 }
 

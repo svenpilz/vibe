@@ -1,6 +1,6 @@
 import { buildIndex, queryIndex, type Indexed } from "./src/loader";
 import type { ExtractResult } from "./src/extract";
-import type { AreaFeature, BuildingFeature, GrassFeature, LineFeature, KerbFeature, KerbWayFeature, BollardFeature, FenceFeature, Dataset, Feature, Q } from "./src/features";
+import type { AreaFeature, BuildingFeature, GrassFeature, LineFeature, KerbFeature, KerbWayFeature, BollardFeature, FenceFeature, LanduseFeature, Dataset, Feature, Q } from "./src/features";
 import { surfaceColor, normalizeSurface } from "./src/features";
 
 const canvas = document.getElementById("map") as HTMLCanvasElement;
@@ -28,6 +28,7 @@ let kerbGrid: Map<number, KerbFeature[]> | null = null;
 let kerbWayIndex: Indexed<KerbWayFeature> | null = null;
 let fenceIndex: Indexed<FenceFeature> | null = null;
 let bollardGrid: Map<number, BollardFeature[]> | null = null;
+let landuseIndex: Indexed<LanduseFeature> | null = null;
 let laneMarkingIndex: Indexed<LineFeature> | null = null;
 
 const layers = {
@@ -41,6 +42,7 @@ const layers = {
   kerbs: true,
   bollards: true,
   fences: true,
+  landuse: true,
 };
 
 /**
@@ -61,6 +63,7 @@ const LOD: Record<keyof typeof layers, number> = {
   laneMarkings: 17,
   bollards: 20,
   fences: 20,
+  landuse: 14,
 };
 
 const MAJOR_ROADS = new Set([
@@ -418,6 +421,22 @@ function draw() {
     const onLayer = (f: { layer?: number; level?: number }) =>
       (f.layer ?? 0) === layer && layerVisible(f);
 
+    // --- landuse fills: residential (very light orange), commercial
+    //     (light yellow) — translucent background, not the main focus
+    if (lodVisible("landuse") && landuseIndex) {
+      const lus = queryIndex(landuseIndex, bbox);
+      for (const lu of lus) {
+        if (!onLayer(lu)) continue;
+        ctx.globalAlpha = 0.35;
+        ctx.fillStyle = lu.kind === "residential" ? "#f0c9a0" : "#eee4b3";
+        ctx.beginPath();
+        for (const ring of lu.outer) drawRing(ring, true);
+        for (const hole of lu.holes) drawRing(hole, true);
+        ctx.fill("evenodd");
+        ctx.globalAlpha = 1;
+      }
+    }
+
     // --- green areas: landuse=grass / leisure=garden (same look),
     //     natural=scrub (darker) — mottled texture from zoom 25
     for (const g of gs) {
@@ -457,12 +476,19 @@ function draw() {
       ctx.stroke();
     }
 
-    // --- building outlines ---
-    ctx.strokeStyle = "#8a8a92";
-    ctx.lineWidth = 1.5;
-    ctx.lineJoin = "round";
+    // --- buildings: translucent fill (residential light orange, other
+    //     even lighter) + outline; not the main focus of the rendering
     for (const b of bl) {
       if (!onLayer(b)) continue;
+      ctx.globalAlpha = 0.45;
+      ctx.fillStyle = b.usage === "residential" ? "#f0b98a" : "#f5e9d8";
+      ctx.beginPath();
+      for (const ring of b.outer) drawRing(ring, true);
+      ctx.fill("evenodd");
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = "#8a8a94";
+      ctx.lineWidth = 1.5;
+      ctx.lineJoin = "round";
       ctx.beginPath();
       for (const ring of b.outer) drawRing(ring, true);
       ctx.stroke();
@@ -985,7 +1011,7 @@ canvas.addEventListener("click", (e) => {
   showInfo(feature);
 });
 
-function pickFeature(px: number, py: number, bbox: [number, number, number, number]): (AreaFeature | BuildingFeature | GrassFeature | LineFeature | KerbFeature | KerbWayFeature | BollardFeature | FenceFeature) | null {
+function pickFeature(px: number, py: number, bbox: [number, number, number, number]): (AreaFeature | BuildingFeature | GrassFeature | LineFeature | KerbFeature | KerbWayFeature | BollardFeature | FenceFeature | LanduseFeature) | null {
   const tol = 6;
   const lon = view.cx + (((px - canvas.width / 2) / R()) * 180) / Math.PI;
   const mercC = mercY(view.cy) - (py - canvas.height / 2) / R();
@@ -1025,6 +1051,22 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
       let inHole = false;
       for (const hole of g.holes) if (pointInRingQ(lonQ, latQ, hole)) { inHole = true; break; }
       if (!inHole) return g;
+    }
+  }
+  // landuse areas: point-in-polygon
+  if (lodVisible("landuse") && landuseIndex) {
+    const luHits = queryIndex(landuseIndex, [lonQ, latQ, lonQ, latQ])
+      .filter((lu) => layerVisible(lu));
+    if (selectedLayer === null && luHits.length > 1) {
+      luHits.sort((a, b) => layerSortKey(b) - layerSortKey(a));
+    }
+    for (const lu of luHits) {
+      let inOuter = false;
+      for (const ring of lu.outer) if (pointInRingQ(lonQ, latQ, ring)) { inOuter = true; break; }
+      if (!inOuter) continue;
+      let inHole = false;
+      for (const hole of lu.holes) if (pointInRingQ(lonQ, latQ, hole)) { inHole = true; break; }
+      if (!inHole) return lu;
     }
   }
   // buildings: outline hit (point-in-polygon)
@@ -1152,7 +1194,7 @@ function distToSegQ(px: number, py: number, a: Q[], b: Q[]): number {
 }
 
 // ---------------- info panel ----------------
-function showInfo(f: AreaFeature | BuildingFeature | GrassFeature | LineFeature | KerbFeature | KerbWayFeature | BollardFeature | FenceFeature | null) {
+function showInfo(f: AreaFeature | BuildingFeature | GrassFeature | LineFeature | KerbFeature | KerbWayFeature | BollardFeature | FenceFeature | LanduseFeature | null) {
   if (!f) { infoEl.style.display = "none"; return; }
   const rows: [string, string][] = [];
   const push = (k: string, v?: string | number) => {
@@ -1162,6 +1204,10 @@ function showInfo(f: AreaFeature | BuildingFeature | GrassFeature | LineFeature 
 
   push("layer", feature.layer);
   push("level", feature.level);
+  if (f.type === "landuse") {
+    rows.push(["feature", `landuse=${f.kind} (${f.id})`]);
+    return;
+  }
   if (f.type === "bollard") {
     rows.push(["feature", `barrier=bollard (${f.id})`]);
     return;
@@ -1179,6 +1225,7 @@ function showInfo(f: AreaFeature | BuildingFeature | GrassFeature | LineFeature 
   if (f.type === "building") {
     rows.push(["feature", `building (${f.id})`]);
     push("building", f.building);
+    push("usage", f.usage);
     push("name", f.name);
     return;
   }
@@ -1261,6 +1308,7 @@ function viewportValues(): { layers: Set<number>; levels: Set<number> } {
     if (laneMarkingIndex) for (const lm of queryIndex(laneMarkingIndex, bbox)) add(lm);
     if (kerbWayIndex) for (const k of queryIndex(kerbWayIndex, bbox)) add(k);
     if (fenceIndex) for (const f of queryIndex(fenceIndex, bbox)) add(f);
+    if (landuseIndex) for (const lu of queryIndex(landuseIndex, bbox)) add(lu);
     if (bollardGrid) {
       for (const cell of cellsForBbox(bbox, 50000)) {
         const arr = bollardGrid.get(cell);
@@ -1356,7 +1404,8 @@ function buildLayerPanel() {
 
   const defs: { key: keyof typeof layers; label: string; swatch: string }[] = [
     { key: "areas", label: "highway areas (surface fill)", swatch: "#6d6055" },
-    { key: "buildings", label: "building outlines", swatch: "#8a8a94" },
+    { key: "buildings", label: "buildings", swatch: "#f0b98a" },
+    { key: "landuse", label: "landuse res./comm.", swatch: "#f0c9a0" },
     { key: "grass", label: "grass / garden / scrub", swatch: "#5d7a44" },
     { key: "centerlines", label: "centerlines (surface)", swatch: "#7a6a52" },
     { key: "laneMarkings", label: "lane markings", swatch: "#e8e8e8" },
@@ -1406,6 +1455,7 @@ function countFor(key: keyof typeof layers): string {
   switch (key) {
     case "areas": return dataset.areas.length.toLocaleString();
     case "buildings": return dataset.buildings.length.toLocaleString();
+    case "landuse": return dataset.landuse.length.toLocaleString();
     case "grass": return dataset.grass.length.toLocaleString();
     case "centerlines": return dataset.centerlines.length.toLocaleString();
     case "laneMarkings": return dataset.laneMarkings.length.toLocaleString();
@@ -1545,6 +1595,7 @@ function ingestResult(result: ExtractResult, name: string) {
     kerbWays: result.kerbWays,
     bollards: result.bollards,
     fences: result.fences,
+    landuse: result.landuse,
     laneMarkings: result.laneMarkings,
   };
   areaIndex = buildIndex(dataset.areas);
@@ -1555,6 +1606,7 @@ function ingestResult(result: ExtractResult, name: string) {
   };
   kerbWayIndex = buildIndex(dataset.kerbWays);
   fenceIndex = buildIndex(dataset.fences);
+  landuseIndex = buildIndex(dataset.landuse);
   bollardGrid = new Map();
   for (const b of dataset.bollards) {
     const key = Math.floor(b.lon / 50000) * 100000 + Math.floor(b.lat / 50000);
@@ -1571,7 +1623,7 @@ function ingestResult(result: ExtractResult, name: string) {
     arr.push(k);
   }
   const total = dataset.areas.length + dataset.buildings.length + dataset.grass.length + dataset.centerlines.length + dataset.footways.length +
-    dataset.crossings.length + dataset.kerbs.length + dataset.kerbWays.length + dataset.bollards.length + dataset.fences.length;
+    dataset.crossings.length + dataset.kerbs.length + dataset.kerbWays.length + dataset.bollards.length + dataset.fences.length + dataset.landuse.length;
   if (total === 0) {
     statusEl.textContent = `no micromapping features found in ${name} (try a region with area:highway mapping)`;
     return;
