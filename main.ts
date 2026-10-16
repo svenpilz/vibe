@@ -33,6 +33,19 @@ const layers = {
   kerbs: true,
 };
 
+/** OSM layer=* selection: null = highest layer present, number = that layer only */
+let osmLayers: number[] = [];
+let selectedLayer: number | null = null;
+
+function activeLayer(): number {
+  if (selectedLayer !== null) return selectedLayer;
+  return osmLayers.length ? osmLayers[osmLayers.length - 1] : 0;
+}
+
+function sameLayer(f: { layer?: number }): boolean {
+  return (f.layer ?? 0) === activeLayer();
+}
+
 // ---------------- projection ----------------
 const Q = 1e7;
 function mercY(latDeg: number): number {
@@ -126,6 +139,7 @@ function draw() {
   // --- areas ---
   if (layers.areas && areaIndex) {
     for (const area of visibleAreas) {
+      if (!sameLayer(area)) continue;
       const fill = surfaceColor(normalizeSurface(area.surface) ?? undefined);
       ctx.fillStyle = area.surface ? fill : "#4a4a50";
       ctx.beginPath();
@@ -152,6 +166,7 @@ function draw() {
   if (layers.centerlines && lineIndexes) {
     const px = pxPerMeter();
     for (const cl of queryIndex(lineIndexes.centerlines, bbox)) {
+      if (!sameLayer(cl)) continue;
       ctx.strokeStyle = surfaceColor(normalizeSurface(cl.surface) ?? undefined);
       ctx.lineWidth = Math.max(1, (cl.width ?? 1.5) * px * 0.5);
       ctx.globalAlpha = 0.9;
@@ -166,6 +181,7 @@ function draw() {
   if (layers.footways && lineIndexes) {
     const px = pxPerMeter();
     for (const fw of queryIndex(lineIndexes.footways, bbox)) {
+      if (!sameLayer(fw)) continue;
       ctx.strokeStyle = "#cfcfd6";
       ctx.lineWidth = Math.max(0.8, (fw.width ?? 1.8) * px * 0.3);
       ctx.beginPath();
@@ -178,6 +194,7 @@ function draw() {
   if (layers.crossings && lineIndexes) {
     const px = pxPerMeter();
     for (const cr of queryIndex(lineIndexes.crossings, bbox)) {
+      if (!sameLayer(cr)) continue;
       const stripe = crossingStripeColor(cr.crossingMarkings);
       const widthM = cr.width ?? 3;
       ctx.lineCap = "butt";
@@ -219,6 +236,7 @@ function draw() {
     const px = pxPerMeter();
     ctx.lineCap = "round";
     for (const kw of queryIndex(kerbWayIndex, bbox)) {
+      if (!sameLayer(kw)) continue;
       ctx.strokeStyle = kerbColor(kw.kerb, kw.tactilePaving);
       ctx.lineWidth = Math.max(1, 0.3 * px);
       ctx.beginPath();
@@ -236,6 +254,7 @@ function draw() {
       const arr = kerbGrid.get(cell);
       if (!arr) continue;
       for (const k of arr) {
+        if (!sameLayer(k)) continue;
         const x = lonToX(k.lon / Q), y = latToY(k.lat / Q);
         if (x < -10 || y < -10 || x > w + 10 || y > h + 10) continue;
         ctx.beginPath();
@@ -344,6 +363,7 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
   // areas: point-in-polygon
   if (layers.areas && areaIndex) {
     for (const area of queryIndex(areaIndex, [lonQ, latQ, lonQ, latQ])) {
+      if (!sameLayer(area)) continue;
       let inOuter = false;
       for (const ring of area.outer) if (pointInRingQ(lonQ, latQ, ring)) { inOuter = true; break; }
       if (!inOuter) continue;
@@ -364,6 +384,7 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
         const arr = kerbGrid.get(x * 100000 + y);
         if (!arr) continue;
         for (const k of arr) {
+          if (!sameLayer(k)) continue;
           const d = (k.lon - lonQ) ** 2 + (k.lat - latQ) ** 2;
           if (d < bestD) { bestD = d; best = k; }
         }
@@ -376,6 +397,7 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
   if (layers.kerbs && kerbWayIndex) {
     let best: { d: number; f: KerbWayFeature | null } = { d: tolQ * tolQ * 4, f: null };
     for (const kw of queryIndex(kerbWayIndex, [lonQ - tolQ * 6, latQ - tolQ * 6, lonQ + tolQ * 6, latQ + tolQ * 6])) {
+      if (!sameLayer(kw)) continue;
       for (let i = 1; i < kw.coords.length; i++) {
         const d = distToSegQ(lonQ, latQ, kw.coords[i - 1], kw.coords[i]);
         if (d < best.d) { best.d = d; best.f = kw; }
@@ -397,6 +419,7 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
     for (const kind of order) {
       if (!layers[kind]) continue;
       for (const f of queryIndex(lineIndexes[kind], [lonQ - tolQ * 6, latQ - tolQ * 6, lonQ + tolQ * 6, latQ + tolQ * 6])) {
+        if (!sameLayer(f)) continue;
         if (f.bbox[0] > lonQ + tolQ * 6 || f.bbox[2] < lonQ - tolQ * 6) continue;
         if (f.bbox[1] > latQ + tolQ * 6 || f.bbox[3] < latQ - tolQ * 6) continue;
         check(f, best);
@@ -461,6 +484,7 @@ function showInfo(f: AreaFeature | LineFeature | KerbFeature | KerbWayFeature | 
     push("lit", f.lit);
     push("name", f.name);
   }
+  push("layer", (f as { layer?: number }).layer);
 
   infoEl.innerHTML = `<span class="close" onclick="this.parentElement.style.display='none'">✕</span>` +
     rows.map(([k, v]) => `<div class="tag"><span class="k">${k}</span><span class="v">${escapeHtml(v)}</span></div>`).join("");
@@ -474,6 +498,30 @@ function escapeHtml(s: string): string {
 // ---------------- layer panel ----------------
 function buildLayerPanel() {
   const wrap = document.getElementById("layers")!;
+  wrap.innerHTML = "";
+
+  // OSM layer selector
+  if (osmLayers.length > 1) {
+    const sel = document.createElement("select");
+    sel.id = "layerSelect";
+    sel.style.cssText =
+      "width:100%;margin-bottom:10px;padding:4px 6px;border-radius:6px;" +
+      "background:#2a2a30;color:#eee;border:1px solid #444;font-size:12px;";
+    for (const l of osmLayers.slice().reverse()) {
+      const opt = document.createElement("option");
+      opt.value = String(l);
+      opt.textContent = `layer ${l}`;
+      sel.appendChild(opt);
+    }
+    // default selection: highest layer (first in reversed order)
+    sel.value = String(activeLayer());
+    sel.addEventListener("change", () => {
+      selectedLayer = parseInt((sel as HTMLSelectElement).value, 10);
+      requestDraw();
+    });
+    wrap.appendChild(sel);
+  }
+
   const defs: { key: keyof typeof layers; label: string; swatch: string }[] = [
     { key: "areas", label: "highway areas (surface fill)", swatch: "#6d6055" },
     { key: "centerlines", label: "centerlines (surface)", swatch: "#7a6a52" },
@@ -496,6 +544,7 @@ function buildLayerPanel() {
 
   // legend
   const legend = document.getElementById("legendSurfaces")!;
+  legend.innerHTML = "";
   const surfaces = ["asphalt", "concrete", "sett", "paving_stones", "cobblestone", "gravel", "grass", "compacted"];
   for (const s of surfaces) {
     const row = document.createElement("div");
@@ -604,6 +653,8 @@ function loadPbfFile(file: File) {
 
 function ingestResult(result: ExtractResult, name: string) {
   const t0 = performance.now();
+  osmLayers = result.layers ?? [];
+  selectedLayer = null;
   dataset = {
     areas: result.areas,
     centerlines: result.centerlines,
@@ -632,8 +683,6 @@ function ingestResult(result: ExtractResult, name: string) {
     statusEl.textContent = `no micromapping features found in ${name} (try a region with area:highway mapping)`;
     return;
   }
-  buildLayerPanel();
-  document.getElementById("layers")!.innerHTML = "";
   buildLayerPanel();
   fitToBounds(result.bounds);
   statusEl.textContent = `${name}: loaded ${total.toLocaleString()} features in ${((performance.now() - t0) / 1000).toFixed(1)}s — scroll to zoom, drag to pan`;
