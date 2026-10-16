@@ -522,10 +522,17 @@ export function extractFeatures(
   // lies entirely within the area. Checking every vertex (not just the
   // midpoint) prevents ways that merely clip a polygon corner from donating
   // their surface to an area they mostly run outside of.
-  onProgress?.(70, "inheriting surfaces from centerlines…");
+  onProgress?.(70, "inheriting surfaces from centerlines and footways…");
   const areaGrid = buildAreaIndex(areas);
   let inherited = 0;
-  for (const cl of centerlines) {
+  // footway ways carry surface tags too but are extracted into their own
+  // bucket: they must also donate surfaces to matching areas (e.g. a
+  // footway=sidewalk/traffic_island line inside an area:highway=footway
+  // polygon, as with mapped traffic islands)
+  const donors: LineFeature[] = [];
+  for (const cl of centerlines) if (cl.surface) donors.push(cl);
+  for (const fw of footways) if (fw.surface) donors.push(fw);
+  for (const cl of donors) {
     if (!cl.surface) continue;
     const candidates = queryAreas(areaGrid, cl.bbox);
     for (const area of candidates) {
