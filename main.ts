@@ -220,11 +220,9 @@ function rand(seed: number): number {
  * large lawns don't read as one flat color. Patch size ~1 m; deterministic
  * per tile cell.
  */
-function grassPatternTile(px: number): CanvasPattern | null {
-  const patchM = 1.0;
-  // true-to-scale patch size, at least the readable minimum (see stones)
-  let cell = Math.round(Math.max(patchM * px, 6));
-  cell = Math.min(cell, 128);
+function grassPatternTile(): CanvasPattern | null {
+  // constant screen-space patch size (see stone pattern)
+  const cell = 6;
   const tile = document.createElement("canvas");
   tile.width = cell * 2;
   tile.height = cell * 2;
@@ -255,21 +253,15 @@ function grassPatternTile(px: number): CanvasPattern | null {
   return ctx.createPattern(tile, "repeat");
 }
 
-function stonePatternTile(surface: string, px: number): CanvasPattern | null {
+function stonePatternTile(surface: string): CanvasPattern | null {
   const s = normalizeSurfaceKey(surface);
   if (s !== "paving_stones" && s !== "sett" && s !== "cobblestone") return null;
   const isSett = s !== "paving_stones";
-  // stone size in meters: paving stones ~30 cm (regular, tight rows),
-  // sett ~12 cm (small, less regular, running bond)
-  const stoneM = isSett ? 0.1 : 0.3;
-  // true-to-scale stone size, but at least the readable minimum so the
-  // pattern shows from PATTERN_ZOOM on (a 30 cm stone is sub-pixel at
-  // zoom 25; the pattern catches up to true scale as you zoom further).
-  // sett stones are distinctly smaller than paving stones.
-  const minPx = isSett ? 5 : 8;
-  let size = Math.round(Math.max(stoneM * px, minPx));
-  size = Math.min(size, 256);
-  const gap = Math.max(1, Math.round(size * 0.08));
+  // constant screen-space stone size so the pattern does not change with
+  // zoom; sett stones are distinctly smaller than paving stones
+  const size = isSett ? 5 : 8;
+  const stoneGap = isSett ? 1 : 1;
+  const gap = stoneGap;
   const tile = document.createElement("canvas");
   // 2x2 stones per tile for paving_stones (regular grid), running bond for sett
   const cell = size + gap;
@@ -351,17 +343,13 @@ function anchorPattern(pat: CanvasPattern | null, tileW: number, tileH: number):
 function stonePattern(surface: string | undefined): CanvasPattern | null {
   if (!surface) return null;
   if (zoomLevel() < PATTERN_ZOOM) return null;
-  const key = `${normalizeSurfaceKey(surface)}@${pxPerMeter().toFixed(3)}`;
-  const px = pxPerMeter();
-  // tile size mirrors stonePatternTile: 2 cells of (stone + gap)
-  const isSett = normalizeSurfaceKey(surface) !== "paving_stones";
-  const stoneM = isSett ? 0.1 : 0.3;
-  const minPx = isSett ? 5 : 8;
-  const size = Math.min(Math.round(Math.max(stoneM * px, minPx)), 256);
-  const gap = Math.max(1, Math.round(size * 0.08));
-  const cell = size + gap;
+  // constant screen-space tile: no zoom dependence, so a single cached
+  // pattern suffices (no scale in the cache key needed)
+  const key = normalizeSurfaceKey(surface);
+  const isSett = key !== "paving_stones";
+  const cell = (isSett ? 5 : 8) + 1;
   if (patternCache.has(key)) return anchorPattern(patternCache.get(key)!, cell * 2, cell * 2);
-  const pat = stonePatternTile(surface, pxPerMeter());
+  const pat = stonePatternTile(surface);
   patternCache.set(key, pat);
   return anchorPattern(pat, cell * 2, cell * 2);
 }
@@ -369,10 +357,10 @@ function stonePattern(surface: string | undefined): CanvasPattern | null {
 /** grass texture at the current zoom, cached per scale */
 function grassPattern(): CanvasPattern | null {
   if (zoomLevel() < PATTERN_ZOOM) return null;
-  const key = `grass@${pxPerMeter().toFixed(3)}`;
-  const cell = Math.min(Math.round(Math.max(1.0 * pxPerMeter(), 6)), 128);
+  const key = "grass";
+  const cell = 6;
   if (patternCache.has(key)) return anchorPattern(patternCache.get(key)!, cell * 2, cell * 2);
-  const pat = grassPatternTile(pxPerMeter());
+  const pat = grassPatternTile();
   patternCache.set(key, pat);
   return anchorPattern(pat, cell * 2, cell * 2);
 }
