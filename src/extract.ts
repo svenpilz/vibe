@@ -17,7 +17,7 @@
  * layer values present so the UI can offer layer selection.
  */
 import type { OSMData, OSMTags, OSMWay } from "./osm-pbf";
-import type { Q, AreaFeature, BuildingFeature, GrassFeature, LineFeature, KerbFeature, KerbWayFeature, BollardFeature, FenceFeature, LanduseFeature, StreetLampFeature } from "./features";
+import type { Q, AreaFeature, BuildingFeature, GrassFeature, LineFeature, KerbFeature, KerbWayFeature, BollardFeature, FenceFeature, LanduseFeature, StreetLampFeature, ParkingFeature } from "./features";
 
 export interface ExtractResult {
   areas: AreaFeature[];
@@ -32,6 +32,7 @@ export interface ExtractResult {
   fences: FenceFeature[];
   landuse: LanduseFeature[];
   streetLamps: StreetLampFeature[];
+  parking: ParkingFeature[];
   laneMarkings: LineFeature[];
   /** all layer values present in the data, sorted ascending */
   layers: number[];
@@ -254,6 +255,7 @@ export function extractFeatures(
   const fences: FenceFeature[] = [];
   const landuse: LanduseFeature[] = [];
   const streetLamps: StreetLampFeature[] = [];
+  const parking: ParkingFeature[] = [];
 
   const wayCoords = (way: OSMWay): [number, number][] | null => {
     const coords: [number, number][] = [];
@@ -281,6 +283,25 @@ export function extractFeatures(
     const tags = way.tags;
     const areaHighway = tags["area:highway"];
     const highway = tags["highway"];
+
+    if (tags["amenity"] === "parking" && isClosed(way)) {
+      const coords = wayCoords(way);
+      if (coords) {
+        const qc = q(coords);
+        parking.push({
+          type: "parking",
+          id: `w${way.id}`,
+          surface: tags["surface"],
+          surfaceColour: tags["surface:colour"],
+          layer: parseLayer(tags["layer"]),
+          level: parseLevel(tags["level"]),
+          outer: [qc],
+          holes: [],
+          bbox: bboxOfQ(qc),
+        });
+      }
+      continue;
+    }
 
     const landuseKind = tags["landuse"] === "residential" ? "residential"
       : tags["landuse"] === "commercial" ? "commercial"
@@ -491,6 +512,39 @@ export function extractFeatures(
     const tags = rel.tags;
     const areaHighway = tags["area:highway"];
     const buildingTag = tags["building"];
+    if (tags["amenity"] === "parking" && tags["type"] === "multipolygon") {
+      const parkingTags = tags;
+      const outerRingsP: number[][][] = [];
+      const holeRingsP: number[][][] = [];
+      for (const m of rel.members) {
+        if (m.type !== "way" || (m.role !== "outer" && m.role !== "inner" && m.role !== "")) continue;
+        const way = data.ways.get(m.ref);
+        if (!way || !isClosed(way)) continue;
+        const coords = wayCoords(way);
+        if (!coords) continue;
+        const qc = q(coords);
+        if (m.role === "inner") holeRingsP.push(qc);
+        else outerRingsP.push(qc);
+      }
+      if (outerRingsP.length > 0) {
+        const allP: number[][] = [];
+        for (const r of outerRingsP) allP.push(...r);
+        for (const r of holeRingsP) allP.push(...r);
+        parking.push({
+          type: "parking",
+          id: `r${rel.id}`,
+          surface: parkingTags["surface"],
+          surfaceColour: parkingTags["surface:colour"],
+          layer: parseLayer(parkingTags["layer"]),
+          level: parseLevel(parkingTags["level"]),
+          outer: outerRingsP,
+          holes: holeRingsP,
+          bbox: bboxOfQ(allP),
+        });
+        continue;
+      }
+    }
+
     const grassTag = tags["landuse"] === "grass" || tags["natural"] === "scrub" || tags["leisure"] === "garden";
     const greenKind = tags["landuse"] === "grass" ? "grass"
       : tags["natural"] === "scrub" ? "scrub"
@@ -854,12 +908,13 @@ export function extractFeatures(
   for (const f of fences) layerSet.add(f.layer);
   for (const l of landuse) layerSet.add(l.layer);
   for (const sl of streetLamps) layerSet.add(sl.layer);
+  for (const pk of parking) layerSet.add(pk.layer);
   for (const k of kerbs) layerSet.add(k.layer);
   const layers = [...layerSet].sort((a, b) => a - b);
 
   // collect all level values (only features with an explicit level=*)
   const levelSet = new Set<number>();
-  for (const arr of [areas, buildings, grass, centerlines, footways, crossings, kerbWays, kerbs, bollards, fences, landuse, streetLamps]) {
+  for (const arr of [areas, buildings, grass, centerlines, footways, crossings, kerbWays, kerbs, bollards, fences, landuse, streetLamps, parking]) {
     for (const f of arr) if (f.level !== undefined) levelSet.add(f.level);
   }
   const levels = [...levelSet].sort((a, b) => a - b);
@@ -887,6 +942,7 @@ export function extractFeatures(
   for (const k of kerbWays) expand(k.bbox);
   for (const f of fences) expand(f.bbox);
   for (const l of landuse) expand(l.bbox);
+  for (const pk of parking) expand(pk.bbox);
   for (const sl of streetLamps) {
     if (sl.lon < minX) minX = sl.lon;
     if (sl.lat < minY) minY = sl.lat;
@@ -915,6 +971,7 @@ export function extractFeatures(
     fences,
     landuse,
     streetLamps,
+    parking,
     laneMarkings,
     layers,
     levels,

@@ -1,6 +1,6 @@
 import { buildIndex, queryIndex, type Indexed } from "./src/loader";
 import type { ExtractResult } from "./src/extract";
-import type { AreaFeature, BuildingFeature, GrassFeature, LineFeature, KerbFeature, KerbWayFeature, BollardFeature, FenceFeature, LanduseFeature, StreetLampFeature, Dataset, Feature, Q } from "./src/features";
+import type { AreaFeature, BuildingFeature, GrassFeature, LineFeature, KerbFeature, KerbWayFeature, BollardFeature, FenceFeature, LanduseFeature, StreetLampFeature, ParkingFeature, Dataset, Feature, Q } from "./src/features";
 import { surfaceColor, normalizeSurface } from "./src/features";
 
 const canvas = document.getElementById("map") as HTMLCanvasElement;
@@ -30,6 +30,7 @@ let fenceIndex: Indexed<FenceFeature> | null = null;
 let bollardGrid: Map<number, BollardFeature[]> | null = null;
 let landuseIndex: Indexed<LanduseFeature> | null = null;
 let streetLampGrid: Map<number, StreetLampFeature[]> | null = null;
+let parkingIndex: Indexed<ParkingFeature> | null = null;
 let laneMarkingIndex: Indexed<LineFeature> | null = null;
 
 const layers = {
@@ -45,6 +46,7 @@ const layers = {
   fences: true,
   landuse: true,
   streetLamps: true,
+  parking: true,
 };
 
 /**
@@ -67,6 +69,7 @@ const LOD: Record<keyof typeof layers, number> = {
   fences: 20,
   landuse: 14,
   streetLamps: 20,
+  parking: 16,
 };
 
 const MAJOR_ROADS = new Set([
@@ -437,6 +440,27 @@ function draw() {
         for (const hole of lu.holes) drawRing(hole, true);
         ctx.fill("evenodd");
         ctx.globalAlpha = 1;
+      }
+    }
+
+    // --- parking areas: filled with their own surface directly
+    if (lodVisible("parking") && parkingIndex) {
+      const pks = queryIndex(parkingIndex, bbox);
+      for (const pk of pks) {
+        if (!onLayer(pk)) continue;
+        const fill = pk.surface || pk.surfaceColour
+          ? featureColor(pk.surface, pk.surfaceColour)
+          : "#4a4a50";
+        const pat = !pk.surfaceColour ? stonePattern(pk.surface) : null;
+        ctx.fillStyle = pat ?? fill;
+        ctx.beginPath();
+        for (const ring of pk.outer) drawRing(ring, true);
+        for (const hole of pk.holes) drawRing(hole, true);
+        ctx.fill("evenodd");
+        ctx.lineWidth = Math.max(4, 0.3 * px);
+        ctx.lineJoin = "round";
+        ctx.strokeStyle = pat ?? fill;
+        ctx.stroke();
       }
     }
 
@@ -1042,7 +1066,7 @@ canvas.addEventListener("click", (e) => {
   showInfo(feature);
 });
 
-function pickFeature(px: number, py: number, bbox: [number, number, number, number]): (AreaFeature | BuildingFeature | GrassFeature | LineFeature | KerbFeature | KerbWayFeature | BollardFeature | FenceFeature | LanduseFeature | StreetLampFeature) | null {
+function pickFeature(px: number, py: number, bbox: [number, number, number, number]): (AreaFeature | BuildingFeature | GrassFeature | LineFeature | KerbFeature | KerbWayFeature | BollardFeature | FenceFeature | LanduseFeature | StreetLampFeature | ParkingFeature) | null {
   const tol = 6;
   const lon = view.cx + (((px - canvas.width / 2) / R()) * 180) / Math.PI;
   const mercC = mercY(view.cy) - (py - canvas.height / 2) / R();
@@ -1082,6 +1106,22 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
       let inHole = false;
       for (const hole of g.holes) if (pointInRingQ(lonQ, latQ, hole)) { inHole = true; break; }
       if (!inHole) return g;
+    }
+  }
+  // parking areas: point-in-polygon
+  if (lodVisible("parking") && parkingIndex) {
+    const pkHits = queryIndex(parkingIndex, [lonQ, latQ, lonQ, latQ])
+      .filter((pk) => layerVisible(pk));
+    if (selectedLayer === null && pkHits.length > 1) {
+      pkHits.sort((a, b) => layerSortKey(b) - layerSortKey(a));
+    }
+    for (const pk of pkHits) {
+      let inOuter = false;
+      for (const ring of pk.outer) if (pointInRingQ(lonQ, latQ, ring)) { inOuter = true; break; }
+      if (!inOuter) continue;
+      let inHole = false;
+      for (const hole of pk.holes) if (pointInRingQ(lonQ, latQ, hole)) { inHole = true; break; }
+      if (!inHole) return pk;
     }
   }
   // landuse areas: point-in-polygon
@@ -1243,7 +1283,7 @@ function distToSegQ(px: number, py: number, a: Q[], b: Q[]): number {
 }
 
 // ---------------- info panel ----------------
-function showInfo(f: AreaFeature | BuildingFeature | GrassFeature | LineFeature | KerbFeature | KerbWayFeature | BollardFeature | FenceFeature | LanduseFeature | StreetLampFeature | null) {
+function showInfo(f: AreaFeature | BuildingFeature | GrassFeature | LineFeature | KerbFeature | KerbWayFeature | BollardFeature | FenceFeature | LanduseFeature | StreetLampFeature | ParkingFeature | null) {
   if (!f) { infoEl.style.display = "none"; return; }
   const rows: [string, string][] = [];
   const push = (k: string, v?: string | number) => {
@@ -1253,6 +1293,12 @@ function showInfo(f: AreaFeature | BuildingFeature | GrassFeature | LineFeature 
 
   push("layer", feature.layer);
   push("level", feature.level);
+  if (f.type === "parking") {
+    rows.push(["feature", `amenity=parking (${f.id})`]);
+    push("surface", f.surface);
+    push("surface:colour", f.surfaceColour);
+    return;
+  }
   if (f.type === "streetlamp") {
     rows.push(["feature", `highway=street_lamp (${f.id})`]);
     return;
@@ -1362,6 +1408,7 @@ function viewportValues(): { layers: Set<number>; levels: Set<number> } {
     if (kerbWayIndex) for (const k of queryIndex(kerbWayIndex, bbox)) add(k);
     if (fenceIndex) for (const f of queryIndex(fenceIndex, bbox)) add(f);
     if (landuseIndex) for (const lu of queryIndex(landuseIndex, bbox)) add(lu);
+    if (parkingIndex) for (const pk of queryIndex(parkingIndex, bbox)) add(pk);
     if (streetLampGrid) {
       for (const cell of cellsForBbox(bbox, 50000)) {
         const arr = streetLampGrid.get(cell);
@@ -1465,6 +1512,7 @@ function buildLayerPanel() {
     { key: "areas", label: "highway areas (surface fill)", swatch: "#6d6055" },
     { key: "buildings", label: "buildings", swatch: "#f0b98a" },
     { key: "landuse", label: "landuse res./comm.", swatch: "#f0c9a0" },
+    { key: "parking", label: "parking", swatch: "#4a4a50" },
     { key: "grass", label: "grass / garden / scrub", swatch: "#5d7a44" },
     { key: "centerlines", label: "centerlines (surface)", swatch: "#7a6a52" },
     { key: "laneMarkings", label: "lane markings", swatch: "#e8e8e8" },
@@ -1516,6 +1564,7 @@ function countFor(key: keyof typeof layers): string {
     case "areas": return dataset.areas.length.toLocaleString();
     case "buildings": return dataset.buildings.length.toLocaleString();
     case "landuse": return dataset.landuse.length.toLocaleString();
+    case "parking": return dataset.parking.length.toLocaleString();
     case "grass": return dataset.grass.length.toLocaleString();
     case "centerlines": return dataset.centerlines.length.toLocaleString();
     case "laneMarkings": return dataset.laneMarkings.length.toLocaleString();
@@ -1658,6 +1707,7 @@ function ingestResult(result: ExtractResult, name: string) {
     fences: result.fences,
     landuse: result.landuse,
     streetLamps: result.streetLamps,
+    parking: result.parking,
     laneMarkings: result.laneMarkings,
   };
   areaIndex = buildIndex(dataset.areas);
@@ -1669,6 +1719,7 @@ function ingestResult(result: ExtractResult, name: string) {
   kerbWayIndex = buildIndex(dataset.kerbWays);
   fenceIndex = buildIndex(dataset.fences);
   landuseIndex = buildIndex(dataset.landuse);
+  parkingIndex = buildIndex(result.parking);
   streetLampGrid = new Map();
   for (const sl of dataset.streetLamps) {
     const key = Math.floor(sl.lon / 50000) * 100000 + Math.floor(sl.lat / 50000);
@@ -1692,7 +1743,7 @@ function ingestResult(result: ExtractResult, name: string) {
     arr.push(k);
   }
   const total = dataset.areas.length + dataset.buildings.length + dataset.grass.length + dataset.centerlines.length + dataset.footways.length +
-    dataset.crossings.length + dataset.kerbs.length + dataset.kerbWays.length + dataset.bollards.length + dataset.fences.length + dataset.landuse.length + dataset.streetLamps.length;
+    dataset.crossings.length + dataset.kerbs.length + dataset.kerbWays.length + dataset.bollards.length + dataset.fences.length + dataset.landuse.length + dataset.streetLamps.length + dataset.parking.length;
   if (total === 0) {
     statusEl.textContent = `no micromapping features found in ${name} (try a region with area:highway mapping)`;
     return;
