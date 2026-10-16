@@ -346,9 +346,9 @@ const PATTERN_ZOOM = 25;
 
 /** average fill color of a patterned surface (matches the pattern tone) */
 const PATTERN_AVG: Record<string, string> = {
-  paving_stones: "#808080",
-  sett: "#6e6e6e",
-  cobblestone: "#67625d",
+  paving_stones: "#7b7b7b", // tile average: stones 128, joints 106, 8/9 coverage
+  sett: "#676767",
+  cobblestone: "#676767",
 };
 
 /** anchor a cached pattern to the map so it pans with the scene */
