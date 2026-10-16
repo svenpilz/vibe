@@ -360,10 +360,10 @@ export function extractFeatures(
     }
   }
 
-  // surface inheritance: area <- intersecting centerline of the same highway
-  // type. Without the type check, sidewalk centerlines (footway,
-  // surface=paving_stones) that cross road-area polygons donate their surface
-  // to the road, painting residential/secondary areas as paving stone.
+  // surface inheritance: area <- centerline of the same highway type that
+  // lies entirely within the area. Checking every vertex (not just the
+  // midpoint) prevents ways that merely clip a polygon corner from donating
+  // their surface to an area they mostly run outside of.
   onProgress?.(70, "inheriting surfaces from centerlines…");
   const areaGrid = buildAreaIndex(areas);
   let inherited = 0;
@@ -374,8 +374,11 @@ export function extractFeatures(
       if (area.surface) continue;
       if (!highwayTypesCompatible(cl.highway, area.highway)) continue;
       if (!bboxOverlap(area.bbox, cl.bbox)) continue;
-      const mid = cl.coords[Math.floor(cl.coords.length / 2)];
-      if (pointInAreaQ(mid, area)) {
+      let allInside = true;
+      for (const pt of cl.coords) {
+        if (!pointInAreaQ(pt, area)) { allInside = false; break; }
+      }
+      if (allInside) {
         area.surface = cl.surface;
         area.surfaceColour = area.surfaceColour ?? cl.surfaceColour;
         inherited++;
