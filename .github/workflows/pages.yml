@@ -27,12 +27,6 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Download Berlin PBF and extract map data
-        run: |
-          npm run download
-          NODE_OPTIONS=--max-old-space-size=8000 npm run extract
-          gzip -9 -c data/map.jsonl > data/map.jsonl.gz
-
       - name: Build static site
         run: npm run build
 
