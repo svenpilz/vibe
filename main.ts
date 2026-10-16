@@ -1379,6 +1379,7 @@ function ingestResult(result: ExtractResult, name: string) {
   // testing: reload, drop the PBF, land on the same spot); otherwise fit
   if (!viewFromUrl()) fitToBounds(result.bounds);
   statusEl.textContent = `${name}: loaded ${total.toLocaleString()} features in ${((performance.now() - t0) / 1000).toFixed(1)}s — scroll to zoom, drag to pan · ${__COMMIT__}`;
+  requestDraw();
 }
 
 // ---- drag & drop wiring ----
