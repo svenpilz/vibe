@@ -968,6 +968,7 @@ function fitToBounds(bounds: [number, number, number, number]) {
     cy,
     scale: Math.max(500, Math.min(3_000_000, Math.min(fitW, fitH))),
   };
+  statusEl.textContent = `zoom ${zoomLevel().toFixed(1)} (scale ${Math.round(view.scale)})`;
   requestDraw();
 }
 
