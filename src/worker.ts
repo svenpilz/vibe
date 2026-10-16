@@ -38,6 +38,7 @@ self.onmessage = async (e: MessageEvent<WorkerIn>) => {
         tags["kerb"] !== undefined ||
         tags["barrier"] === "bollard" ||
         tags["highway"] === "street_lamp" ||
+        tags["man_made"] === "manhole" ||
         tags["traffic_calming"] !== undefined,
       (pct, stats) =>
         post({ type: "progress", phase: "parsing PBF", pct: pct * 0.8, msg: stats })

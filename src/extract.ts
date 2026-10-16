@@ -17,7 +17,7 @@
  * layer values present so the UI can offer layer selection.
  */
 import type { OSMData, OSMTags, OSMWay } from "./osm-pbf";
-import type { Q, AreaFeature, BuildingFeature, GrassFeature, LineFeature, KerbFeature, KerbWayFeature, BollardFeature, FenceFeature, LanduseFeature, StreetLampFeature, ParkingFeature } from "./features";
+import type { Q, AreaFeature, BuildingFeature, GrassFeature, LineFeature, KerbFeature, KerbWayFeature, BollardFeature, FenceFeature, LanduseFeature, StreetLampFeature, ParkingFeature, ManholeFeature } from "./features";
 
 export interface ExtractResult {
   areas: AreaFeature[];
@@ -33,6 +33,7 @@ export interface ExtractResult {
   landuse: LanduseFeature[];
   streetLamps: StreetLampFeature[];
   parking: ParkingFeature[];
+  manholes: ManholeFeature[];
   laneMarkings: LineFeature[];
   /** all layer values present in the data, sorted ascending */
   layers: number[];
@@ -256,6 +257,7 @@ export function extractFeatures(
   const landuse: LanduseFeature[] = [];
   const streetLamps: StreetLampFeature[] = [];
   const parking: ParkingFeature[] = [];
+  const manholes: ManholeFeature[] = [];
 
   const wayCoords = (way: OSMWay): [number, number][] | null => {
     const coords: [number, number][] = [];
@@ -630,6 +632,19 @@ export function extractFeatures(
   }
 
   for (const [id, tags] of data.nodeTags) {
+    if (tags["man_made"] === "manhole") {
+      const c = data.nodeCoords.get(id);
+      if (!c) continue;
+      manholes.push({
+        type: "manhole",
+        id: `n${id}`,
+        layer: parseLayer(tags["layer"]),
+        level: parseLevel(tags["level"]),
+        lat: Math.round(c.lat * 1e7),
+        lon: Math.round(c.lon * 1e7),
+      });
+      continue;
+    }
     if (tags["highway"] === "street_lamp") {
       const c = data.nodeCoords.get(id);
       if (!c) continue;
@@ -941,12 +956,13 @@ export function extractFeatures(
   for (const l of landuse) layerSet.add(l.layer);
   for (const sl of streetLamps) layerSet.add(sl.layer);
   for (const pk of parking) layerSet.add(pk.layer);
+  for (const mh of manholes) layerSet.add(mh.layer);
   for (const k of kerbs) layerSet.add(k.layer);
   const layers = [...layerSet].sort((a, b) => a - b);
 
   // collect all level values (only features with an explicit level=*)
   const levelSet = new Set<number>();
-  for (const arr of [areas, buildings, grass, centerlines, footways, crossings, kerbWays, kerbs, bollards, fences, landuse, streetLamps, parking]) {
+  for (const arr of [areas, buildings, grass, centerlines, footways, crossings, kerbWays, kerbs, bollards, fences, landuse, streetLamps, parking, manholes]) {
     for (const f of arr) if (f.level !== undefined) levelSet.add(f.level);
   }
   const levels = [...levelSet].sort((a, b) => a - b);
@@ -975,6 +991,12 @@ export function extractFeatures(
   for (const f of fences) expand(f.bbox);
   for (const l of landuse) expand(l.bbox);
   for (const pk of parking) expand(pk.bbox);
+  for (const mh of manholes) {
+    if (mh.lon < minX) minX = mh.lon;
+    if (mh.lat < minY) minY = mh.lat;
+    if (mh.lon > maxX) maxX = mh.lon;
+    if (mh.lat > maxY) maxY = mh.lat;
+  }
   for (const sl of streetLamps) {
     if (sl.lon < minX) minX = sl.lon;
     if (sl.lat < minY) minY = sl.lat;
@@ -1004,6 +1026,7 @@ export function extractFeatures(
     landuse,
     streetLamps,
     parking,
+    manholes,
     laneMarkings,
     layers,
     levels,

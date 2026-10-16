@@ -1,6 +1,6 @@
 import { buildIndex, queryIndex, type Indexed } from "./src/loader";
 import type { ExtractResult } from "./src/extract";
-import type { AreaFeature, BuildingFeature, GrassFeature, LineFeature, KerbFeature, KerbWayFeature, BollardFeature, FenceFeature, LanduseFeature, StreetLampFeature, ParkingFeature, Dataset, Feature, Q } from "./src/features";
+import type { AreaFeature, BuildingFeature, GrassFeature, LineFeature, KerbFeature, KerbWayFeature, BollardFeature, FenceFeature, LanduseFeature, StreetLampFeature, ParkingFeature, ManholeFeature, Dataset, Feature, Q } from "./src/features";
 import { surfaceColor, normalizeSurface } from "./src/features";
 
 const canvas = document.getElementById("map") as HTMLCanvasElement;
@@ -31,6 +31,7 @@ let bollardGrid: Map<number, BollardFeature[]> | null = null;
 let landuseIndex: Indexed<LanduseFeature> | null = null;
 let streetLampGrid: Map<number, StreetLampFeature[]> | null = null;
 let parkingIndex: Indexed<ParkingFeature> | null = null;
+let manholeGrid: Map<number, ManholeFeature[]> | null = null;
 let laneMarkingIndex: Indexed<LineFeature> | null = null;
 
 const layers = {
@@ -47,6 +48,7 @@ const layers = {
   landuse: true,
   streetLamps: true,
   parking: true,
+  manholes: true,
 };
 
 /**
@@ -70,6 +72,7 @@ const LOD: Record<keyof typeof layers, number> = {
   landuse: 14,
   streetLamps: 20,
   parking: 16,
+  manholes: 21,
 };
 
 const MAJOR_ROADS = new Set([
@@ -641,6 +644,36 @@ function draw() {
       }
     }
 
+    // --- manholes: dark anthracite circle with lighter stripes ---
+    if (lodVisible("manholes") && manholeGrid) {
+      const mr = Math.max(2, Math.min(10, 0.4 * px)); // ~80 cm cover
+      const stripe = Math.max(1, mr * 0.16);
+      for (const cell of cellsForBbox(bbox, 50000)) {
+        const arr = manholeGrid.get(cell);
+        if (!arr) continue;
+        for (const mh of arr) {
+          if (!onLayer(mh)) continue;
+          const x = lonToX(mh.lon / Q), y = latToY(mh.lat / Q);
+          if (x < -10 || y < -10 || x > w + 10 || y > h + 10) continue;
+          ctx.beginPath();
+          ctx.arc(x, y, mr, 0, Math.PI * 2);
+          ctx.fillStyle = "#2f3134";
+          ctx.fill();
+          // lighter stripes across the cover
+          ctx.strokeStyle = "#565a60";
+          ctx.lineWidth = stripe;
+          ctx.beginPath();
+          for (let k = -1; k <= 1; k++) {
+            const yy = y + k * mr * 0.45;
+            const half = Math.sqrt(Math.max(0, mr * mr - (k * mr * 0.45) ** 2));
+            ctx.moveTo(x - half, yy);
+            ctx.lineTo(x + half, yy);
+          }
+          ctx.stroke();
+        }
+      }
+    }
+
     // --- bollards: black dots ---
     if (lodVisible("bollards") && bollardGrid) {
       const br = Math.max(2.5, Math.min(8, 0.25 * px));
@@ -1067,7 +1100,7 @@ canvas.addEventListener("click", (e) => {
   showInfo(feature);
 });
 
-function pickFeature(px: number, py: number, bbox: [number, number, number, number]): (AreaFeature | BuildingFeature | GrassFeature | LineFeature | KerbFeature | KerbWayFeature | BollardFeature | FenceFeature | LanduseFeature | StreetLampFeature | ParkingFeature) | null {
+function pickFeature(px: number, py: number, bbox: [number, number, number, number]): (AreaFeature | BuildingFeature | GrassFeature | LineFeature | KerbFeature | KerbWayFeature | BollardFeature | FenceFeature | LanduseFeature | StreetLampFeature | ParkingFeature | ManholeFeature) | null {
   const tol = 6;
   const lon = view.cx + (((px - canvas.width / 2) / R()) * 180) / Math.PI;
   const mercC = mercY(view.cy) - (py - canvas.height / 2) / R();
@@ -1185,6 +1218,24 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
     }
     if (best.sl) return best.sl;
   }
+  // manholes (points, closest)
+  if (lodVisible("manholes") && manholeGrid) {
+    let best: { d: number; mh: ManholeFeature | null } = { d: tolQ * tolQ * 4, mh: null };
+    const cx0 = Math.floor((lonQ - tolQ * 4) / 50000), cx1 = Math.floor((lonQ + tolQ * 4) / 50000);
+    const cy0 = Math.floor((latQ - tolQ * 4) / 50000), cy1 = Math.floor((latQ + tolQ * 4) / 50000);
+    for (let x = cx0; x <= cx1; x++) {
+      for (let y = cy0; y <= cy1; y++) {
+        const arr = manholeGrid.get(x * 100000 + y);
+        if (!arr) continue;
+        for (const mh of arr) {
+          if (!layerVisible(mh)) continue;
+          const d = (mh.lon - lonQ) ** 2 + (mh.lat - latQ) ** 2;
+          if (d < best.d) { best.d = d; best.mh = mh; }
+        }
+      }
+    }
+    if (best.mh) return best.mh;
+  }
   // bollards (points, closest)
   if (lodVisible("bollards") && bollardGrid) {
     let best: { d: number; b: BollardFeature | null } = { d: tolQ * tolQ * 4, b: null };
@@ -1284,7 +1335,7 @@ function distToSegQ(px: number, py: number, a: Q[], b: Q[]): number {
 }
 
 // ---------------- info panel ----------------
-function showInfo(f: AreaFeature | BuildingFeature | GrassFeature | LineFeature | KerbFeature | KerbWayFeature | BollardFeature | FenceFeature | LanduseFeature | StreetLampFeature | ParkingFeature | null) {
+function showInfo(f: AreaFeature | BuildingFeature | GrassFeature | LineFeature | KerbFeature | KerbWayFeature | BollardFeature | FenceFeature | LanduseFeature | StreetLampFeature | ParkingFeature | ManholeFeature | null) {
   if (!f) { infoEl.style.display = "none"; return; }
   const rows: [string, string][] = [];
   const push = (k: string, v?: string | number) => {
@@ -1294,6 +1345,10 @@ function showInfo(f: AreaFeature | BuildingFeature | GrassFeature | LineFeature 
 
   push("layer", feature.layer);
   push("level", feature.level);
+  if (f.type === "manhole") {
+    rows.push(["feature", `man_made=manhole (${f.id})`]);
+    return;
+  }
   if (f.type === "parking") {
     rows.push(["feature", `amenity=parking (${f.id})`]);
     push("surface", f.surface);
@@ -1410,6 +1465,12 @@ function viewportValues(): { layers: Set<number>; levels: Set<number> } {
     if (fenceIndex) for (const f of queryIndex(fenceIndex, bbox)) add(f);
     if (landuseIndex) for (const lu of queryIndex(landuseIndex, bbox)) add(lu);
     if (parkingIndex) for (const pk of queryIndex(parkingIndex, bbox)) add(pk);
+    if (manholeGrid) {
+      for (const cell of cellsForBbox(bbox, 50000)) {
+        const arr = manholeGrid.get(cell);
+        if (arr) for (const mh of arr) add(mh);
+      }
+    }
     if (streetLampGrid) {
       for (const cell of cellsForBbox(bbox, 50000)) {
         const arr = streetLampGrid.get(cell);
@@ -1522,6 +1583,7 @@ function buildLayerPanel() {
     { key: "kerbs", label: "kerbs", swatch: "#3a3a3e" },
     { key: "bollards", label: "bollards", swatch: "#2f3134" },
     { key: "streetLamps", label: "street lamps", swatch: "#ffe178" },
+    { key: "manholes", label: "manholes", swatch: "#2f3134" },
     { key: "fences", label: "fences", swatch: "#1a1a1a" },
   ];
   for (const d of defs) {
@@ -1566,6 +1628,7 @@ function countFor(key: keyof typeof layers): string {
     case "buildings": return dataset.buildings.length.toLocaleString();
     case "landuse": return dataset.landuse.length.toLocaleString();
     case "parking": return dataset.parking.length.toLocaleString();
+    case "manholes": return dataset.manholes.length.toLocaleString();
     case "grass": return dataset.grass.length.toLocaleString();
     case "centerlines": return dataset.centerlines.length.toLocaleString();
     case "laneMarkings": return dataset.laneMarkings.length.toLocaleString();
@@ -1709,6 +1772,7 @@ function ingestResult(result: ExtractResult, name: string) {
     landuse: result.landuse,
     streetLamps: result.streetLamps,
     parking: result.parking,
+    manholes: result.manholes,
     laneMarkings: result.laneMarkings,
   };
   areaIndex = buildIndex(dataset.areas);
@@ -1721,6 +1785,13 @@ function ingestResult(result: ExtractResult, name: string) {
   fenceIndex = buildIndex(dataset.fences);
   landuseIndex = buildIndex(dataset.landuse);
   parkingIndex = buildIndex(result.parking);
+  manholeGrid = new Map();
+  for (const mh of result.manholes) {
+    const key = Math.floor(mh.lon / 50000) * 100000 + Math.floor(mh.lat / 50000);
+    let arr = manholeGrid.get(key);
+    if (!arr) manholeGrid.set(key, (arr = []));
+    arr.push(mh);
+  }
   streetLampGrid = new Map();
   for (const sl of dataset.streetLamps) {
     const key = Math.floor(sl.lon / 50000) * 100000 + Math.floor(sl.lat / 50000);
@@ -1744,7 +1815,7 @@ function ingestResult(result: ExtractResult, name: string) {
     arr.push(k);
   }
   const total = dataset.areas.length + dataset.buildings.length + dataset.grass.length + dataset.centerlines.length + dataset.footways.length +
-    dataset.crossings.length + dataset.kerbs.length + dataset.kerbWays.length + dataset.bollards.length + dataset.fences.length + dataset.landuse.length + dataset.streetLamps.length + dataset.parking.length;
+    dataset.crossings.length + dataset.kerbs.length + dataset.kerbWays.length + dataset.bollards.length + dataset.fences.length + dataset.landuse.length + dataset.streetLamps.length + dataset.parking.length + dataset.manholes.length;
   if (total === 0) {
     statusEl.textContent = `no micromapping features found in ${name} (try a region with area:highway mapping)`;
     return;
