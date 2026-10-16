@@ -652,7 +652,7 @@ function draw() {
           if (x < -10 || y < -10 || x > w + 10 || y > h + 10) continue;
           ctx.beginPath();
           ctx.arc(x, y, br, 0, Math.PI * 2);
-          ctx.fillStyle = "#1a1a1a";
+          ctx.fillStyle = "#2f3134"; // dark anthracite
           ctx.fill();
         }
       }
@@ -1519,7 +1519,7 @@ function buildLayerPanel() {
     { key: "footways", label: "footways / sidewalks", swatch: "#cfcfd6" },
     { key: "crossings", label: "crossings (markings)", swatch: "#e8e8e8" },
     { key: "kerbs", label: "kerbs", swatch: "#3a3a3e" },
-    { key: "bollards", label: "bollards", swatch: "#1a1a1a" },
+    { key: "bollards", label: "bollards", swatch: "#2f3134" },
     { key: "streetLamps", label: "street lamps", swatch: "#ffe178" },
     { key: "fences", label: "fences", swatch: "#1a1a1a" },
   ];
