@@ -123,8 +123,14 @@ function latToY(latDeg: number): number {
 function R(): number {
   return view.scale * (180 / Math.PI);
 }
+/**
+ * Pixels per meter on the ground at the current view latitude. Mercator
+ * stretches by 1/cos(lat): one radian of longitude spans 6_371_000 * cos(lat)
+ * meters on the ground, so the equator-only formula underestimates by ~40%
+ * at mid latitudes (e.g. Berlin) and lane/crossing sizes look too small.
+ */
 function pxPerMeter(): number {
-  return R() / 6_371_000;
+  return R() / (6_371_000 * Math.cos((view.cy * Math.PI) / 180));
 }
 function viewBboxQ(): [number, number, number, number] {
   const degPerPx = 180 / (Math.PI * R());
