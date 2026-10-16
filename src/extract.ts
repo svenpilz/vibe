@@ -278,14 +278,15 @@ export function extractFeatures(
 
   onProgress?.(50, "collecting kerbs…");
 
-  // node -> ways membership (needed to inherit layers for unlayered points)
-  const nodeWayCount = new Map<number, number>();
+  // node -> ways membership (needed to inherit layers for unlayered points).
+  // A node's candidate layer is the layer of its parent way(s); NaN marks a
+  // conflict (parent ways on different layers).
   const nodeWayLayer = new Map<number, number>();
   for (const way of data.ways.values()) {
     const wl = parseLayer(way.tags["layer"]);
     for (const ref of way.refs) {
-      nodeWayCount.set(ref, (nodeWayCount.get(ref) ?? 0) + 1);
-      nodeWayLayer.set(ref, wl);
+      const prev = nodeWayLayer.get(ref);
+      nodeWayLayer.set(ref, prev === undefined || prev === wl ? wl : Number.NaN);
     }
   }
 
@@ -294,8 +295,9 @@ export function extractFeatures(
       const c = data.nodeCoords.get(id);
       if (!c) continue;
       let layer = parseLayer(tags["layer"]);
-      if (tags["layer"] === undefined && nodeWayCount.get(id) === 1) {
-        layer = nodeWayLayer.get(id) ?? 0;
+      if (tags["layer"] === undefined) {
+        const inherited = nodeWayLayer.get(id);
+        if (inherited !== undefined && Number.isFinite(inherited)) layer = inherited;
       }
       kerbs.push({
         type: "kerb",
