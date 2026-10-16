@@ -88,13 +88,12 @@ For a centerline with `lanes ≥ 2` that runs inside a non-junction highway area
    (coarse scan, then binary refinement). Each ray length is converted to meters
    (§1); the road width is `leftM + rightM`. This works even when the centerline is not
    the geometric center of the road.
-2. **Parking lanes** (`parking:lane:left/right/both`, widths from the `:width` sub-tags;
-   defaults 2.5 m parallel / 5 m perpendicular) consume space on the road but do not
-   count as regular lanes: their width is subtracted virtually from the highway area on
-   the respective side before the remaining width is divided among the traffic lanes.
-   If nothing is left, no markings are drawn.
-3. All traffic lanes split the remaining width equally:
-   `laneW = (leftM + rightM − parking) / lanes`.
+2. **Parking lanes** (`parking:lane:left/right/both`, any value except `no`/`none`)
+   consume space on the road but do not count as regular lanes: the total width is
+   split into **equal units shared by traffic and parking lanes** — two lanes plus one
+   parking lane give three equal units, the parking unit occupying the outer strip on
+   its side.
+3. All units have the same width: `laneW = (leftM + rightM) / (lanes + parkingLanes)`.
 4. Lane boundaries are drawn as continuous offset curves of the centerline, using
    averaged vertex normals and **Chaikin corner-cutting** (two iterations), so the
    markings flow smoothly around corners instead of breaking at each vertex. They are
