@@ -39,10 +39,8 @@ export interface LineFeature {
   layer: number;
   /** OSM level=* tag (undefined when absent) */
   level?: number;
-  /** fraction along the way where markings start (kerb line crossing) */
-  kerbTrimStart?: number;
-  /** fraction along the way where markings end (kerb line crossing) */
-  kerbTrimEnd?: number;
+  /** id of the highway area the crossing lies in (markings clipped to it) */
+  areaId?: string;
   coords: Q[][];
   bbox: [number, number, number, number];
 }

@@ -305,6 +305,7 @@ function draw() {
       const m = (cr.crossingMarkings ?? "").toLowerCase();
       const widthM = cr.width ?? (m.includes("zebra") ? 3 : 1.5);
       ctx.lineCap = "butt";
+      clipToArea(cr.areaId);
       if (stripe) {
         ctx.strokeStyle = "#5a5a60";
         ctx.lineWidth = Math.max(2, widthM * px);
@@ -334,6 +335,7 @@ function draw() {
         ctx.stroke();
         ctx.globalAlpha = 1;
       }
+      ctx.restore();
     }
     ctx.lineCap = "round";
   }
@@ -410,17 +412,17 @@ function drawZebra(cr: LineFeature, widthM: number, color: string) {
 /**
  * Dashed-crossing markings: two dashed lines running along the left and
  * right boundary of the footway, 10 cm wide each, offset to the inside of
- * the crossing band so the stroke stays within the tagged width.
+ * the crossing band so the stroke stays within the tagged width. Clipped
+ * to the containing highway area by the caller.
  */
 function drawBoundaryDashes(cr: LineFeature, widthM: number, color: string) {
   const px = pxPerMeter();
   const halfW = (widthM * px) / 2;
   const lineW = Math.max(1, 0.1 * px);
   const offset = Math.max(0, halfW - lineW / 2);
-  const dash = Math.max(4, 0.5 * px);
-  const gap = Math.max(3, 0.35 * px);
   ctx.strokeStyle = color;
   ctx.lineWidth = lineW;
+  ctx.setLineDash([Math.max(4, 0.5 * px), Math.max(3, 0.35 * px)]);
   ctx.lineCap = "butt";
 
   const pts: [number, number][] = [];
@@ -434,18 +436,8 @@ function drawBoundaryDashes(cr: LineFeature, widthM: number, color: string) {
     }
   }
 
-  // arc length the markings cover: the full way, or the stretch between the
-  // kerb lines it crosses (kerbTrimStart/End as fractions along the way)
-  let total = 0;
-  for (let i = 1; i < pts.length; i++) total += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
-  const t0 = cr.kerbTrimStart ?? 0;
-  const t1 = cr.kerbTrimEnd ?? 1;
-  const s0 = t0 * total;
-  const s1 = t1 * total;
-
   for (const side of [-1, 1] as const) {
-    // offset boundary polyline (left / right edge of the footway)
-    const off: [number, number][] = [];
+    ctx.beginPath();
     for (let i = 0; i < pts.length; i++) {
       let nx: number, ny: number;
       if (i === 0) {
@@ -457,54 +449,12 @@ function drawBoundaryDashes(cr: LineFeature, widthM: number, color: string) {
         const bl = Math.hypot(nx1 + nx2, ny1 + ny2);
         [nx, ny] = bl === 0 ? [nx1, ny1] : [(nx1 + nx2) / bl, (ny1 + ny2) / bl];
       }
-      off.push([pts[i][0] + nx * offset * side, pts[i][1] + ny * offset * side]);
+      const ox = pts[i][0] + nx * offset * side, oy = pts[i][1] + ny * offset * side;
+      if (i === 0) ctx.moveTo(ox, oy); else ctx.lineTo(ox, oy);
     }
-
-    // cumulative arc length
-    const cum: number[] = [0];
-    let totalOff = 0;
-    for (let i = 1; i < off.length; i++) {
-      totalOff += Math.hypot(off[i][0] - off[i - 1][0], off[i][1] - off[i - 1][1]);
-      cum.push(totalOff);
-    }
-    if (totalOff === 0) continue;
-
-    // dash start distances within [s0, s1]: the pattern is distributed so it
-    // begins and ends flush with a full dash (no marking spills past a kerb)
-    const span = (s1 - s0) * (totalOff / (total || 1));
-    const period = dash + gap;
-    const starts: number[] = [];
-    if (span > 0) {
-      let n = Math.max(1, Math.round((span + gap) / period));
-      while (n > 1 && n * dash + (n - 1) * gap > span) n--;
-      const slack = span - (n * dash + (n - 1) * gap);
-      for (let i = 0; i < n; i++) starts.push(s0 * (totalOff / (total || 1)) + slack / 2 + i * period);
-    }
-
-    // stroke each dash along the offset polyline
-    for (let si = 0; si < starts.length; si++) {
-      const d0 = starts[si];
-      const d1 = d0 + dash;
-      if (d0 >= totalOff) break;
-      ctx.beginPath();
-      let placed = false;
-      for (let i = 1; i < off.length; i++) {
-        if (cum[i] < d0) continue;
-        const segLen = cum[i] - cum[i - 1];
-        const a0 = segLen === 0 ? 0 : Math.max(0, (d0 - cum[i - 1]) / segLen);
-        const a1 = segLen === 0 ? 0 : Math.min(1, (d1 - cum[i - 1]) / segLen);
-        if (a1 <= a0) continue;
-        const x0 = off[i - 1][0] + (off[i][0] - off[i - 1][0]) * a0;
-        const y0 = off[i - 1][1] + (off[i][1] - off[i - 1][1]) * a0;
-        const x1 = off[i - 1][0] + (off[i][0] - off[i - 1][0]) * a1;
-        const y1 = off[i - 1][1] + (off[i][1] - off[i - 1][1]) * a1;
-        if (!placed) { ctx.moveTo(x0, y0); placed = true; }
-        ctx.lineTo(x1, y1);
-        if (cum[i] >= d1) break;
-      }
-      if (placed) ctx.stroke();
-    }
+    ctx.stroke();
   }
+  ctx.setLineDash([]);
 }
 
 function cellsForBbox(bbox: [number, number, number, number], cell: number): number[] {
@@ -516,6 +466,28 @@ function cellsForBbox(bbox: [number, number, number, number], cell: number): num
     for (let y = y0; y <= y1; y++)
       keys.push(x * 100000 + y);
   return keys;
+}
+
+/** highway area containing a crossing (for clipping markings), by feature id */
+function areaById(id: string): AreaFeature | null {
+  if (!dataset || !areaIndex) return null;
+  for (const a of dataset.areas) {
+    if (a.id === id) return a;
+  }
+  return null;
+}
+
+/** build a canvas clip path from an area's rings; returns false if not found */
+function clipToArea(areaId: string | undefined): boolean {
+  if (!areaId) return true;
+  const area = areaById(areaId);
+  if (!area) return true;
+  ctx.save();
+  ctx.beginPath();
+  for (const ring of area.outer) drawRing(ring, true);
+  for (const hole of area.holes) drawRing(hole, true);
+  ctx.clip("evenodd");
+  return true;
 }
 
 // ---------------- interaction ----------------
