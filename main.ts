@@ -213,6 +213,46 @@ function rand(seed: number): number {
 }
 
 /** stone tile pattern in a greyish tone; null for plain surfaces */
+/**
+ * Grass texture: mottled patches of varying greens over a base tone, so
+ * large lawns don't read as one flat color. Patch size ~1 m; deterministic
+ * per tile cell.
+ */
+function grassPatternTile(px: number): CanvasPattern | null {
+  const patchM = 1.0;
+  let cell = Math.round(patchM * px);
+  if (cell < 6) return null; // too small to read: flat green
+  cell = Math.min(cell, 128);
+  const tile = document.createElement("canvas");
+  tile.width = cell * 2;
+  tile.height = cell * 2;
+  const tctx = tile.getContext("2d")!;
+  const base = [93, 122, 68]; // #5d7a44
+  tctx.fillStyle = `rgb(${base[0]},${base[1]},${base[2]})`;
+  tctx.fillRect(0, 0, tile.width, tile.height);
+  // 2x2 patch cells, each seeded: mix of lighter/darker greens
+  for (let ry = 0; ry < 2; ry++) {
+    for (let rx = 0; rx < 2; rx++) {
+      const seed = ry * 13 + rx * 7 + 5;
+      // vary brightness and hue slightly per patch
+      const d = Math.round((rand(seed) - 0.45) * 34);
+      tctx.fillStyle = `rgb(${base[0] + d},${base[1] + d + Math.round((rand(seed+1)-0.5)*10)},${base[2] + d - Math.round((rand(seed+2)-0.5)*14)})`;
+      tctx.fillRect(rx * cell, ry * cell, cell, cell);
+      // sprinkle a few smaller darker/lighter blades-patches within
+      for (let k = 0; k < 6; k++) {
+        const sd = seed * 37 + k;
+        const bx = rand(sd) * cell, by = rand(sd + 11) * cell;
+        const bw = 2 + rand(sd + 21) * cell * 0.22;
+        const bh = 2 + rand(sd + 31) * cell * 0.22;
+        const dd = Math.round((rand(sd + 41) - 0.5) * 46);
+        tctx.fillStyle = `rgb(${base[0] + dd},${base[1] + dd + 6},${base[2] + dd - 8})`;
+        tctx.fillRect(rx * cell + bx, ry * cell + by, bw, bh);
+      }
+    }
+  }
+  return ctx.createPattern(tile, "repeat");
+}
+
 function stonePatternTile(surface: string, px: number): CanvasPattern | null {
   const s = normalizeSurfaceKey(surface);
   if (s !== "paving_stones" && s !== "sett" && s !== "cobblestone") return null;
@@ -285,6 +325,15 @@ function stonePattern(surface: string | undefined): CanvasPattern | null {
   return pat;
 }
 
+/** grass texture at the current zoom, cached per scale */
+function grassPattern(): CanvasPattern | null {
+  const key = `grass@${pxPerMeter().toFixed(3)}`;
+  if (patternCache.has(key)) return patternCache.get(key)!;
+  const pat = grassPatternTile(pxPerMeter());
+  patternCache.set(key, pat);
+  return pat;
+}
+
 function draw() {
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth, h = canvas.clientHeight;
@@ -322,8 +371,8 @@ function draw() {
     const onLayer = (f: { layer?: number; level?: number }) =>
       (f.layer ?? 0) === layer && layerVisible(f);
 
-    // --- landuse=grass (background fill) ---
-    ctx.fillStyle = "#5d7a44";
+    // --- landuse=grass (background fill, mottled texture) ---
+    ctx.fillStyle = grassPattern() ?? "#5d7a44";
     for (const g of gs) {
       if (!onLayer(g)) continue;
       ctx.beginPath();
