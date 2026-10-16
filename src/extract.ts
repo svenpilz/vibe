@@ -146,6 +146,8 @@ function highwayTypesCompatible(clHighway: string | undefined, areaHighway: stri
 const CENTERLINE_HIGHWAYS = new Set([
   "footway", "pedestrian", "service", "living_street", "residential", "unclassified",
   "cycleway", "path", "steps", "track", "road",
+  "motorway", "trunk", "primary", "secondary", "tertiary",
+  "motorway_link", "trunk_link", "primary_link", "secondary_link", "tertiary_link",
 ]);
 
 export function extractFeatures(
@@ -308,7 +310,8 @@ export function extractFeatures(
           bbox: bboxOfQ(qc),
         });
       } else if (CENTERLINE_HIGHWAYS.has(highway) && !isClosed(way)
-                 && (tags["surface"] !== undefined || widthNum !== undefined)) {
+                 && (tags["surface"] !== undefined || widthNum !== undefined
+                     || parseLanes(tags["lanes"]) !== undefined)) {
         const qc = q(coords);
         centerlines.push({
           type: "centerline",
@@ -474,16 +477,21 @@ export function extractFeatures(
   const areaGridL = buildAreaIndex(areas);
   for (const cl of laneCandidates) {
     const candidates = queryAreas(areaGridL, cl.bbox);
-    const mid = cl.coords[Math.floor(cl.coords.length / 2)];
+    // midpoint of the middle segment (a vertex could lie exactly on the
+    // area boundary, where point-in-polygon is ambiguous)
+    const i = Math.floor(cl.coords.length / 2);
+    const dxs = cl.coords[i][0] - cl.coords[i - 1][0];
+    const dys = cl.coords[i][1] - cl.coords[i - 1][1];
+    const mid = [(cl.coords[i][0] + cl.coords[i - 1][0]) / 2, (cl.coords[i][1] + cl.coords[i - 1][1]) / 2];
+    const segLen = Math.hypot(dxs, dys);
+    if (segLen === 0) continue;
     for (const area of candidates) {
       if (area.junction) continue;
       if (area.layer !== cl.layer) continue;
       if (!bboxOverlap(area.bbox, cl.bbox)) continue;
       if (!pointInAreaQ(mid, area)) continue;
-      const i = Math.floor(cl.coords.length / 2);
-      const dx = cl.coords[i][0] - cl.coords[i - 1][0];
-      const dy = cl.coords[i][1] - cl.coords[i - 1][1];
-      const len = Math.hypot(dx, dy);
+      const dx = dxs, dy = dys;
+      const len = segLen;
       if (len === 0) break;
       const nx = -dy / len, ny = dx / len;
       const [minX, minY, maxX, maxY] = area.bbox;
