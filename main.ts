@@ -579,7 +579,7 @@ canvas.addEventListener("wheel", (e) => {
   const factor = Math.exp(-e.deltaY * 0.0015);
   view.scale = Math.max(500, Math.min(3_000_000, view.scale * factor));
   requestDraw();
-  statusEl.textContent = `zoom ${zoomLevel().toFixed(1)} (scale ${Math.round(view.scale)})`;
+  statusEl.textContent = `zoom ${zoomLevel().toFixed(1)} (scale ${Math.round(view.scale)}) · ${__COMMIT__}`;
 }, { passive: false });
 
 // click -> feature inspection
@@ -1000,7 +1000,7 @@ function fitToBounds(bounds: [number, number, number, number]) {
     cy,
     scale: Math.max(500, Math.min(3_000_000, Math.min(fitW, fitH))),
   };
-  statusEl.textContent = `zoom ${zoomLevel().toFixed(1)} (scale ${Math.round(view.scale)})`;
+  statusEl.textContent = `zoom ${zoomLevel().toFixed(1)} (scale ${Math.round(view.scale)}) · ${__COMMIT__}`;
   requestDraw();
 }
 
@@ -1091,7 +1091,7 @@ function ingestResult(result: ExtractResult, name: string) {
   }
   buildLayerPanel();
   fitToBounds(result.bounds);
-  statusEl.textContent = `${name}: loaded ${total.toLocaleString()} features in ${((performance.now() - t0) / 1000).toFixed(1)}s — scroll to zoom, drag to pan`;
+  statusEl.textContent = `${name}: loaded ${total.toLocaleString()} features in ${((performance.now() - t0) / 1000).toFixed(1)}s — scroll to zoom, drag to pan · ${__COMMIT__}`;
 }
 
 // ---- drag & drop wiring ----
