@@ -1,16 +1,7 @@
 import { PbfReader } from "pbf";
-import { readFileSync } from "node:fs";
-import { inflateSync } from "node:zlib";
 
 export interface OSMTags {
   [key: string]: string;
-}
-
-export interface OSMNode {
-  id: number;
-  lon: number;
-  lat: number;
-  tags: OSMTags;
 }
 
 export interface OSMWay {
@@ -84,7 +75,7 @@ export class NodeCoordStore {
   set(id: number, lonUnits: number, latUnits: number): void {
     if ((this.used + 1) * 4 >= this.cap * 3) this.grow();
     let i = this.hash(id);
-    while (true) {
+    for (;;) {
       const k = this.keys[i];
       if (Number.isNaN(k)) {
         this.keys[i] = id;
@@ -104,16 +95,12 @@ export class NodeCoordStore {
 
   get(id: number): { lon: number; lat: number } | undefined {
     let i = this.hash(id);
-    while (true) {
+    for (;;) {
       const k = this.keys[i];
       if (Number.isNaN(k)) return undefined;
       if (k === id) return { lon: this.lons[i] / COORD_UNIT, lat: this.lats[i] / COORD_UNIT };
       i = (i + 1) & this.mask;
     }
-  }
-
-  has(id: number): boolean {
-    return this.get(id) !== undefined;
   }
 
   get size(): number {
@@ -137,27 +124,38 @@ export class NodeCoordStore {
   }
 }
 
+/** Convert block-relative coords to absolute 1e-7-degree units. */
 function coordUnits(base: number, step: number, raw: number): number {
   return Math.round((base + step * raw) * COORD_UNIT);
 }
 
-export type NodeTagFilter = (tags: OSMTags) => boolean;
+/** Inflate a zlib blob via the web-standard DecompressionStream. */
+async function inflate(data: Uint8Array): Promise<Uint8Array> {
+  const stream = new Blob([data as unknown as BlobPart])
+    .stream()
+    .pipeThrough(new DecompressionStream("deflate"));
+  const buf = await new Response(stream).arrayBuffer();
+  return new Uint8Array(buf);
+}
 
+export type NodeTagFilter = (tags: OSMTags) => boolean;
+export type ProgressCallback = (pct: number, stats: string) => void;
+
+/**
+ * Streaming OSM PBF parser for .osm.pbf files (e.g. Geofabrik extracts).
+ * Runs in the browser (no Node built-ins) and in Node >= 18.
+ */
 export class OSMPBFParser {
   constructor(
     private data: OSMData,
-    private nodeTagFilter?: NodeTagFilter
+    private nodeTagFilter?: NodeTagFilter,
+    private onProgress?: ProgressCallback
   ) {}
 
-  parseFile(filePath: string): void {
-    this.parseBuffer(readFileSync(filePath));
-  }
-
-  parseBuffer(buf: Uint8Array): void {
+  async parseBuffer(buf: Uint8Array): Promise<void> {
     let pos = 0;
     const len = buf.length;
-    const t0 = Date.now();
-    let lastReport = 0;
+    let lastPct = -1;
 
     while (pos < len) {
       const head = new PbfReader(buf.subarray(pos));
@@ -194,24 +192,22 @@ export class OSMPBFParser {
 
       let data: Uint8Array | undefined;
       if (blob.raw) data = blob.raw;
-      else if (blob.zlibData) data = inflateSync(blob.zlibData);
+      else if (blob.zlibData) data = await inflate(blob.zlibData);
       if (!data) continue;
 
       if (header.type === "OSMData") {
         this.readPrimitiveBlock(data);
       }
 
-      const now = Date.now();
-      if (now - lastReport > 2000) {
-        lastReport = now;
-        process.stderr.write(
-          `\r  pbf ${((pos / len) * 100).toFixed(0)}%  nodes:${this.data.nodeCoords.size}  ways:${this.data.ways.size}`
-        );
+      const pct = Math.floor((pos / len) * 100);
+      if (this.onProgress && pct !== lastPct && pct % 2 === 0) {
+        lastPct = pct;
+        this.onProgress(pct, `nodes:${this.data.nodeCoords.size} ways:${this.data.ways.size}`);
       }
     }
-    process.stderr.write(
-      `\r  pbf done in ${(((Date.now() - t0) / 1000) | 0)}s  nodes:${this.data.nodeCoords.size}  ways:${this.data.ways.size}  rels:${this.data.relations.length}\n`
-    );
+    if (this.onProgress) {
+      this.onProgress(100, `nodes:${this.data.nodeCoords.size} ways:${this.data.ways.size}`);
+    }
   }
 
   private readPrimitiveBlock(data: Uint8Array): void {
@@ -429,8 +425,4 @@ export class OSMPBFParser {
     }
     this.data.relations.push({ id: r.id, members, tags });
   }
-}
-
-export function nodeCoord(data: OSMData, id: number): { lon: number; lat: number } | undefined {
-  return data.nodeCoords.get(id);
 }
