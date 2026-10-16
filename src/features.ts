@@ -91,6 +91,30 @@ export interface GrassFeature {
   bbox: [number, number, number, number];
 }
 
+export interface BollardFeature {
+  type: "bollard";
+  id: string;
+  /** OSM layer=* tag (default 0) */
+  layer: number;
+  /** OSM level=* tag (undefined when absent) */
+  level?: number;
+  lat: Q;
+  lon: Q;
+}
+
+export interface FenceFeature {
+  type: "fence";
+  id: string;
+  /** fence type (fence_type=* or barrier value) */
+  fence?: string;
+  /** OSM layer=* tag (default 0) */
+  layer: number;
+  /** OSM level=* tag (undefined when absent) */
+  level?: number;
+  coords: Q[][];
+  bbox: [number, number, number, number];
+}
+
 export interface KerbFeature {
   type: "kerb";
   id: string;
@@ -119,7 +143,7 @@ export interface KerbWayFeature {
   bbox: [number, number, number, number];
 }
 
-export type Feature = AreaFeature | BuildingFeature | GrassFeature | LineFeature | KerbFeature | KerbWayFeature;
+export type Feature = AreaFeature | BuildingFeature | GrassFeature | LineFeature | KerbFeature | KerbWayFeature | BollardFeature | FenceFeature;
 
 export interface Dataset {
   areas: AreaFeature[];
@@ -130,6 +154,8 @@ export interface Dataset {
   crossings: LineFeature[];
   kerbs: KerbFeature[];
   kerbWays: KerbWayFeature[];
+  bollards: BollardFeature[];
+  fences: FenceFeature[];
   laneMarkings: LineFeature[];
 }
 

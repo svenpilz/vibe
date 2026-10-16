@@ -17,7 +17,7 @@
  * layer values present so the UI can offer layer selection.
  */
 import type { OSMData, OSMTags, OSMWay } from "./osm-pbf";
-import type { Q, AreaFeature, BuildingFeature, GrassFeature, LineFeature, KerbFeature, KerbWayFeature } from "./features";
+import type { Q, AreaFeature, BuildingFeature, GrassFeature, LineFeature, KerbFeature, KerbWayFeature, BollardFeature, FenceFeature } from "./features";
 
 export interface ExtractResult {
   areas: AreaFeature[];
@@ -28,6 +28,8 @@ export interface ExtractResult {
   crossings: LineFeature[];
   kerbs: KerbFeature[];
   kerbWays: KerbWayFeature[];
+  bollards: BollardFeature[];
+  fences: FenceFeature[];
   laneMarkings: LineFeature[];
   /** all layer values present in the data, sorted ascending */
   layers: number[];
@@ -238,6 +240,8 @@ export function extractFeatures(
   const crossings: LineFeature[] = [];
   const kerbWays: KerbWayFeature[] = [];
   const kerbs: KerbFeature[] = [];
+  const bollards: BollardFeature[] = [];
+  const fences: FenceFeature[] = [];
 
   const wayCoords = (way: OSMWay): [number, number][] | null => {
     const coords: [number, number][] = [];
@@ -323,6 +327,23 @@ export function extractFeatures(
           level: parseLevel(tags["level"]),
           outer: [qc],
           holes: [],
+          bbox: bboxOfQ(qc),
+        });
+      }
+      continue;
+    }
+
+    if (tags["barrier"] === "fence") {
+      const coords = wayCoords(way);
+      if (coords) {
+        const qc = q(coords);
+        fences.push({
+          type: "fence",
+          id: `w${way.id}`,
+          fence: tags["fence_type"],
+          layer: parseLayer(tags["layer"]),
+          level: parseLevel(tags["level"]),
+          coords: qc,
           bbox: bboxOfQ(qc),
         });
       }
@@ -518,6 +539,19 @@ export function extractFeatures(
   }
 
   for (const [id, tags] of data.nodeTags) {
+    if (tags["barrier"] === "bollard") {
+      const c = data.nodeCoords.get(id);
+      if (!c) continue;
+      bollards.push({
+        type: "bollard",
+        id: `n${id}`,
+        layer: parseLayer(tags["layer"]),
+        level: parseLevel(tags["level"]),
+        lat: Math.round(c.lat * 1e7),
+        lon: Math.round(c.lon * 1e7),
+      });
+      continue;
+    }
     if (tags["barrier"] === "kerb" || tags["kerb"] !== undefined) {
       const c = data.nodeCoords.get(id);
       if (!c) continue;
@@ -766,12 +800,14 @@ export function extractFeatures(
   for (const f of footways) layerSet.add(f.layer);
   for (const c of crossings) layerSet.add(c.layer);
   for (const k of kerbWays) layerSet.add(k.layer);
+  for (const b of bollards) layerSet.add(b.layer);
+  for (const f of fences) layerSet.add(f.layer);
   for (const k of kerbs) layerSet.add(k.layer);
   const layers = [...layerSet].sort((a, b) => a - b);
 
   // collect all level values (only features with an explicit level=*)
   const levelSet = new Set<number>();
-  for (const arr of [areas, buildings, grass, centerlines, footways, crossings, kerbWays, kerbs]) {
+  for (const arr of [areas, buildings, grass, centerlines, footways, crossings, kerbWays, kerbs, bollards, fences]) {
     for (const f of arr) if (f.level !== undefined) levelSet.add(f.level);
   }
   const levels = [...levelSet].sort((a, b) => a - b);
@@ -797,6 +833,13 @@ export function extractFeatures(
     if (k.lat > maxY) maxY = k.lat;
   }
   for (const k of kerbWays) expand(k.bbox);
+  for (const f of fences) expand(f.bbox);
+  for (const b of bollards) {
+    if (b.lon < minX) minX = b.lon;
+    if (b.lat < minY) minY = b.lat;
+    if (b.lon > maxX) maxX = b.lon;
+    if (b.lat > maxY) maxY = b.lat;
+  }
 
   onProgress?.(100, `done (${areas.length} areas, ${centerlines.length} centerlines (-${droppedCenterlines} covered), ${crossings.length} crossings, ${kerbs.length + kerbWays.length} kerbs)`);
 
@@ -809,6 +852,8 @@ export function extractFeatures(
     crossings,
     kerbs,
     kerbWays,
+    bollards,
+    fences,
     laneMarkings,
     layers,
     levels,
