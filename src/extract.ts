@@ -5,10 +5,16 @@
  *   areas      : area:highway polygons (closed ways + multipolygon relations,
  *                with holes). Surface from the area itself; if absent,
  *                inherited from a highway centerline that intersects it.
+ *                Traffic islands default to sett.
  *   centerlines: highway ways with surface=* / width=* (surface detail).
+ *                Suppressed when a corresponding area (same highway type,
+ *                same layer) already covers them.
  *   footways   : highway=footway / footway=sidewalk lines (surface, width).
  *   crossings  : footway=crossing (crossing=*, crossing:markings=*, width).
  *   kerbs      : barrier=kerb nodes AND ways with kerb=* details.
+ *
+ * All features carry their OSM layer=* value; the result exposes the list of
+ * layer values present so the UI can offer layer selection.
  */
 import type { OSMData, OSMTags, OSMWay } from "./osm-pbf";
 import type { Q, AreaFeature, LineFeature, KerbFeature, KerbWayFeature } from "./features";
@@ -20,6 +26,8 @@ export interface ExtractResult {
   crossings: LineFeature[];
   kerbs: KerbFeature[];
   kerbWays: KerbWayFeature[];
+  /** all layer values present in the data, sorted ascending */
+  layers: number[];
   /** bbox of all extracted features: [minLonQ, minLatQ, maxLonQ, maxLatQ] */
   bounds: [number, number, number, number];
 }
@@ -65,6 +73,12 @@ function bboxOverlap(
   b: [number, number, number, number]
 ): boolean {
   return a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
+}
+
+function parseLayer(v: string | undefined): number {
+  if (v === undefined) return 0;
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) ? Math.max(-16, Math.min(16, n)) : 0;
 }
 
 /**
@@ -131,11 +145,12 @@ export function extractFeatures(
         type: "area",
         id: `w${way.id}`,
         highway: areaHighway,
-        surface: tags["surface"],
+        surface: tags["surface"] ?? (areaHighway === "traffic_island" ? "sett" : undefined),
         surfaceColour: tags["surface:colour"] ?? tags["colour"],
         name: tags["name"],
         wheelchair: tags["wheelchair"],
         lit: tags["lit"],
+        layer: parseLayer(tags["layer"]),
         outer: [qc],
         holes: [],
         bbox: bboxOfQ(qc),
@@ -153,6 +168,7 @@ export function extractFeatures(
         id: `w${way.id}`,
         kerb: tags["kerb"] ?? tags["barrier"],
         tactilePaving: tags["tactile_paving"],
+        layer: parseLayer(tags["layer"]),
         coords: qc,
         bbox: bboxOfQ(qc),
       });
@@ -180,6 +196,7 @@ export function extractFeatures(
           width: Number.isFinite(widthNum as number) ? widthNum : undefined,
           lit: tags["lit"],
           name: tags["name"],
+          layer: parseLayer(tags["layer"]),
           coords: qc,
           bbox: bboxOfQ(qc),
         });
@@ -195,6 +212,7 @@ export function extractFeatures(
           width: Number.isFinite(widthNum as number) ? widthNum : undefined,
           lit: tags["lit"],
           name: tags["name"],
+          layer: parseLayer(tags["layer"]),
           coords: qc,
           bbox: bboxOfQ(qc),
         });
@@ -210,6 +228,7 @@ export function extractFeatures(
           width: Number.isFinite(widthNum as number) ? widthNum : undefined,
           lit: tags["lit"],
           name: tags["name"],
+          layer: parseLayer(tags["layer"]),
           coords: qc,
           bbox: bboxOfQ(qc),
         });
@@ -245,11 +264,12 @@ export function extractFeatures(
       type: "area",
       id: `r${rel.id}`,
       highway: areaHighway,
-      surface: tags["surface"],
+      surface: tags["surface"] ?? (areaHighway === "traffic_island" ? "sett" : undefined),
       surfaceColour: tags["surface:colour"] ?? tags["colour"],
       name: tags["name"],
       wheelchair: tags["wheelchair"],
       lit: tags["lit"],
+      layer: parseLayer(tags["layer"]),
       outer: outerRings,
       holes: holeRings,
       bbox: bboxOfQ(all),
@@ -266,6 +286,7 @@ export function extractFeatures(
         id: `n${id}`,
         kerb: tags["kerb"] ?? tags["barrier"],
         tactilePaving: tags["tactile_paving"],
+        layer: parseLayer(tags["layer"]),
         lat: Math.round(c.lat * 1e7),
         lon: Math.round(c.lon * 1e7),
       });
@@ -296,6 +317,39 @@ export function extractFeatures(
   }
   void inherited;
 
+  // drop centerlines that are already represented by a corresponding area
+  // (same highway type, same layer): the area fill replaces the line.
+  onProgress?.(85, "filtering centerlines covered by areas…");
+  const areaGrid2 = buildAreaIndex(areas);
+  const keptCenterlines: LineFeature[] = [];
+  for (const cl of centerlines) {
+    const mid = cl.coords[Math.floor(cl.coords.length / 2)];
+    let covered = false;
+    const candidates = queryAreas(areaGrid2, cl.bbox);
+    for (const area of candidates) {
+      if (area.layer !== cl.layer) continue;
+      if (!highwayTypesCompatible(cl.highway, area.highway)) continue;
+      if (!bboxOverlap(area.bbox, cl.bbox)) continue;
+      if (pointInAreaQ(mid, area)) { covered = true; break; }
+    }
+    if (!covered) keptCenterlines.push(cl);
+  }
+  const droppedCenterlines = centerlines.length - keptCenterlines.length;
+  // replace contents in place (no spread — avoids stack overflow on large arrays)
+  centerlines.length = 0;
+  for (let i = 0; i < keptCenterlines.length; i++) centerlines[i] = keptCenterlines[i];
+  void droppedCenterlines;
+
+  // collect all layer values
+  const layerSet = new Set<number>();
+  for (const a of areas) layerSet.add(a.layer);
+  for (const c of centerlines) layerSet.add(c.layer);
+  for (const f of footways) layerSet.add(f.layer);
+  for (const c of crossings) layerSet.add(c.layer);
+  for (const k of kerbWays) layerSet.add(k.layer);
+  for (const k of kerbs) layerSet.add(k.layer);
+  const layers = [...layerSet].sort((a, b) => a - b);
+
   // compute overall bounds
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   const expand = (b: [number, number, number, number]) => {
@@ -316,7 +370,7 @@ export function extractFeatures(
   }
   for (const k of kerbWays) expand(k.bbox);
 
-  onProgress?.(100, `done (${areas.length} areas, ${crossings.length} crossings, ${kerbs.length + kerbWays.length} kerbs)`);
+  onProgress?.(100, `done (${areas.length} areas, ${centerlines.length} centerlines (-${droppedCenterlines} covered), ${crossings.length} crossings, ${kerbs.length + kerbWays.length} kerbs)`);
 
   return {
     areas,
@@ -325,6 +379,7 @@ export function extractFeatures(
     crossings,
     kerbs,
     kerbWays,
+    layers,
     bounds: [minX, minY, maxX, maxY],
   };
 }
