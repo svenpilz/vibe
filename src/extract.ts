@@ -105,6 +105,37 @@ function pointInAreaQ(pt: number[], area: AreaFeature): boolean {
   return true;
 }
 
+/** squared distance from pt to segment a-b in quantized units */
+function distToSegQ2(px: number, py: number, a: number[], b: number[]): number {
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  const len2 = dx * dx + dy * dy;
+  let t = len2 === 0 ? 0 : ((px - a[0]) * dx + (py - a[1]) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  const x = a[0] + t * dx, y = a[1] + t * dy;
+  return (px - x) ** 2 + (py - y) ** 2;
+}
+
+/**
+ * Containment with tolerance: true when the point is inside the area or
+ * within tolQ of its boundary. Ways mapped along an area's edge share
+ * nodes with the area ring; their vertices lie exactly on the boundary,
+ * where the strict test is ambiguous.
+ */
+function pointInAreaTolQ(pt: number[], area: AreaFeature, tolQ: number): boolean {
+  if (pointInAreaQ(pt, area)) return true;
+  const tol2 = tolQ * tolQ;
+  const onRing = (ring: number[][]): boolean => {
+    for (let i = 1; i < ring.length; i++) {
+      if (distToSegQ2(pt[0], pt[1], ring[i - 1], ring[i]) <= tol2) return true;
+    }
+    return false;
+  };
+  for (const ring of area.outer) {
+    if (onRing(ring)) return true;
+  }
+  return false;
+}
+
 function bboxOverlap(
   a: [number, number, number, number],
   b: [number, number, number, number]
@@ -480,7 +511,7 @@ export function extractFeatures(
       if (!bboxOverlap(area.bbox, cl.bbox)) continue;
       let allInside = true;
       for (const pt of cl.coords) {
-        if (!pointInAreaQ(pt, area)) { allInside = false; break; }
+        if (!pointInAreaTolQ(pt, area, 10)) { allInside = false; break; }
       }
       if (allInside) {
         area.surface = cl.surface;
