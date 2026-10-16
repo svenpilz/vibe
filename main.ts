@@ -434,7 +434,8 @@ function draw() {
       for (const lu of lus) {
         if (!onLayer(lu)) continue;
         ctx.globalAlpha = 0.35;
-        ctx.fillStyle = lu.kind === "residential" ? "#f0c9a0" : "#eee4b3";
+        // average paving-stone grey: consistent with the paved look
+        ctx.fillStyle = PATTERN_AVG.paving_stones;
         ctx.beginPath();
         for (const ring of lu.outer) drawRing(ring, true);
         for (const hole of lu.holes) drawRing(hole, true);
@@ -1511,7 +1512,7 @@ function buildLayerPanel() {
   const defs: { key: keyof typeof layers; label: string; swatch: string }[] = [
     { key: "areas", label: "highway areas (surface fill)", swatch: "#6d6055" },
     { key: "buildings", label: "buildings", swatch: "#f0b98a" },
-    { key: "landuse", label: "landuse res./comm.", swatch: "#f0c9a0" },
+    { key: "landuse", label: "landuse res./comm.", swatch: PATTERN_AVG.paving_stones },
     { key: "parking", label: "parking", swatch: "#4a4a50" },
     { key: "grass", label: "grass / garden / scrub", swatch: "#5d7a44" },
     { key: "centerlines", label: "centerlines (surface)", swatch: "#7a6a52" },

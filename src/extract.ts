@@ -895,6 +895,38 @@ export function extractFeatures(
     }
   }
 
+  // parking without surface: assume the surface of the LARGEST adjacent
+  // highway area (by bbox area of the touching/overlapping polygon)
+  const areaGridP = buildAreaIndex(areas);
+  for (const pk of parking) {
+    if (pk.surface) continue;
+    const candidates = queryAreas(areaGridP, pk.bbox);
+    let best: AreaFeature | null = null;
+    let bestArea = -1;
+    for (const area of candidates) {
+      if (!area.surface) continue;
+      if (!bboxOverlap(area.bbox, pk.bbox)) continue;
+      // adjacent: rings touch or overlap; a shared point is enough
+      let touches = false;
+      outer: for (const pkRing of pk.outer) {
+        for (const aRing of area.outer) {
+          for (const p1 of pkRing) {
+            for (const p2 of aRing) {
+              if (p1[0] === p2[0] && p1[1] === p2[1]) { touches = true; break outer; }
+            }
+          }
+        }
+      }
+      if (!touches) continue;
+      const a = (area.bbox[2] - area.bbox[0]) * (area.bbox[3] - area.bbox[1]);
+      if (a > bestArea) { bestArea = a; best = area; }
+    }
+    if (best) {
+      pk.surface = best.surface;
+      pk.surfaceColour = pk.surfaceColour ?? best.surfaceColour;
+    }
+  }
+
   // collect all layer values
   const layerSet = new Set<number>();
   for (const a of areas) layerSet.add(a.layer);
