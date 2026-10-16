@@ -46,12 +46,12 @@ const layers = {
  */
 const LOD: Record<keyof typeof layers, number> = {
   areas: 0,        // always
-  grass: 1,       // 1 px/m: large fills still read at low zoom
-  buildings: 2,   // 2 px/m: outlines readable, dense clusters culled
-  centerlines: 2, // 2 px/m: 2m-wide road detail visible
-  footways: 3,    // 3 px/m: ~2m sidewalks resolved
-  crossings: 5,   // 5 px/m: 50cm markings resolved, not smudged
-  kerbs: 7,       // 7 px/m: 10-30cm kerbs resolved
+  grass: 0.5,     // 0.5 px/m: large fills still read at low zoom
+  buildings: 1.5, // 1.5 px/m: outlines readable, dense clusters culled
+  centerlines: 1.5, // 1.5 px/m: 2m-wide road detail visible
+  footways: 2,    // 2 px/m: ~2m sidewalks resolved
+  crossings: 4,   // 4 px/m: 50cm markings resolved, not smudged
+  kerbs: 6,       // 6 px/m: 10-30cm kerbs resolved
 };
 
 function lodVisible(key: keyof typeof layers): boolean {
