@@ -1,6 +1,6 @@
 import { buildIndex, queryIndex, type Indexed } from "./src/loader";
 import type { ExtractResult } from "./src/extract";
-import type { AreaFeature, BuildingFeature, LineFeature, KerbFeature, KerbWayFeature, Dataset, Feature, Q } from "./src/features";
+import type { AreaFeature, BuildingFeature, GrassFeature, LineFeature, KerbFeature, KerbWayFeature, Dataset, Feature, Q } from "./src/features";
 import { surfaceColor, normalizeSurface } from "./src/features";
 
 const canvas = document.getElementById("map") as HTMLCanvasElement;
@@ -18,6 +18,7 @@ let view: View = { cx: 10.0, cy: 51.0, scale: 2000 };
 let dataset: Dataset | null = null;
 let areaIndex: Indexed<AreaFeature> | null = null;
 let buildingIndex: Indexed<BuildingFeature> | null = null;
+let grassIndex: Indexed<GrassFeature> | null = null;
 let lineIndexes: {
   centerlines: Indexed<LineFeature>;
   footways: Indexed<LineFeature>;
@@ -29,6 +30,7 @@ let kerbWayIndex: Indexed<KerbWayFeature> | null = null;
 const layers = {
   areas: true,
   buildings: true,
+  grass: true,
   centerlines: true,
   footways: true,
   crossings: true,
@@ -163,6 +165,20 @@ function draw() {
 
   const bbox = viewBboxQ();
   const visibleAreas = layers.areas && areaIndex ? queryIndex(areaIndex, bbox) : [];
+
+  // --- landuse=grass (background fill) ---
+  if (layers.grass && grassIndex) {
+    const gs = queryIndex(grassIndex, bbox);
+    if (selectedLayer === null) gs.sort((a, b) => layerSortKey(a) - layerSortKey(b));
+    ctx.fillStyle = "#5d7a44";
+    for (const g of gs) {
+      if (!layerVisible(g)) continue;
+      ctx.beginPath();
+      for (const ring of g.outer) drawRing(ring, true);
+      for (const hole of g.holes) drawRing(hole, true);
+      ctx.fill("evenodd");
+    }
+  }
 
   // --- areas (bird's eye: ascending layer order, highest paints on top) ---
   if (layers.areas && areaIndex) {
@@ -452,7 +468,7 @@ canvas.addEventListener("click", (e) => {
   showInfo(feature);
 });
 
-function pickFeature(px: number, py: number, bbox: [number, number, number, number]): (AreaFeature | BuildingFeature | LineFeature | KerbFeature | KerbWayFeature) | null {
+function pickFeature(px: number, py: number, bbox: [number, number, number, number]): (AreaFeature | BuildingFeature | GrassFeature | LineFeature | KerbFeature | KerbWayFeature) | null {
   const tol = 6;
   const lon = view.cx + (((px - canvas.width / 2) / R()) * 180) / Math.PI;
   const mercC = mercY(view.cy) - (py - canvas.height / 2) / R();
@@ -478,6 +494,22 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
     }
   }
 
+  // grass: point-in-polygon
+  if (layers.grass && grassIndex) {
+    const gHits = queryIndex(grassIndex, [lonQ, latQ, lonQ, latQ])
+      .filter((g) => layerVisible(g));
+    if (selectedLayer === null && gHits.length > 1) {
+      gHits.sort((a, b) => layerSortKey(b) - layerSortKey(a));
+    }
+    for (const g of gHits) {
+      let inOuter = false;
+      for (const ring of g.outer) if (pointInRingQ(lonQ, latQ, ring)) { inOuter = true; break; }
+      if (!inOuter) continue;
+      let inHole = false;
+      for (const hole of g.holes) if (pointInRingQ(lonQ, latQ, hole)) { inHole = true; break; }
+      if (!inHole) return g;
+    }
+  }
   // buildings: outline hit (point-in-polygon)
   if (layers.buildings && buildingIndex) {
     const bHits = queryIndex(buildingIndex, [lonQ, latQ, lonQ, latQ])
@@ -572,7 +604,7 @@ function distToSegQ(px: number, py: number, a: Q[], b: Q[]): number {
 }
 
 // ---------------- info panel ----------------
-function showInfo(f: AreaFeature | BuildingFeature | LineFeature | KerbFeature | KerbWayFeature | null) {
+function showInfo(f: AreaFeature | BuildingFeature | GrassFeature | LineFeature | KerbFeature | KerbWayFeature | null) {
   if (!f) { infoEl.style.display = "none"; return; }
   const rows: [string, string][] = [];
   const push = (k: string, v?: string | number) => {
@@ -582,6 +614,10 @@ function showInfo(f: AreaFeature | BuildingFeature | LineFeature | KerbFeature |
 
   push("layer", feature.layer);
   push("level", feature.level);
+  if (f.type === "grass") {
+    rows.push(["feature", `landuse=grass (${f.id})`]);
+    return;
+  }
   if (f.type === "building") {
     rows.push(["feature", `building (${f.id})`]);
     push("building", f.building);
@@ -658,6 +694,7 @@ function viewportValues(): { layers: Set<number>; levels: Set<number> } {
   if (dataset) {
     if (areaIndex) for (const a of queryIndex(areaIndex, bbox)) add(a);
     if (buildingIndex) for (const b of queryIndex(buildingIndex, bbox)) add(b);
+    if (grassIndex) for (const g of queryIndex(grassIndex, bbox)) add(g);
     if (lineIndexes) {
       for (const c of queryIndex(lineIndexes.centerlines, bbox)) add(c);
       for (const f of queryIndex(lineIndexes.footways, bbox)) add(f);
@@ -754,6 +791,7 @@ function buildLayerPanel() {
   const defs: { key: keyof typeof layers; label: string; swatch: string }[] = [
     { key: "areas", label: "highway areas (surface fill)", swatch: "#6d6055" },
     { key: "buildings", label: "building outlines", swatch: "#8a8a94" },
+    { key: "grass", label: "landuse grass", swatch: "#5d7a44" },
     { key: "centerlines", label: "centerlines (surface)", swatch: "#7a6a52" },
     { key: "footways", label: "footways / sidewalks", swatch: "#cfcfd6" },
     { key: "crossings", label: "crossings (markings)", swatch: "#e8e8e8" },
@@ -799,6 +837,7 @@ function countFor(key: keyof typeof layers): string {
   switch (key) {
     case "areas": return dataset.areas.length.toLocaleString();
     case "buildings": return dataset.buildings.length.toLocaleString();
+    case "grass": return dataset.grass.length.toLocaleString();
     case "centerlines": return dataset.centerlines.length.toLocaleString();
     case "footways": return dataset.footways.length.toLocaleString();
     case "crossings": return dataset.crossings.length.toLocaleString();
@@ -890,9 +929,11 @@ function ingestResult(result: ExtractResult, name: string) {
   selectedLayer = null;
   selectedLevel = null;
   buildingIndex = buildIndex(result.buildings);
+  grassIndex = buildIndex(result.grass);
   dataset = {
     areas: result.areas,
     buildings: result.buildings,
+    grass: result.grass,
     centerlines: result.centerlines,
     footways: result.footways,
     crossings: result.crossings,
@@ -913,7 +954,7 @@ function ingestResult(result: ExtractResult, name: string) {
     if (!arr) kerbGrid.set(key, (arr = []));
     arr.push(k);
   }
-  const total = dataset.areas.length + dataset.buildings.length + dataset.centerlines.length + dataset.footways.length +
+  const total = dataset.areas.length + dataset.buildings.length + dataset.grass.length + dataset.centerlines.length + dataset.footways.length +
     dataset.crossings.length + dataset.kerbs.length + dataset.kerbWays.length;
   if (total === 0) {
     statusEl.textContent = `no micromapping features found in ${name} (try a region with area:highway mapping)`;
@@ -959,6 +1000,7 @@ window.addEventListener("drop", (e) => {
   hasDataset: dataset !== null,
   areas: dataset?.areas.length ?? 0,
   buildings: dataset?.buildings.length ?? 0,
+  grass: dataset?.grass.length ?? 0,
   footways: dataset?.footways.length ?? 0,
   osmLayers,
   selectedLayer,
