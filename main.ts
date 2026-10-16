@@ -1220,10 +1220,39 @@ function requestDraw() {
     drawQueued = false;
     draw();
     updateSelectors();
+    syncUrl();
   });
 }
 
 window.addEventListener("resize", requestDraw);
+viewFromUrl();
+
+// ---------------- URL viewport sync ----------------
+
+/** write the current viewport (center + zoom) into the URL hash */
+function syncUrl(): void {
+  const z = zoomLevel().toFixed(2);
+  const hash = `#map=${z}/${view.cy.toFixed(6)}/${view.cx.toFixed(6)}`;
+  if (location.hash !== hash) {
+    history.replaceState(null, "", hash);
+  }
+}
+
+/** restore the viewport from the URL hash; false when absent/invalid */
+function viewFromUrl(): boolean {
+  const m = /^#map=([\d.]+)\/(-?[\d.]+)\/(-?[\d.]+)$/.exec(location.hash);
+  if (!m) return false;
+  const z = parseFloat(m[1]);
+  const lat = parseFloat(m[2]);
+  const lon = parseFloat(m[3]);
+  if (!Number.isFinite(z) || !Number.isFinite(lat) || !Number.isFinite(lon)) return false;
+  if (lat < -85 || lat > 85 || lon < -180 || lon > 180) return false;
+  if (z < 5 || z > 30) return false;
+  // zoom -> scale: invert zoomLevel() = log2(scale/1200)*2 + 11
+  const scale = 1200 * Math.pow(2, (z - 11) / 2);
+  view = { cx: lon, cy: lat, scale: Math.max(500, Math.min(3_000_000, scale)) };
+  return true;
+}
 
 function fitToBounds(bounds: [number, number, number, number]) {
   const [minX, minY, maxX, maxY] = bounds;
@@ -1330,7 +1359,9 @@ function ingestResult(result: ExtractResult, name: string) {
     return;
   }
   buildLayerPanel();
-  fitToBounds(result.bounds);
+  // keep the current viewport when the URL carries one (hot-reload style
+  // testing: reload, drop the PBF, land on the same spot); otherwise fit
+  if (!viewFromUrl()) fitToBounds(result.bounds);
   statusEl.textContent = `${name}: loaded ${total.toLocaleString()} features in ${((performance.now() - t0) / 1000).toFixed(1)}s — scroll to zoom, drag to pan · ${__COMMIT__}`;
 }
 
