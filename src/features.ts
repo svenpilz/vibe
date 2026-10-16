@@ -47,6 +47,10 @@ export interface LineFeature {
   lanes?: number;
   /** lane width in meters inferred from the highway area (centerlines only) */
   laneW?: number;
+  /** distance in meters from centerline to the left area edge (centerlines only) */
+  laneLeftM?: number;
+  /** distance in meters from centerline to the right area edge (centerlines only) */
+  laneRightM?: number;
   /** number of lanes forward (same direction of travel, centerlines only) */
   lanesFwd?: number;
   coords: Q[][];

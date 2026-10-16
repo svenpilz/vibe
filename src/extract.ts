@@ -499,10 +499,20 @@ export function extractFeatures(
       const left = rayExitInArea(mid, [nx, ny], area, maxRay);
       const right = rayExitInArea(mid, [-nx, -ny], area, maxRay);
       if (left === null || right === null) break;
-      const widthM = ((left + right) / 1e7) * 111_320 * Math.cos((mid[1] / 1e7) * Math.PI / 180);
+      // convert each ray to meters: lon units scale with cos(latitude),
+      // lat units are constant; the ray travels in mixed units
+      const mPerLon = (111_320 * Math.cos((mid[1] / 1e7) * Math.PI / 180)) / 1e7;
+      const mPerLat = 111_320 / 1e7;
+      const rayM = (t: number, dx2: number, dy2: number): number =>
+        Math.hypot(dx2 * t * mPerLon, dy2 * t * mPerLat);
+      const leftM = rayM(left, nx, ny);
+      const rightM = rayM(right, -nx, -ny);
+      const widthM = leftM + rightM;
       laneMarkings.push({
         ...cl,
         laneW: widthM / cl.lanes!,
+        laneLeftM: leftM,
+        laneRightM: rightM,
         lanesFwd: cl.lanesFwd ?? Math.ceil(cl.lanes! / 2),
         areaId: area.id,
       });

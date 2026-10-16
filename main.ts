@@ -523,9 +523,14 @@ function drawLaneMarkings(cl: LineFeature) {
   ctx.lineCap = "butt";
 
   const px2 = cl.coords;
+  // the centerline may sit off the geometric center of the road: lane k=0
+  // starts at the left area edge (-laneLeftM) and lanes divide the full
+  // left+right width equally; the last lane ends at the right area edge
+  const leftM = cl.laneLeftM ?? (total * cl.laneW!) / 2;
   for (let k = 1; k < total; k++) {
-    // -halfRoad .. +halfRoad in lane units; direction border at k === fwd
-    const off = (k - total / 2) * cl.laneW! * px;
+    // distance from the centerline, negative = left side
+    const off = -leftM + k * cl.laneW!;
+    const offPx = off * px;
     const solid = k === fwd;
     ctx.strokeStyle = "#e8e8e8";
     if (!solid) ctx.setLineDash([Math.max(3, 1.2 * px), Math.max(2, 1.0 * px)]);
@@ -540,8 +545,8 @@ function drawLaneMarkings(cl: LineFeature) {
       if (segLen === 0) continue;
       const ux = (X1 - X0) / segLen, uy = (Y1 - Y0) / segLen;
       const nx = -uy, ny = ux;
-      ctx.moveTo(X0 + nx * off, Y0 + ny * off);
-      ctx.lineTo(X1 + nx * off, Y1 + ny * off);
+      ctx.moveTo(X0 + nx * offPx, Y0 + ny * offPx);
+      ctx.lineTo(X1 + nx * offPx, Y1 + ny * offPx);
     }
     ctx.stroke();
     if (!solid) ctx.setLineDash([]);
