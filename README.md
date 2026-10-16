@@ -1,45 +1,53 @@
-# Berlin Micromapping Visualizer
+# OSM Micromapping Visualizer
 
-**Live demo**: https://svenpilz.github.io/vibe/
+A TypeScript app that renders **any OpenStreetMap `.osm.pbf` extract** in the browser with a
+focus on **`area:highway` micromapping**: highway area polygons as continuous surfaces, surface
+details (asphalt, sett, paving_stones …) inherited from highway **centerlines**, plus
+**footway/sidewalk** and **crossing** overlays (zebra / dash markings, width) and **kerb**
+nodes and ways (raised / lowered / flush, tactile paving).
 
-A TypeScript app that renders [Geofabrik's Berlin `osm.pbf`](https://download.geofabrik.de/europe/germany/berlin.html)
-with a focus on **`area:highway` micromapping**: highway area polygons as outlines, surface details
-(asphalt, sett, paving_stones …) inherited from the corresponding highway **centerlines**, plus
-**footway/sidewalk** and **crossing** overlays (zebra / dash markings, width) and **kerb** nodes
-(raised / lowered / flush, tactile paving).
+**No data is bundled or built** — drag & drop a PBF at runtime and it renders. Works with any
+Geofabrik extract (Berlin, Bavaria, Netherlands, …) or your own `.osm.pbf`.
 
-## Quick start
+Live demo: https://svenpilz.github.io/vibe/
+
+## Usage
 
 ```bash
 npm install
-npm run data     # downloads berlin-latest.osm.pbf (~100 MB) + extracts data/map.jsonl
-npm run dev      # serves the app at http://localhost:5173
+npm run dev      # open the printed URL
 ```
 
-Then open the printed URL. Scroll to zoom, drag to pan, click any feature to inspect its tags.
+Then drag a `*-latest.osm.pbf` from [download.geofabrik.de](https://download.geofabrik.de/index.html)
+onto the page (or click the drop zone to pick a file). The file is parsed entirely in your
+browser — it is not uploaded anywhere. Progress is shown while parsing; when done, the view
+auto-fits to the loaded region.
 
-To re-download a fresh extract: `FORCE=1 npm run download`.
+Scroll to zoom, drag to pan, click any feature to inspect its tags.
 
-## Pipeline
+## Pipeline (all in-browser)
 
 ```
-berlin-latest.osm.pbf
-  └── src/osm-pbf.ts        streaming PBF parser (blob → primitiveblock → dense nodes/ways/relations)
-       ├── scripts/download.ts    fetches the Geofabrik extract with Node fetch
-       └── scripts/extract.ts     filters & assembles features → data/map.jsonl (+ .gz)
+your .osm.pbf (drag & drop)
+  └── src/osm-pbf.ts    streaming PBF parser (blob → primitiveblock → dense nodes/ways/relations)
+       └── src/extract.ts  filters & assembles features
             ├── areas        area:highway closed ways + multipolygon relations (with holes)
-            ├── centerlines  highway ways with surface=* / width=* (used for surface inheritance)
+            ├── centerlines  highway ways with surface=* / width=*
             ├── footways     highway=footway / footway=sidewalk lines (surface, width)
             ├── crossings    footway=crossing (crossing=*, crossing:markings=*, width)
-            └── kerbs        barrier=kerb nodes (kerb=raised/lowered/flush, tactile_paving)
+            └── kerbs        barrier=kerb nodes AND ways (kerb=raised/lowered/flush, tactile_paving)
 ```
+
+Everything runs in a **web worker** (`src/worker.ts`): the main thread stays responsive, and
+the parsed features are transferred back as plain arrays. The zlib-compressed PBF blobs are
+inflated with the web-standard `DecompressionStream`.
 
 **Surface inheritance**: when an `area:highway` polygon has no `surface` tag but a highway
 centerline with `surface=*` runs through it (midpoint point-in-polygon test against outer
-rings minus holes), the centerline's surface is copied onto the area (~2,300 areas enriched in
-the current Berlin extract).
+rings minus holes), the centerline's surface is copied onto the area (~2,300 areas enriched
+in the current Berlin extract).
 
-### Extract stats (berlin-latest, 2026-10)
+### Berlin extract stats (berlin-latest, 2026-10)
 
 | feature     | count  |
 |-------------|--------|
@@ -47,60 +55,41 @@ the current Berlin extract).
 | centerlines | 135,320 |
 | footways    | 171,256 |
 | crossings   | 41,504 |
-| kerbs       | 50,016 |
-
-Coordinates are quantized to 1e-7 degree units (~1 cm) and stored as integer pairs; the whole
-dataset is ~107 MB JSONL, served gzipped (~21 MB).
+| kerbs       | 50,016 nodes + 24,028 ways |
 
 ## Rendering
 
 - Web Mercator projection on a `<canvas>` (no map library, no tiles)
 - grid spatial index per layer; only visible features are drawn
-- **areas** filled by surface color (see legend), outlines at high zoom, holes via even-odd fill
+- **areas** filled by surface color (see legend); same-color edge stroke closes antialiasing
+  seams so adjacent polygons read as one continuous surface
 - **centerlines** stroked in their surface color at `width` meters
 - **footways** light lines scaled to tagged width
-- **crossings**: `crossing:markings=zebra` renders perpendicular white bars, `dashes`/`dots` render
-  dashed/dotted white lines over the crossing band
-- **kerbs**: colored dots — red raised, teal lowered, purple flush, yellow = tactile_paving=yes
+- **crossings**: `crossing:markings=zebra` renders perpendicular white bars, `dashes`/`dots`
+  render dashed/dotted white lines over the crossing band
+- **kerbs**: colored dots (nodes) and lines (ways) — red raised, teal lowered, purple flush,
+  yellow = tactile_paving=yes
 - click → nearest-feature pick (point-in-polygon for areas, segment distance for lines) and a
   tag inspector panel
 
-## Static deployment
+## Deployment
 
-`npm run build` produces a fully self-contained static site in `dist/`:
+`npm run build` produces a fully self-contained static site in `dist/` (no data):
 
 ```
 dist/
 ├── index.html
-├── assets/index-*.js
-└── data/map.jsonl.gz     (the whole map dataset, ~21 MB)
+└── assets/index-*.js + worker-*.js
 ```
 
-Deploy it to any static host — no server-side code required:
-
-```bash
-npm run data && npm run build
-npx serve dist                # or: python3 -m http.server -d dist
-# or drop the dist/ folder onto GitHub Pages / Netlify / nginx
-```
-
-The loader resolves its data relative to `document.baseURI`, so the site works under any
-base path, and it handles both serving modes: hosts that transparently decode `.gz`
-(`Content-Encoding: gzip`) and hosts that serve it as a plain file (client-side
-`DecompressionStream` fallback, then `map.jsonl` as last resort).
-
-GitHub Pages deployment is automated via `.github/workflows/pages.yml` (downloads the PBF,
-extracts, builds, and publishes on every push to `main`). Enable it once in
-**Settings → Pages → Source: GitHub Actions**.
+Deploy to any static host — GitHub Pages workflow included (`.github/workflows/pages.yml`,
+just `npm install && npm run build`, no PBF download in CI).
 
 ## Scripts
 
 | command | description |
 |---|---|
-| `npm run download` | fetch berlin-latest.osm.pbf into `data/` |
-| `npm run extract`  | parse PBF → `data/map.jsonl` (use `PBF=path` to override input) |
-| `npm run data`      | download + extract |
-| `npm run dev`       | vite dev server (serves `data/` too) |
+| `npm run dev`       | vite dev server |
 | `npm run build`     | typecheck + production build to `dist/` |
 | `npm test`          | PBF parser round-trip tests against a synthetic fixture |
 | `npm run make-fixture` | regenerate `tests/fixtures/synthetic.osm.pbf` |
@@ -113,7 +102,8 @@ the parser decodes ids, delta-encoded refs, string-table tags, roles, and coordi
 
 ## Notes
 
-- `npm run extract` needs ~4.6 GB heap for the Berlin extract (`NODE_OPTIONS=--max-old-space-size=4600`).
+- Large extracts (100 MB+) parse in a few seconds in the worker; a whole-country file may
+  take longer and use significant memory (all nodes are retained in typed-array stores).
 - Crossing markings become visually distinct at high zoom (a 3 m crossing needs ~1.1e6 px/deg
   to span 30 px — normal wheel zoom reaches this).
-- Data © OpenStreetMap contributors, ODbL 1.0 (via Geofabrik).
+- Data © OpenStreetMap contributors, ODbL 1.0.
