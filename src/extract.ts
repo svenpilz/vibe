@@ -121,8 +121,7 @@ function distToSegQ2(px: number, py: number, a: number[], b: number[]): number {
  * nodes with the area ring; their vertices lie exactly on the boundary,
  * where the strict test is ambiguous.
  */
-function pointInAreaTolQ(pt: number[], area: AreaFeature, tolQ: number): boolean {
-  if (pointInAreaQ(pt, area)) return true;
+function pointOnAreaBoundaryQ(pt: number[], area: AreaFeature, tolQ: number): boolean {
   const tol2 = tolQ * tolQ;
   const onRing = (ring: number[][]): boolean => {
     for (let i = 1; i < ring.length; i++) {
@@ -134,6 +133,26 @@ function pointInAreaTolQ(pt: number[], area: AreaFeature, tolQ: number): boolean
     if (onRing(ring)) return true;
   }
   return false;
+}
+
+/**
+ * Whether a centerline corresponds to an area: either some vertex lies
+ * strictly inside, or at least two vertices lie on the boundary (the way
+ * runs along the area's edge). A single boundary vertex with nothing
+ * inside is a corner clip, not correspondence — and a boundary vertex is
+ * not "inside" for the adjacent area either.
+ */
+function centerlineInAreaTolQ(cl: LineFeature, area: AreaFeature, tolQ: number): boolean {
+  let inside = 0;
+  let onBoundary = 0;
+  for (const pt of cl.coords) {
+    // boundary first: a vertex exactly on the ring must never count as
+    // inside (the strict test is ambiguous there) — also for the adjacent
+    // area, which shares this boundary
+    if (pointOnAreaBoundaryQ(pt, area, tolQ)) { onBoundary++; continue; }
+    if (pointInAreaQ(pt, area)) inside++;
+  }
+  return inside > 0 || onBoundary >= 2;
 }
 
 function bboxOverlap(
@@ -509,11 +528,7 @@ export function extractFeatures(
       if (area.surface) continue;
       if (!highwayTypesCompatible(cl.highway, area.highway)) continue;
       if (!bboxOverlap(area.bbox, cl.bbox)) continue;
-      let allInside = true;
-      for (const pt of cl.coords) {
-        if (!pointInAreaTolQ(pt, area, 10)) { allInside = false; break; }
-      }
-      if (allInside) {
+      if (centerlineInAreaTolQ(cl, area, 10)) {
         area.surface = cl.surface;
         area.surfaceColour = area.surfaceColour ?? cl.surfaceColour;
         inherited++;
