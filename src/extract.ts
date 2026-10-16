@@ -277,16 +277,32 @@ export function extractFeatures(
   }
 
   onProgress?.(50, "collecting kerbs…");
+
+  // node -> ways membership (needed to inherit layers for unlayered points)
+  const nodeWayCount = new Map<number, number>();
+  const nodeWayLayer = new Map<number, number>();
+  for (const way of data.ways.values()) {
+    const wl = parseLayer(way.tags["layer"]);
+    for (const ref of way.refs) {
+      nodeWayCount.set(ref, (nodeWayCount.get(ref) ?? 0) + 1);
+      nodeWayLayer.set(ref, wl);
+    }
+  }
+
   for (const [id, tags] of data.nodeTags) {
     if (tags["barrier"] === "kerb" || tags["kerb"] !== undefined) {
       const c = data.nodeCoords.get(id);
       if (!c) continue;
+      let layer = parseLayer(tags["layer"]);
+      if (tags["layer"] === undefined && nodeWayCount.get(id) === 1) {
+        layer = nodeWayLayer.get(id) ?? 0;
+      }
       kerbs.push({
         type: "kerb",
         id: `n${id}`,
         kerb: tags["kerb"] ?? tags["barrier"],
         tactilePaving: tags["tactile_paving"],
-        layer: parseLayer(tags["layer"]),
+        layer,
         lat: Math.round(c.lat * 1e7),
         lon: Math.round(c.lon * 1e7),
       });
