@@ -215,19 +215,29 @@ function rand(seed: number): number {
 }
 
 /** stone tile pattern in a greyish tone; null for plain surfaces */
+/** base green tone per green kind: scrub darker than grass/garden */
+function greenBase(kind: string): [number, number, number] {
+  if (kind === "scrub") return [73, 94, 55];
+  return [93, 122, 68]; // #5d7a44
+}
+
+function greenColor(kind: string): string {
+  const [r, g, b] = greenBase(kind);
+  return `rgb(${r},${g},${b})`;
+}
+
 /**
- * Grass texture: mottled patches of varying greens over a base tone, so
- * large lawns don't read as one flat color. Patch size ~1 m; deterministic
- * per tile cell.
+ * Grass-like texture: mottled patches of varying greens over a base tone,
+ * so large areas don't read as one flat color. Deterministic per tile cell.
  */
-function grassPatternTile(): CanvasPattern | null {
+function grassPatternTile(kind: string): CanvasPattern | null {
   // constant screen-space patch size (see stone pattern)
   const cell = 6;
   const tile = document.createElement("canvas");
   tile.width = cell * 2;
   tile.height = cell * 2;
   const tctx = tile.getContext("2d")!;
-  const base = [93, 122, 68]; // #5d7a44
+  const base = greenBase(kind);
   tctx.fillStyle = `rgb(${base[0]},${base[1]},${base[2]})`;
   tctx.fillRect(0, 0, tile.width, tile.height);
   // 2x2 patch cells, each seeded: mix of lighter/darker greens
@@ -354,13 +364,13 @@ function stonePattern(surface: string | undefined): CanvasPattern | null {
   return anchorPattern(pat, cell * 2, cell * 2);
 }
 
-/** grass texture at the current zoom, cached per scale */
-function grassPattern(): CanvasPattern | null {
+/** grass-like texture at the current zoom, cached per kind */
+function grassPattern(kind: string): CanvasPattern | null {
   if (zoomLevel() < PATTERN_ZOOM) return null;
-  const key = "grass";
+  const key = `green:${kind}`;
   const cell = 6;
   if (patternCache.has(key)) return anchorPattern(patternCache.get(key)!, cell * 2, cell * 2);
-  const pat = grassPatternTile();
+  const pat = grassPatternTile(kind);
   patternCache.set(key, pat);
   return anchorPattern(pat, cell * 2, cell * 2);
 }
@@ -402,10 +412,12 @@ function draw() {
     const onLayer = (f: { layer?: number; level?: number }) =>
       (f.layer ?? 0) === layer && layerVisible(f);
 
-    // --- landuse=grass (background fill, mottled texture) ---
-    ctx.fillStyle = grassPattern() ?? "#5d7a44";
+    // --- green areas: landuse=grass / leisure=garden (same look),
+    //     natural=scrub (darker) — mottled texture from zoom 25
     for (const g of gs) {
       if (!onLayer(g)) continue;
+      const fill = grassPattern(g.kind) ?? greenColor(g.kind);
+      ctx.fillStyle = fill;
       ctx.beginPath();
       for (const ring of g.outer) drawRing(ring, true);
       for (const hole of g.holes) drawRing(hole, true);
@@ -1082,7 +1094,8 @@ function showInfo(f: AreaFeature | BuildingFeature | GrassFeature | LineFeature 
   push("layer", feature.layer);
   push("level", feature.level);
   if (f.type === "grass") {
-    rows.push(["feature", `landuse=grass (${f.id})`]);
+    rows.push(["feature", `green area (${f.id})`]);
+    push("kind", f.kind);
     return;
   }
   if (f.type === "building") {
@@ -1259,7 +1272,7 @@ function buildLayerPanel() {
   const defs: { key: keyof typeof layers; label: string; swatch: string }[] = [
     { key: "areas", label: "highway areas (surface fill)", swatch: "#6d6055" },
     { key: "buildings", label: "building outlines", swatch: "#8a8a94" },
-    { key: "grass", label: "landuse grass", swatch: "#5d7a44" },
+    { key: "grass", label: "grass / garden / scrub", swatch: "#5d7a44" },
     { key: "centerlines", label: "centerlines (surface)", swatch: "#7a6a52" },
     { key: "laneMarkings", label: "lane markings", swatch: "#e8e8e8" },
     { key: "footways", label: "footways / sidewalks", swatch: "#cfcfd6" },

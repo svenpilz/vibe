@@ -307,13 +307,18 @@ export function extractFeatures(
       continue;
     }
 
-    if (tags["landuse"] === "grass" && isClosed(way)) {
+    const greenKind = tags["landuse"] === "grass" ? "grass"
+      : tags["natural"] === "scrub" ? "scrub"
+      : tags["leisure"] === "garden" ? "garden"
+      : undefined;
+    if (greenKind && isClosed(way)) {
       const coords = wayCoords(way);
       if (coords) {
         const qc = q(coords);
         grass.push({
           type: "grass",
           id: `w${way.id}`,
+          kind: greenKind,
           layer: parseLayer(tags["layer"]),
           level: parseLevel(tags["level"]),
           outer: [qc],
@@ -429,7 +434,11 @@ export function extractFeatures(
     const tags = rel.tags;
     const areaHighway = tags["area:highway"];
     const buildingTag = tags["building"];
-    const grassTag = tags["landuse"] === "grass";
+    const grassTag = tags["landuse"] === "grass" || tags["natural"] === "scrub" || tags["leisure"] === "garden";
+    const greenKind = tags["landuse"] === "grass" ? "grass"
+      : tags["natural"] === "scrub" ? "scrub"
+      : tags["leisure"] === "garden" ? "garden"
+      : "grass";
     if ((!areaHighway && !buildingTag && !grassTag) || tags["type"] !== "multipolygon") continue;
 
     const outerRings: number[][][] = [];
@@ -454,6 +463,7 @@ export function extractFeatures(
       grass.push({
         type: "grass",
         id: `r${rel.id}`,
+        kind: greenKind,
         layer: parseLayer(tags["layer"]),
         level: parseLevel(tags["level"]),
         outer: outerRings,

@@ -80,6 +80,8 @@ export interface BuildingFeature {
 export interface GrassFeature {
   type: "grass";
   id: string;
+  /** landuse/natural/leisure key of the source (grass, scrub, garden) */
+  kind: string;
   /** OSM layer=* tag (default 0) */
   layer: number;
   /** OSM level=* tag (undefined when absent) */
