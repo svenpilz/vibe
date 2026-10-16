@@ -54,10 +54,23 @@ const LOD: Record<keyof typeof layers, number> = {
   kerbs: 20,
 };
 
+const MAJOR_ROADS = new Set([
+  "motorway", "trunk", "primary", "secondary",
+  "motorway_link", "trunk_link", "primary_link", "secondary_link",
+]);
+
 function lodVisible(key: keyof typeof layers): boolean {
   if (!layers[key]) return false;
   if (LOD[key] === 0) return true;
   return zoomLevel() >= LOD[key];
+}
+
+/** below zoom 14 only major-road highway areas render */
+function areaLodVisible(area: AreaFeature): boolean {
+  if (!lodVisible("areas")) return false;
+  const z = zoomLevel();
+  if (z >= 14) return true;
+  return MAJOR_ROADS.has(area.highway);
 }
 
 /** zoom level as shown in the status bar (slippy-map style) */
@@ -212,7 +225,7 @@ function draw() {
   if (lodVisible("areas") && areaIndex) {
     if (selectedLayer === null) visibleAreas.sort((a, b) => layerSortKey(a) - layerSortKey(b));
     for (const area of visibleAreas) {
-      if (!layerVisible(area)) continue;
+      if (!areaLodVisible(area) || !layerVisible(area)) continue;
       ctx.fillStyle = area.surface || area.surfaceColour ? featureColor(area.surface, area.surfaceColour) : "#4a4a50";
       ctx.beginPath();
       for (const ring of area.outer) drawRing(ring, true);
@@ -560,7 +573,7 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
   // areas: point-in-polygon
   if (lodVisible("areas") && areaIndex) {
     const areaHits = queryIndex(areaIndex, [lonQ, latQ, lonQ, latQ])
-      .filter((a) => layerVisible(a));
+      .filter((a) => areaLodVisible(a) && layerVisible(a));
     // bird's eye: prefer the locally highest layer at the click point
     if (selectedLayer === null && areaHits.length > 1) {
       areaHits.sort((a, b) => layerSortKey(b) - layerSortKey(a));
