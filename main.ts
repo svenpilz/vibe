@@ -393,6 +393,15 @@ function drawBoundaryDashes(cr: LineFeature, widthM: number, color: string) {
     }
   }
 
+  // arc length the markings cover: the full way, or the stretch between the
+  // kerb lines it crosses (kerbTrimStart/End as fractions along the way)
+  let total = 0;
+  for (let i = 1; i < pts.length; i++) total += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+  const t0 = cr.kerbTrimStart ?? 0;
+  const t1 = cr.kerbTrimEnd ?? 1;
+  const s0 = t0 * total;
+  const s1 = t1 * total;
+
   for (const side of [-1, 1] as const) {
     // offset boundary polyline (left / right edge of the footway)
     const off: [number, number][] = [];
@@ -412,53 +421,45 @@ function drawBoundaryDashes(cr: LineFeature, widthM: number, color: string) {
 
     // cumulative arc length
     const cum: number[] = [0];
-    let total = 0;
+    let totalOff = 0;
     for (let i = 1; i < off.length; i++) {
-      total += Math.hypot(off[i][0] - off[i - 1][0], off[i][1] - off[i - 1][1]);
-      cum.push(total);
+      totalOff += Math.hypot(off[i][0] - off[i - 1][0], off[i][1] - off[i - 1][1]);
+      cum.push(totalOff);
     }
-    if (total === 0) continue;
+    if (totalOff === 0) continue;
 
-    // dash start distances, phased so the markings are flush with a kerb
-    // line the crossing connects to
+    // dash start distances within [s0, s1]: the pattern is distributed so it
+    // begins and ends flush with a full dash (no marking spills past a kerb)
+    const span = (s1 - s0) * (totalOff / (total || 1));
     const period = dash + gap;
     const starts: number[] = [];
-    if (cr.kerbStart && cr.kerbEnd) {
-      // both ends on kerbs: center the pattern so both ends land on dashes
-      let n = Math.max(1, Math.floor((total + gap) / period));
-      while (n > 1 && n * dash + (n - 1) * gap > total) n--;
-      const slack = total - (n * dash + (n - 1) * gap);
-      for (let i = 0; i < n; i++) starts.push(slack / 2 + i * period);
-    } else {
-      const fromStart = cr.kerbStart === true;
-      let d = fromStart ? 0 : total - dash;
-      while (d >= -1e-6 && starts.length < 10000) {
-        starts.push(Math.max(0, d));
-        d += fromStart ? period : -period;
-      }
-      if (!fromStart) starts.reverse();
+    if (span > 0) {
+      let n = Math.max(1, Math.round((span + gap) / period));
+      while (n > 1 && n * dash + (n - 1) * gap > span) n--;
+      const slack = span - (n * dash + (n - 1) * gap);
+      for (let i = 0; i < n; i++) starts.push(s0 * (totalOff / (total || 1)) + slack / 2 + i * period);
     }
 
     // stroke each dash along the offset polyline
     for (let si = 0; si < starts.length; si++) {
-      const s0 = starts[si];
-      const s1 = s0 + dash;
-      if (s0 >= total) break;
+      const d0 = starts[si];
+      const d1 = d0 + dash;
+      if (d0 >= totalOff) break;
       ctx.beginPath();
       let placed = false;
       for (let i = 1; i < off.length; i++) {
-        if (cum[i] < s0) continue;
+        if (cum[i] < d0) continue;
         const segLen = cum[i] - cum[i - 1];
-        const t0 = segLen === 0 ? 0 : Math.max(0, (s0 - cum[i - 1]) / segLen);
-        const t1 = segLen === 0 ? 0 : Math.min(1, (s1 - cum[i - 1]) / segLen);
-        if (t1 <= t0) continue;
-        const x0 = off[i - 1][0] + (off[i][0] - off[i - 1][0]) * t0;
-        const y0 = off[i - 1][1] + (off[i][1] - off[i - 1][1]) * t0;
-        const x1 = off[i - 1][0] + (off[i][0] - off[i - 1][0]) * t1;
-        const y1 = off[i - 1][1] + (off[i][1] - off[i - 1][1]) * t1;
+        const a0 = segLen === 0 ? 0 : Math.max(0, (d0 - cum[i - 1]) / segLen);
+        const a1 = segLen === 0 ? 0 : Math.min(1, (d1 - cum[i - 1]) / segLen);
+        if (a1 <= a0) continue;
+        const x0 = off[i - 1][0] + (off[i][0] - off[i - 1][0]) * a0;
+        const y0 = off[i - 1][1] + (off[i][1] - off[i - 1][1]) * a0;
+        const x1 = off[i - 1][0] + (off[i][0] - off[i - 1][0]) * a1;
+        const y1 = off[i - 1][1] + (off[i][1] - off[i - 1][1]) * a1;
         if (!placed) { ctx.moveTo(x0, y0); placed = true; }
         ctx.lineTo(x1, y1);
-        if (cum[i] >= s1) break;
+        if (cum[i] >= d1) break;
       }
       if (placed) ctx.stroke();
     }

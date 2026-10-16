@@ -39,10 +39,10 @@ export interface LineFeature {
   layer: number;
   /** OSM level=* tag (undefined when absent) */
   level?: number;
-  /** first node connects to a kerb way (markings flush with the kerb) */
-  kerbStart?: boolean;
-  /** last node connects to a kerb way (markings flush with the kerb) */
-  kerbEnd?: boolean;
+  /** fraction along the way where markings start (kerb line crossing) */
+  kerbTrimStart?: number;
+  /** fraction along the way where markings end (kerb line crossing) */
+  kerbTrimEnd?: number;
   coords: Q[][];
   bbox: [number, number, number, number];
 }

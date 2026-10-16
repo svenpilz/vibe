@@ -47,6 +47,19 @@ function bboxOfQ(coords: number[][]): [number, number, number, number] {
   return [minX, minY, maxX, maxY];
 }
 
+/** parameter t (0..1) along segment a0->a1 where it crosses b0->b1, or null */
+function segIntersection(a0: number[], a1: number[], b0: number[], b1: number[]): number | null {
+  const d1x = a1[0] - a0[0], d1y = a1[1] - a0[1];
+  const d2x = b1[0] - b0[0], d2y = b1[1] - b0[1];
+  const den = d1x * d2y - d1y * d2x;
+  if (den === 0) return null;
+  const sx = b0[0] - a0[0], sy = b0[1] - a0[1];
+  const t = (sx * d2y - sy * d2x) / den;
+  const u = (sx * d1y - sy * d1x) / den;
+  if (t < 0 || t > 1 || u < 0 || u > 1) return null;
+  return t;
+}
+
 function pointInRingQ(pt: number[], ring: number[][]): boolean {
   let inside = false;
   const x = pt[0], y = pt[1];
@@ -142,16 +155,6 @@ export function extractFeatures(
 
   const isClosed = (way: OSMWay): boolean =>
     way.refs.length > 3 && way.refs[0] === way.refs[way.refs.length - 1];
-
-  // nodes that belong to a kerb way: used to detect crossings that end at a
-  // kerb line, so their markings can be drawn flush with it
-  const kerbNodes = new Set<number>();
-  for (const way of data.ways.values()) {
-    const t = way.tags;
-    if (t["barrier"] === "kerb" || t["kerb"] !== undefined) {
-      for (const ref of way.refs) kerbNodes.add(ref);
-    }
-  }
 
   onProgress?.(0, "classifying ways…");
   for (const way of data.ways.values()) {
@@ -257,8 +260,6 @@ export function extractFeatures(
           name: tags["name"],
           layer: parseLayer(tags["layer"]),
       level: parseLevel(tags["level"]),
-          kerbStart: kerbNodes.has(way.refs[0]),
-          kerbEnd: kerbNodes.has(way.refs[way.refs.length - 1]),
           coords: qc,
           bbox: bboxOfQ(qc),
         });
@@ -453,6 +454,37 @@ export function extractFeatures(
   centerlines.length = 0;
   for (let i = 0; i < keptCenterlines.length; i++) centerlines[i] = keptCenterlines[i];
   void droppedCenterlines;
+
+  // trim crossing markings to the stretch between kerb lines: a footway
+  // crossing usually continues past the kerb onto the sidewalk; its markings
+  // should start and end flush where the kerb ways cross it.
+  onProgress?.(88, "aligning crossing markings with kerbs…");
+  for (const cr of crossings) {
+    const cum: number[] = [0];
+    let len = 0;
+    for (let i = 1; i < cr.coords.length; i++) {
+      len += Math.hypot(cr.coords[i][0] - cr.coords[i - 1][0], cr.coords[i][1] - cr.coords[i - 1][1]);
+      cum.push(len);
+    }
+    if (len === 0) continue;
+    const hits: number[] = [];
+    for (const kw of kerbWays) {
+      if (!bboxOverlap(kw.bbox, cr.bbox)) continue;
+      for (let i = 1; i < cr.coords.length; i++) {
+        for (let j = 1; j < kw.coords.length; j++) {
+          const t = segIntersection(
+            cr.coords[i - 1], cr.coords[i], kw.coords[j - 1], kw.coords[j]
+          );
+          if (t !== null) hits.push((cum[i - 1] + t * (cum[i] - cum[i - 1])) / len);
+        }
+      }
+    }
+    if (hits.length === 0) continue;
+    const start = Math.min(...hits);
+    const end = Math.max(...hits);
+    if (start > 0.02) cr.kerbTrimStart = Math.min(start, 0.5);
+    if (end < 0.98) cr.kerbTrimEnd = Math.max(end, 0.5);
+  }
 
   // collect all layer values
   const layerSet = new Set<number>();
