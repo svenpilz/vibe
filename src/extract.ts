@@ -57,8 +57,10 @@ function rayExitInArea(pt: number[], d: number[], area: AreaFeature, maxRay: num
       if (best === null || t < best) best = t;
     }
   };
-  // coarse scan then refine
-  const step = 2000;
+  // coarse scan then refine; the step adapts to the ray length so small
+  // areas (diagonal below the previous fixed step) are still scanned
+  const steps = 40;
+  const step = Math.max(1, maxRay / steps);
   let prevInside = true;
   for (let t = step; t <= maxRay; t += step) {
     const p = [pt[0] + d[0] * t, pt[1] + d[1] * t];
@@ -575,6 +577,10 @@ export function extractFeatures(
     const matching: AreaFeature[] = [];
     for (const area of candidates) {
       if (area.junction) continue;
+      // only areas of the same highway type: a centerline that clips an
+      // unrelated, differently-typed area (e.g. a tertiary road passing
+      // through a small secondary loop) must not infer its width from it
+      if (!highwayTypesCompatible(cl.highway, area.highway)) continue;
       if (!bboxOverlap(area.bbox, cl.bbox)) continue;
       if (!pointOnAreaBoundaryQ(mid, area, 10) && !pointInAreaQ(mid, area)) continue;
       matching.push(area);
