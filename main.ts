@@ -837,6 +837,7 @@ function viewportValues(): { layers: Set<number>; levels: Set<number> } {
       for (const f of queryIndex(lineIndexes.footways, bbox)) add(f);
       for (const c of queryIndex(lineIndexes.crossings, bbox)) add(c);
     }
+    if (laneMarkingIndex) for (const lm of queryIndex(laneMarkingIndex, bbox)) add(lm);
     if (kerbWayIndex) for (const k of queryIndex(kerbWayIndex, bbox)) add(k);
     if (kerbGrid) {
       for (const cell of cellsForBbox(bbox, 50000)) {

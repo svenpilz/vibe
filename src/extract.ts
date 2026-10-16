@@ -489,11 +489,17 @@ export function extractFeatures(
     const mid = [(cl.coords[i][0] + cl.coords[i - 1][0]) / 2, (cl.coords[i][1] + cl.coords[i - 1][1]) / 2];
     const segLen = Math.hypot(dxs, dys);
     if (segLen === 0) continue;
+    // prefer a same-layer containing area, fall back to any containing area
+    // (centerlines are often untagged while their area carries layer=*)
+    let chosen: AreaFeature | null = null;
     for (const area of candidates) {
       if (area.junction) continue;
-      if (area.layer !== cl.layer) continue;
       if (!bboxOverlap(area.bbox, cl.bbox)) continue;
       if (!pointInAreaQ(mid, area)) continue;
+      if (area.layer === cl.layer) { chosen = area; break; }
+      if (chosen === null || area.layer > chosen.layer) chosen = area;
+    }
+    for (const area of chosen ? [chosen] : []) {
       const dx = dxs, dy = dys;
       const len = segLen;
       if (len === 0) break;
@@ -517,6 +523,9 @@ export function extractFeatures(
       const fwd = cl.lanesFwd ?? (cl.oneway ? cl.lanes! : Math.ceil(cl.lanes! / 2));
       laneMarkings.push({
         ...cl,
+        // the marking lives on the area's layer (bird's-eye stacking, selector
+        // filtering); fall back to the centerline's layer when equal
+        layer: area.layer,
         laneW: widthM / cl.lanes!,
         laneLeftM: leftM,
         laneRightM: rightM,
