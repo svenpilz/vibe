@@ -199,6 +199,8 @@ function featureColor(surface: string | undefined, colour: string | undefined): 
     ctx.fillStyle = colour;
     if (ctx.fillStyle !== "#000000") return ctx.fillStyle as string;
   }
+  const key = surface ? normalizeSurfaceKey(surface) : "";
+  if (PATTERN_AVG[key]) return PATTERN_AVG[key];
   return surfaceColor(normalizeSurface(surface) ?? undefined);
 }
 
@@ -315,8 +317,15 @@ function normalizeSurfaceKey(surface: string): string {
 
 const patternCache = new Map<string, CanvasPattern | null>();
 
-/** patterns only render from zoom 25 — below that the flat color reads better */
+/** patterns only render from zoom 25 — below that the average pattern color reads better */
 const PATTERN_ZOOM = 25;
+
+/** average fill color of a patterned surface (matches the pattern tone) */
+const PATTERN_AVG: Record<string, string> = {
+  paving_stones: "#808080",
+  sett: "#6e6e6e",
+  cobblestone: "#67625d",
+};
 
 /** stone pattern for a surface at the current zoom, cached per surface+px */
 function stonePattern(surface: string | undefined): CanvasPattern | null {
