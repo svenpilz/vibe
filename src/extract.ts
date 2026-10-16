@@ -306,7 +306,7 @@ export function extractFeatures(
     }
 
     const landuseKind = tags["landuse"] === "residential" ? "residential"
-      : tags["landuse"] === "commercial" ? "commercial"
+      : tags["landuse"] === "commercial" || tags["landuse"] === "retail" ? "commercial"
       : undefined;
     if (landuseKind && isClosed(way)) {
       const coords = wayCoords(way);
