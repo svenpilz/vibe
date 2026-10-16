@@ -376,9 +376,10 @@ function drawBoundaryDashes(cr: LineFeature, widthM: number, color: string) {
   const halfW = (widthM * px) / 2;
   const lineW = Math.max(1, 0.1 * px);
   const offset = Math.max(0, halfW - lineW / 2);
+  const dash = Math.max(4, 0.5 * px);
+  const gap = Math.max(3, 0.35 * px);
   ctx.strokeStyle = color;
   ctx.lineWidth = lineW;
-  ctx.setLineDash([Math.max(4, 0.5 * px), Math.max(3, 0.35 * px)]);
   ctx.lineCap = "butt";
 
   const pts: [number, number][] = [];
@@ -393,7 +394,8 @@ function drawBoundaryDashes(cr: LineFeature, widthM: number, color: string) {
   }
 
   for (const side of [-1, 1] as const) {
-    ctx.beginPath();
+    // offset boundary polyline (left / right edge of the footway)
+    const off: [number, number][] = [];
     for (let i = 0; i < pts.length; i++) {
       let nx: number, ny: number;
       if (i === 0) {
@@ -405,12 +407,62 @@ function drawBoundaryDashes(cr: LineFeature, widthM: number, color: string) {
         const bl = Math.hypot(nx1 + nx2, ny1 + ny2);
         [nx, ny] = bl === 0 ? [nx1, ny1] : [(nx1 + nx2) / bl, (ny1 + ny2) / bl];
       }
-      const ox = pts[i][0] + nx * offset * side, oy = pts[i][1] + ny * offset * side;
-      if (i === 0) ctx.moveTo(ox, oy); else ctx.lineTo(ox, oy);
+      off.push([pts[i][0] + nx * offset * side, pts[i][1] + ny * offset * side]);
     }
-    ctx.stroke();
+
+    // cumulative arc length
+    const cum: number[] = [0];
+    let total = 0;
+    for (let i = 1; i < off.length; i++) {
+      total += Math.hypot(off[i][0] - off[i - 1][0], off[i][1] - off[i - 1][1]);
+      cum.push(total);
+    }
+    if (total === 0) continue;
+
+    // dash start distances, phased so the markings are flush with a kerb
+    // line the crossing connects to
+    const period = dash + gap;
+    const starts: number[] = [];
+    if (cr.kerbStart && cr.kerbEnd) {
+      // both ends on kerbs: center the pattern so both ends land on dashes
+      let n = Math.max(1, Math.floor((total + gap) / period));
+      while (n > 1 && n * dash + (n - 1) * gap > total) n--;
+      const slack = total - (n * dash + (n - 1) * gap);
+      for (let i = 0; i < n; i++) starts.push(slack / 2 + i * period);
+    } else {
+      const fromStart = cr.kerbStart === true;
+      let d = fromStart ? 0 : total - dash;
+      while (d >= -1e-6 && starts.length < 10000) {
+        starts.push(Math.max(0, d));
+        d += fromStart ? period : -period;
+      }
+      if (!fromStart) starts.reverse();
+    }
+
+    // stroke each dash along the offset polyline
+    for (let si = 0; si < starts.length; si++) {
+      const s0 = starts[si];
+      const s1 = s0 + dash;
+      if (s0 >= total) break;
+      ctx.beginPath();
+      let placed = false;
+      for (let i = 1; i < off.length; i++) {
+        if (cum[i] < s0) continue;
+        const segLen = cum[i] - cum[i - 1];
+        const t0 = segLen === 0 ? 0 : Math.max(0, (s0 - cum[i - 1]) / segLen);
+        const t1 = segLen === 0 ? 0 : Math.min(1, (s1 - cum[i - 1]) / segLen);
+        if (t1 <= t0) continue;
+        const x0 = off[i - 1][0] + (off[i][0] - off[i - 1][0]) * t0;
+        const y0 = off[i - 1][1] + (off[i][1] - off[i - 1][1]) * t0;
+        const x1 = off[i - 1][0] + (off[i][0] - off[i - 1][0]) * t1;
+        const y1 = off[i - 1][1] + (off[i][1] - off[i - 1][1]) * t1;
+        if (!placed) { ctx.moveTo(x0, y0); placed = true; }
+        ctx.lineTo(x1, y1);
+        if (cum[i] >= s1) break;
+      }
+      if (placed) ctx.stroke();
+    }
   }
-  ctx.setLineDash([]);
 }
 
 function cellsForBbox(bbox: [number, number, number, number], cell: number): number[] {

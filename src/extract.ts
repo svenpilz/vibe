@@ -143,6 +143,16 @@ export function extractFeatures(
   const isClosed = (way: OSMWay): boolean =>
     way.refs.length > 3 && way.refs[0] === way.refs[way.refs.length - 1];
 
+  // nodes that belong to a kerb way: used to detect crossings that end at a
+  // kerb line, so their markings can be drawn flush with it
+  const kerbNodes = new Set<number>();
+  for (const way of data.ways.values()) {
+    const t = way.tags;
+    if (t["barrier"] === "kerb" || t["kerb"] !== undefined) {
+      for (const ref of way.refs) kerbNodes.add(ref);
+    }
+  }
+
   onProgress?.(0, "classifying ways…");
   for (const way of data.ways.values()) {
     const tags = way.tags;
@@ -247,6 +257,8 @@ export function extractFeatures(
           name: tags["name"],
           layer: parseLayer(tags["layer"]),
       level: parseLevel(tags["level"]),
+          kerbStart: kerbNodes.has(way.refs[0]),
+          kerbEnd: kerbNodes.has(way.refs[way.refs.length - 1]),
           coords: qc,
           bbox: bboxOfQ(qc),
         });
