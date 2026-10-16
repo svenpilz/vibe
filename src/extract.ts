@@ -567,11 +567,25 @@ export function extractFeatures(
   const areaGrid3 = buildAreaIndex(areas);
   for (const cr of crossings) {
     const candidates = queryAreas(areaGrid3, cr.bbox);
-    const mid = cr.coords[Math.floor(cr.coords.length / 2)];
+    // midpoint of the middle segment (a vertex can sit exactly on an area
+    // boundary, where point-in-polygon is ambiguous)
+    const ci = Math.floor(cr.coords.length / 2);
+    const mid = [(cr.coords[ci][0] + cr.coords[ci - 1][0]) / 2,
+                 (cr.coords[ci][1] + cr.coords[ci - 1][1]) / 2];
+    // prefer a same-layer containing area, fall back to any containing area
+    // (crossings are often untagged while their area carries layer=*); the
+    // crossing adopts the area's layer so bird's-eye stacking paints it with
+    // its area instead of being occluded by it
+    let chosen: AreaFeature | null = null;
     for (const area of candidates) {
-      if (area.layer !== cr.layer) continue;
       if (!bboxOverlap(area.bbox, cr.bbox)) continue;
-      if (pointInAreaQ(mid, area)) { cr.areaId = area.id; break; }
+      if (!pointInAreaQ(mid, area)) continue;
+      if (area.layer === cr.layer) { chosen = area; break; }
+      if (chosen === null || area.layer > chosen.layer) chosen = area;
+    }
+    if (chosen) {
+      cr.areaId = chosen.id;
+      cr.layer = chosen.layer;
     }
   }
 

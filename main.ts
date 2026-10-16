@@ -247,6 +247,10 @@ function draw() {
       for (const ring of g.outer) drawRing(ring, true);
       for (const hole of g.holes) drawRing(hole, true);
       ctx.fill("evenodd");
+      ctx.lineWidth = Math.max(4, 0.3 * px);
+      ctx.lineJoin = "round";
+      ctx.strokeStyle = ctx.fillStyle as string;
+      ctx.stroke();
     }
 
     // --- highway areas (surface fill) ---
@@ -261,7 +265,11 @@ function draw() {
         }
       }
       ctx.fill("evenodd");
-      ctx.lineWidth = 4;
+      // same-color edge stroke: covers antialiased boundaries and cm-scale
+      // geometric gaps between neighboring polygons so areas read as one
+      // continuous surface — without letting lower layers shine through the
+      // seams at high zoom, the stroke scales with the ground resolution
+      ctx.lineWidth = Math.max(4, 0.3 * px);
       ctx.lineJoin = "round";
       ctx.strokeStyle = ctx.fillStyle as string;
       ctx.stroke();
