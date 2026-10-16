@@ -9,7 +9,7 @@ function check(name: string, cond: boolean, detail?: string) {
 
 const data = createOSMData();
 const parser = new OSMPBFParser(data);
-parser.parseBuffer(new Uint8Array(readFileSync("tests/fixtures/synthetic.osm.pbf")));
+await parser.parseBuffer(new Uint8Array(readFileSync("tests/fixtures/synthetic.osm.pbf")));
 
 console.log(`nodes:${data.nodeCoords.size} tagged:${data.nodeTags.size} ways:${data.ways.size} rels:${data.relations.length}`);
 
