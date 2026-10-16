@@ -513,8 +513,17 @@ function showInfo(f: AreaFeature | LineFeature | KerbFeature | KerbWayFeature | 
     push("name", f.name);
   }
 
+  const osmLink = (id: string): string | null => {
+    const m = /^([wnr])(\d+)$/.exec(id);
+    if (!m) return null;
+    const type = m[1] === "w" ? "way" : m[1] === "n" ? "node" : "relation";
+    return `https://www.openstreetmap.org/${type}/${m[2]}`;
+  };
+
+  const link = osmLink(f.id);
   infoEl.innerHTML = `<span class="close" onclick="this.parentElement.style.display='none'">✕</span>` +
-    rows.map(([k, v]) => `<div class="tag"><span class="k">${k}</span><span class="v">${escapeHtml(v)}</span></div>`).join("");
+    rows.map(([k, v]) => `<div class="tag"><span class="k">${k}</span><span class="v">${escapeHtml(v)}</span></div>`).join("") +
+    (link ? `<div class="tag"><span class="k">osm</span><span class="v"><a href="${link}" target="_blank" rel="noopener">${link}</a></span></div>` : "");
   infoEl.style.display = "block";
 }
 
