@@ -534,19 +534,35 @@ export function extractFeatures(
   const donors: LineFeature[] = [];
   for (const cl of centerlines) if (cl.surface) donors.push(cl);
   for (const fw of footways) if (fw.surface) donors.push(fw);
+  // several donors may match one area (a sidewalk centerline crossing it
+  // plus small footway branches merely clipping it): the LONGEST donor
+  // wins — it is the one actually running through the area
+  const best = new Map<AreaFeature, { len: number; surface: string; surfaceColour?: string }>();
+  const wayLength = (f: LineFeature): number => {
+    let len = 0;
+    for (let i = 1; i < f.coords.length; i++) {
+      len += Math.hypot(f.coords[i][0] - f.coords[i - 1][0], f.coords[i][1] - f.coords[i - 1][1]);
+    }
+    return len;
+  };
   for (const cl of donors) {
-    if (!cl.surface) continue;
+    const len = wayLength(cl);
     const candidates = queryAreas(areaGrid, cl.bbox);
     for (const area of candidates) {
       if (area.surface) continue;
       if (!highwayTypesCompatible(cl.highway, area.highway)) continue;
       if (!bboxOverlap(area.bbox, cl.bbox)) continue;
-      if (centerlineInAreaTolQ(cl, area, 10)) {
-        area.surface = cl.surface;
-        area.surfaceColour = area.surfaceColour ?? cl.surfaceColour;
-        inherited++;
+      if (!centerlineInAreaTolQ(cl, area, 10)) continue;
+      const prev = best.get(area);
+      if (prev === undefined || len > prev.len) {
+        best.set(area, { len, surface: cl.surface!, surfaceColour: cl.surfaceColour });
       }
     }
+  }
+  for (const [area, b] of best) {
+    area.surface = b.surface;
+    area.surfaceColour = area.surfaceColour ?? b.surfaceColour;
+    inherited++;
   }
   void inherited;
 
