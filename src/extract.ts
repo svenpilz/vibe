@@ -112,6 +112,17 @@ function bboxOverlap(
   return a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
 }
 
+/** parking lane width in meters: any parking:lane value except no/none consumes road space */
+function parkingLaneWidth(kind: string | undefined, width: string | undefined): number | undefined {
+  if (kind === undefined) return undefined;
+  const k = kind.split(";")[0];
+  if (k === "no" || k === "none") return undefined;
+  const w = width !== undefined ? parseFloat(width) : NaN;
+  // common parking lane widths: parallel ~2.5 m, perpendicular ~5 m (car length)
+  const fallback = k === "perpendicular" || k === "diagonal" || k === "angled" ? 5 : 2.5;
+  return Number.isFinite(w) && w > 0 ? Math.min(w, 10) : fallback;
+}
+
 function parseLanes(v: string | undefined): number | undefined {
   if (v === undefined) return undefined;
   const n = parseInt(v, 10);
@@ -321,6 +332,10 @@ export function extractFeatures(
           surfaceColour: tags["surface:colour"],
           width: Number.isFinite(widthNum as number) ? widthNum : undefined,
           lanes: parseLanes(tags["lanes"]),
+          parkingLeftM: parkingLaneWidth(tags["parking:lane:left"], tags["parking:lane:left:width"])
+            ?? parkingLaneWidth(tags["parking:lane:both"], tags["parking:lane:both:width"]),
+          parkingRightM: parkingLaneWidth(tags["parking:lane:right"], tags["parking:lane:right:width"])
+            ?? parkingLaneWidth(tags["parking:lane:both"], tags["parking:lane:both:width"]),
           oneway: tags["oneway"] === "yes" || tags["oneway"] === "-1" || tags["junction"] === "roundabout" || tags["junction"] === "circular",
           lanesFwd: parseLanes(tags["lanes:forward"])
             ?? (parseLanes(tags["lanes:backward"]) !== undefined
@@ -517,7 +532,16 @@ export function extractFeatures(
         Math.hypot(dx2 * t * mPerLon, dy2 * t * mPerLat);
       const leftM = rayM(left, nx, ny);
       const rightM = rayM(right, -nx, -ny);
-      const widthM = leftM + rightM;
+      // parking lanes consume space on the road but don't count as regular
+      // lanes: subtract them virtually from the highway area before dividing
+      // the remaining width among the traffic lanes
+      const parkL = Math.min(cl.parkingLeftM ?? 0, leftM);
+      const parkR = Math.min(cl.parkingRightM ?? 0, rightM);
+      const driveM = leftM + rightM - parkL - parkR;
+      if (driveM <= 0) break;
+      // traffic-lane region, measured from the centerline
+      const driveLeftM = leftM - parkL;
+      const laneW = driveM / cl.lanes!;
       // lanes in the forward direction: explicit lanes:forward wins, else
       // oneway roads carry all lanes in one direction (no solid separator)
       const fwd = cl.lanesFwd ?? (cl.oneway ? cl.lanes! : Math.ceil(cl.lanes! / 2));
@@ -526,9 +550,9 @@ export function extractFeatures(
         // the marking lives on the area's layer (bird's-eye stacking, selector
         // filtering); fall back to the centerline's layer when equal
         layer: area.layer,
-        laneW: widthM / cl.lanes!,
-        laneLeftM: leftM,
-        laneRightM: rightM,
+        laneW,
+        laneLeftM: driveLeftM,
+        laneRightM: driveLeftM + driveM,
         lanesFwd: fwd,
         areaId: area.id,
       });

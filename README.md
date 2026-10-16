@@ -88,18 +88,26 @@ For a centerline with `lanes ≥ 2` that runs inside a non-junction highway area
    (coarse scan, then binary refinement). Each ray length is converted to meters
    (§1); the road width is `leftM + rightM`. This works even when the centerline is not
    the geometric center of the road.
-2. All lanes split the total width equally: `laneW = width / lanes`.
-3. Lane boundaries are drawn parallel to the centerline, laid out from the measured
-   left edge (lane 1) to the right edge (lane n), so markings stay inside the street
-   polygon even for off-center centerlines.
-4. Line style:
+2. **Parking lanes** (`parking:lane:left/right/both`, widths from the `:width` sub-tags;
+   defaults 2.5 m parallel / 5 m perpendicular) consume space on the road but do not
+   count as regular lanes: their width is subtracted virtually from the highway area on
+   the respective side before the remaining width is divided among the traffic lanes.
+   If nothing is left, no markings are drawn.
+3. All traffic lanes split the remaining width equally:
+   `laneW = (leftM + rightM − parking) / lanes`.
+4. Lane boundaries are drawn as continuous offset curves of the centerline, using
+   averaged vertex normals and **Chaikin corner-cutting** (two iterations), so the
+   markings flow smoothly around corners instead of breaking at each vertex. They are
+   laid out from the measured left traffic edge (lane 1) to the right edge (lane n),
+   so markings stay inside the street polygon even for off-center centerlines.
+5. Line style:
    - **Solid** only between opposite directions — the boundary between forward and
      backward lanes. Forward lanes = `lanes:forward` if tagged, else `lanes − lanes:backward`,
      else `ceil(lanes/2)` for bidirectional roads.
    - **Dashed** between lanes of the same direction.
    - **No solid line** on one-way roads (`oneway=yes`/`-1`, `junction=roundabout`/`circular`):
      all lanes run forward, so all boundaries are dashed.
-5. Markings are clipped to the containing highway area and are skipped for junction
+6. Markings are clipped to the containing highway area and are skipped for junction
    areas. Markings adopt the area's layer (bird's-eye stacking, selector filtering).
 
 ### 6. Crossing markings

@@ -55,6 +55,10 @@ export interface LineFeature {
   lanesFwd?: number;
   /** oneway=yes / -1 / roundabout: all lanes travel in one direction */
   oneway?: boolean;
+  /** parking lane width on the left side in meters (parking:lane:left) */
+  parkingLeftM?: number;
+  /** parking lane width on the right side in meters (parking:lane:right) */
+  parkingRightM?: number;
   coords: Q[][];
   bbox: [number, number, number, number];
 }

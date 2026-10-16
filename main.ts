@@ -516,44 +516,89 @@ function clipToArea(areaId: string | undefined): boolean {
  * the same direction are dashed. Clipped to the area so markings never
  * extend past the street outline.
  */
+/**
+ * Chaikin corner-cutting: rounds each corner into a smooth curve. Two
+ * iterations give a visually continuous line while staying close to the
+ * original geometry.
+ */
+function chaikin(pts: [number, number][], iterations = 2): [number, number][] {
+  let cur = pts;
+  for (let it = 0; it < iterations; it++) {
+    const out: [number, number][] = [cur[0]];
+    for (let i = 1; i < cur.length; i++) {
+      const a = cur[i - 1], b = cur[i];
+      out.push([a[0] * 0.75 + b[0] * 0.25, a[1] * 0.75 + b[1] * 0.25]);
+      out.push([a[0] * 0.25 + b[0] * 0.75, a[1] * 0.25 + b[1] * 0.75]);
+    }
+    out.push(cur[cur.length - 1]);
+    cur = out;
+  }
+  return cur;
+}
+
+/**
+ * Lane markings for a lane-bearing centerline. The road width is inferred
+ * from the containing highway area minus parking lanes; lanes split the
+ * remaining width equally. Each lane boundary is one continuous offset
+ * curve with averaged vertex normals and Chaikin smoothing, so markings
+ * flow smoothly around corners instead of breaking at each vertex.
+ * Border between opposite directions is solid; same-direction borders are
+ * dashed. Clipped to the area so markings never extend past the outline.
+ */
 function drawLaneMarkings(cl: LineFeature) {
   if (cl.lanes === undefined || cl.laneW === undefined || cl.lanes! < 2) return;
   const px = pxPerMeter();
   const lineW = Math.max(1, 0.12 * px);
   const fwd = cl.lanesFwd ?? Math.ceil(cl.lanes / 2);
   const total = cl.lanes;
-
   ctx.lineWidth = lineW;
-  ctx.lineCap = "butt";
+  ctx.lineCap = "round";
 
-  const px2 = cl.coords;
-  // the centerline may sit off the geometric center of the road: lane k=0
-  // starts at the left area edge (-laneLeftM) and lanes divide the full
-  // left+right width equally; the last lane ends at the right area edge
+  // centerline in screen coordinates
+  const base: [number, number][] = cl.coords.map((c) => [lonToX(c[0] / Q), latToY(c[1] / Q)]);
+  if (base.length < 2) return;
+
+  // averaged vertex normals for continuous offsets across corners
+  const normals: [number, number][] = [];
+  for (let i = 0; i < base.length; i++) {
+    let nx = 0, ny = 0;
+    if (i > 0) {
+      const dx = base[i][0] - base[i - 1][0], dy = base[i][1] - base[i - 1][1];
+      const l = Math.hypot(dx, dy);
+      if (l > 0) { nx += -dy / l; ny += dx / l; }
+    }
+    if (i < base.length - 1) {
+      const dx = base[i + 1][0] - base[i][0], dy = base[i + 1][1] - base[i][1];
+      const l = Math.hypot(dx, dy);
+      if (l > 0) { nx += -dy / l; ny += dx / l; }
+    }
+    const l = Math.hypot(nx, ny);
+    normals.push(l > 0 ? [nx / l, ny / l] : [0, 0]);
+  }
+
+  // traffic-lane region: from the left edge to the right edge of the road,
+  // parking lanes virtually subtracted (lane 1 starts at the left edge)
   const leftM = cl.laneLeftM ?? (total * cl.laneW!) / 2;
+
   for (let k = 1; k < total; k++) {
     // distance from the centerline, negative = left side
-    const off = -leftM + k * cl.laneW!;
-    const offPx = off * px;
+    const offPx = (-leftM + k * cl.laneW!) * px;
     // solid only between opposite directions: exists when some (but not
     // all) lanes run forward — a one-way road has no solid separator
     const solid = fwd > 0 && fwd < total && k === fwd;
+
+    // continuous offset curve through averaged normals, then smoothed
+    const offset: [number, number][] = base.map((p, i) => [
+      p[0] + normals[i][0] * offPx,
+      p[1] + normals[i][1] * offPx,
+    ]);
+    const smooth = chaikin(offset, 2);
+
     ctx.strokeStyle = "#e8e8e8";
     if (!solid) ctx.setLineDash([Math.max(3, 1.2 * px), Math.max(2, 1.0 * px)]);
-
     ctx.beginPath();
-    for (let i = 1; i < px2.length; i++) {
-      const [x0, y0] = px2[i - 1];
-      const [x1, y1] = px2[i];
-      const X0 = lonToX(x0 / Q), Y0 = latToY(y0 / Q);
-      const X1 = lonToX(x1 / Q), Y1 = latToY(y1 / Q);
-      const segLen = Math.hypot(X1 - X0, Y1 - Y0);
-      if (segLen === 0) continue;
-      const ux = (X1 - X0) / segLen, uy = (Y1 - Y0) / segLen;
-      const nx = -uy, ny = ux;
-      ctx.moveTo(X0 + nx * offPx, Y0 + ny * offPx);
-      ctx.lineTo(X1 + nx * offPx, Y1 + ny * offPx);
-    }
+    ctx.moveTo(smooth[0][0], smooth[0][1]);
+    for (let i = 1; i < smooth.length; i++) ctx.lineTo(smooth[i][0], smooth[i][1]);
     ctx.stroke();
     if (!solid) ctx.setLineDash([]);
   }
