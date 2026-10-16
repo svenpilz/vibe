@@ -1,4 +1,5 @@
-import { loadDataset, buildIndex, queryIndex, type Indexed } from "./src/loader";
+import { buildIndex, queryIndex, type Indexed } from "./src/loader";
+import type { ExtractResult } from "./src/extract";
 import type { AreaFeature, LineFeature, KerbFeature, KerbWayFeature, Dataset, Q } from "./src/features";
 import { surfaceColor, normalizeSurface } from "./src/features";
 
@@ -13,7 +14,7 @@ interface View {
   scale: number; // pixels per degree longitude
 }
 
-let view: View = { cx: 13.40, cy: 52.52, scale: 12000 };
+let view: View = { cx: 10.0, cy: 51.0, scale: 2000 };
 let dataset: Dataset | null = null;
 let areaIndex: Indexed<AreaFeature> | null = null;
 let lineIndexes: {
@@ -181,7 +182,6 @@ function draw() {
       const widthM = cr.width ?? 3;
       ctx.lineCap = "butt";
       if (stripe) {
-        // base
         ctx.strokeStyle = "#5a5a60";
         ctx.lineWidth = Math.max(2, widthM * px * 0.5);
         ctx.beginPath();
@@ -323,6 +323,7 @@ canvas.addEventListener("wheel", (e) => {
   statusEl.textContent = `zoom ${(Math.log2(view.scale / 1200) * 2 + 11).toFixed(1)} (scale ${Math.round(view.scale)})`;
 }, { passive: false });
 
+// click -> feature inspection
 canvas.addEventListener("click", (e) => {
   if (moved > 6 || !dataset) return;
   const rect = canvas.getBoundingClientRect();
@@ -478,7 +479,7 @@ function buildLayerPanel() {
     { key: "centerlines", label: "centerlines (surface)", swatch: "#7a6a52" },
     { key: "footways", label: "footways / sidewalks", swatch: "#cfcfd6" },
     { key: "crossings", label: "crossings (markings)", swatch: "#e8e8e8" },
-    { key: "kerbs", label: "kerbs (nodes + ways)", swatch: "#e86e6e" },
+    { key: "kerbs", label: "kerbs", swatch: "#e86e6e" },
   ];
   for (const d of defs) {
     const row = document.createElement("div");
@@ -539,39 +540,132 @@ function requestDraw() {
 
 window.addEventListener("resize", requestDraw);
 
-async function main() {
-  try {
-    dataset = await loadDataset((msg) => (statusEl.textContent = msg));
-    const t0 = performance.now();
-    areaIndex = buildIndex(dataset.areas);
-    lineIndexes = {
-      centerlines: buildIndex(dataset.centerlines),
-      footways: buildIndex(dataset.footways),
-      crossings: buildIndex(dataset.crossings),
-    };
-    kerbWayIndex = buildIndex(dataset.kerbWays);
-    kerbGrid = new Map();
-    for (const k of dataset.kerbs) {
-      const key = Math.floor(k.lon / 50000) * 100000 + Math.floor(k.lat / 50000);
-      let arr = kerbGrid.get(key);
-      if (!arr) kerbGrid.set(key, (arr = []));
-      arr.push(k);
-    }
-    buildLayerPanel();
-    requestDraw();
-    statusEl.textContent = `loaded ${(
-      dataset.areas.length + dataset.centerlines.length + dataset.footways.length +
-      dataset.crossings.length + dataset.kerbs.length + dataset.kerbWays.length
-    ).toLocaleString()} features in ${((performance.now() - t0) / 1000).toFixed(1)}s — zoom ${view.scale > 50000 ? "detailed" : "city"}`;
-  } catch (err) {
-    statusEl.textContent = `error: ${err instanceof Error ? err.message : err}`;
-  }
+function fitToBounds(bounds: [number, number, number, number]) {
+  const [minX, minY, maxX, maxY] = bounds;
+  if (!Number.isFinite(minX) || !Number.isFinite(minY)) return;
+  const cx = (minX + maxX) / 2 / Q;
+  const cy = (minY + maxY) / 2 / Q;
+  const w = canvas.clientWidth || window.innerWidth;
+  const h = canvas.clientHeight || window.innerHeight;
+  const fitW = w * 0.9 / Math.max((maxX - minX) / Q, 1e-9);
+  const fitH = h * 0.9 / Math.max(((maxY - minY) / Q) * Math.cos((cy * Math.PI) / 180), 1e-9);
+  view = {
+    cx,
+    cy,
+    scale: Math.max(500, Math.min(3_000_000, Math.min(fitW, fitH))),
+  };
+  requestDraw();
 }
+
+let currentWorker: Worker | null = null;
+
+function loadPbfFile(file: File) {
+  if (currentWorker) currentWorker.terminate();
+  const worker = new Worker(new URL("./src/worker.ts", import.meta.url), { type: "module" });
+  currentWorker = worker;
+
+  const dropzone = document.getElementById("dropzone")!;
+  const pbar = document.getElementById("progressbar")!;
+  const pfill = document.getElementById("pbrfill") as HTMLDivElement;
+  const plabel = document.getElementById("pbrlabel")!;
+  dropzone.style.display = "none";
+  pbar.style.display = "block";
+  document.getElementById("layers")!.style.display = "none";
+  statusEl.textContent = `loading ${file.name} (${(file.size / 1e6).toFixed(1)} MB)…`;
+
+  worker.onmessage = (e: MessageEvent) => {
+    const m = e.data;
+    if (m.type === "progress") {
+      pfill.style.width = `${Math.min(100, m.pct).toFixed(1)}%`;
+      plabel.textContent = `${m.phase} — ${Math.min(100, m.pct).toFixed(0)}% (${m.msg})`;
+      statusEl.textContent = `${m.phase}…`;
+    } else if (m.type === "done") {
+      ingestResult(m.result as ExtractResult, file.name);
+      worker.terminate();
+      currentWorker = null;
+      pbar.style.display = "none";
+      dropzone.style.display = "block";
+      document.getElementById("layers")!.style.display = "block";
+      document.getElementById("zoomhint")!.style.display = "block";
+      document.getElementById("legend")!.style.display = "block";
+    } else if (m.type === "error") {
+      statusEl.textContent = `error: ${m.message}`;
+      pbar.style.display = "none";
+      dropzone.style.display = "block";
+      worker.terminate();
+      currentWorker = null;
+    }
+  };
+
+  file.arrayBuffer().then((buf) => {
+    worker.postMessage({ type: "parse", buffer: buf, name: file.name }, [buf]);
+  });
+}
+
+function ingestResult(result: ExtractResult, name: string) {
+  const t0 = performance.now();
+  dataset = {
+    areas: result.areas,
+    centerlines: result.centerlines,
+    footways: result.footways,
+    crossings: result.crossings,
+    kerbs: result.kerbs,
+    kerbWays: result.kerbWays,
+  };
+  areaIndex = buildIndex(dataset.areas);
+  lineIndexes = {
+    centerlines: buildIndex(dataset.centerlines),
+    footways: buildIndex(dataset.footways),
+    crossings: buildIndex(dataset.crossings),
+  };
+  kerbWayIndex = buildIndex(dataset.kerbWays);
+  kerbGrid = new Map();
+  for (const k of dataset.kerbs) {
+    const key = Math.floor(k.lon / 50000) * 100000 + Math.floor(k.lat / 50000);
+    let arr = kerbGrid.get(key);
+    if (!arr) kerbGrid.set(key, (arr = []));
+    arr.push(k);
+  }
+  const total = dataset.areas.length + dataset.centerlines.length + dataset.footways.length +
+    dataset.crossings.length + dataset.kerbs.length + dataset.kerbWays.length;
+  if (total === 0) {
+    statusEl.textContent = `no micromapping features found in ${name} (try a region with area:highway mapping)`;
+    return;
+  }
+  buildLayerPanel();
+  document.getElementById("layers")!.innerHTML = "";
+  buildLayerPanel();
+  fitToBounds(result.bounds);
+  statusEl.textContent = `${name}: loaded ${total.toLocaleString()} features in ${((performance.now() - t0) / 1000).toFixed(1)}s — scroll to zoom, drag to pan`;
+}
+
+// ---- drag & drop wiring ----
+const dropzone = document.getElementById("dropzone")!;
+const fileInput = document.getElementById("fileinput") as HTMLInputElement;
+
+dropzone.addEventListener("click", () => fileInput.click());
+fileInput.addEventListener("change", () => {
+  const f = fileInput.files?.[0];
+  if (f) loadPbfFile(f);
+  fileInput.value = "";
+});
+
+window.addEventListener("dragover", (e) => {
+  e.preventDefault();
+  dropzone.classList.add("over");
+});
+window.addEventListener("dragleave", (e) => {
+  if (e.relatedTarget === null) dropzone.classList.remove("over");
+});
+window.addEventListener("drop", (e) => {
+  e.preventDefault();
+  dropzone.classList.remove("over");
+  const f = e.dataTransfer?.files?.[0];
+  if (f) loadPbfFile(f);
+});
 
 // expose view control for tests/tools
 (window as any).__setView = (cx: number, cy: number, scale: number) => {
   view = { cx, cy, scale };
   requestDraw();
 };
-
-main();
