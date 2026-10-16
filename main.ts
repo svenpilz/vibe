@@ -212,7 +212,8 @@ function draw() {
     for (const cr of crs) {
       if (!layerVisible(cr)) continue;
       const stripe = crossingStripeColor(cr.crossingMarkings);
-      const widthM = cr.width ?? 1.5;
+      const m = (cr.crossingMarkings ?? "").toLowerCase();
+      const widthM = cr.width ?? (m.includes("zebra") ? 3 : 1.5);
       ctx.lineCap = "butt";
       if (stripe) {
         ctx.strokeStyle = "#5a5a60";
@@ -221,7 +222,6 @@ function draw() {
         strokePolyline(cr.coords);
         ctx.stroke();
 
-        const m = (cr.crossingMarkings ?? "").toLowerCase();
         if (m.includes("zebra")) {
           drawZebra(cr, widthM, stripe);
         } else if (m.includes("dash")) {
