@@ -212,7 +212,7 @@ function draw() {
     for (const cr of crs) {
       if (!layerVisible(cr)) continue;
       const stripe = crossingStripeColor(cr.crossingMarkings);
-      const widthM = cr.width ?? 3;
+      const widthM = cr.width ?? 1.5;
       ctx.lineCap = "butt";
       if (stripe) {
         ctx.strokeStyle = "#5a5a60";
