@@ -332,10 +332,17 @@ const PATTERN_AVG: Record<string, string> = {
 };
 
 /** anchor a cached pattern to the map so it pans with the scene */
-function anchorPattern(pat: CanvasPattern | null): CanvasPattern | null {
+function anchorPattern(pat: CanvasPattern | null, tileW: number, tileH: number): CanvasPattern | null {
   if (!pat) return null;
+  // anchor to the map: use the screen position of the geographic origin
+  // MODULO one tile period. The absolute screen position can be a huge
+  // number far from the prime meridian, which overflows/invalidates the
+  // pattern transform; the modulo keeps the same registration.
   const m = new DOMMatrix();
-  m.translateSelf(lonToX(0), latToY(0));
+  const ox = lonToX(0), oy = latToY(0);
+  const tx = tileW > 0 ? ((ox % tileW) + tileW) % tileW : 0;
+  const ty = tileH > 0 ? ((oy % tileH) + tileH) % tileH : 0;
+  m.translateSelf(tx - tileW, ty - tileH);
   pat.setTransform(m);
   return pat;
 }
@@ -345,20 +352,29 @@ function stonePattern(surface: string | undefined): CanvasPattern | null {
   if (!surface) return null;
   if (zoomLevel() < PATTERN_ZOOM) return null;
   const key = `${normalizeSurfaceKey(surface)}@${pxPerMeter().toFixed(3)}`;
-  if (patternCache.has(key)) return anchorPattern(patternCache.get(key)!);
+  const px = pxPerMeter();
+  // tile size mirrors stonePatternTile: 2 cells of (stone + gap)
+  const isSett = normalizeSurfaceKey(surface) !== "paving_stones";
+  const stoneM = isSett ? 0.1 : 0.3;
+  const minPx = isSett ? 5 : 8;
+  const size = Math.min(Math.round(Math.max(stoneM * px, minPx)), 256);
+  const gap = Math.max(1, Math.round(size * 0.08));
+  const cell = size + gap;
+  if (patternCache.has(key)) return anchorPattern(patternCache.get(key)!, cell * 2, cell * 2);
   const pat = stonePatternTile(surface, pxPerMeter());
   patternCache.set(key, pat);
-  return anchorPattern(pat);
+  return anchorPattern(pat, cell * 2, cell * 2);
 }
 
 /** grass texture at the current zoom, cached per scale */
 function grassPattern(): CanvasPattern | null {
   if (zoomLevel() < PATTERN_ZOOM) return null;
   const key = `grass@${pxPerMeter().toFixed(3)}`;
-  if (patternCache.has(key)) return anchorPattern(patternCache.get(key)!);
+  const cell = Math.min(Math.round(Math.max(1.0 * pxPerMeter(), 6)), 128);
+  if (patternCache.has(key)) return anchorPattern(patternCache.get(key)!, cell * 2, cell * 2);
   const pat = grassPatternTile(pxPerMeter());
   patternCache.set(key, pat);
-  return anchorPattern(pat);
+  return anchorPattern(pat, cell * 2, cell * 2);
 }
 
 function draw() {
