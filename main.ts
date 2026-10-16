@@ -436,14 +436,18 @@ function draw() {
       const lus = queryIndex(landuseIndex, bbox);
       for (const lu of lus) {
         if (!onLayer(lu)) continue;
-        ctx.globalAlpha = 0.35;
-        // average paving-stone grey: consistent with the paved look
+        // opaque average paving-stone grey: reads like paving stones when
+        // zoomed out, consistent with the pattern color at high zoom
         ctx.fillStyle = PATTERN_AVG.paving_stones;
         ctx.beginPath();
         for (const ring of lu.outer) drawRing(ring, true);
         for (const hole of lu.holes) drawRing(hole, true);
         ctx.fill("evenodd");
-        ctx.globalAlpha = 1;
+        // same-color seam stroke keeps adjacent landuse polygons continuous
+        ctx.lineWidth = Math.max(4, 0.3 * px);
+        ctx.lineJoin = "round";
+        ctx.strokeStyle = ctx.fillStyle as string;
+        ctx.stroke();
       }
     }
 
