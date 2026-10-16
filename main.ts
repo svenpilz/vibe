@@ -38,6 +38,29 @@ const layers = {
 };
 
 /**
+ * Level of detail: minimum pixels per meter at which a feature class is drawn.
+ * Highway areas are the most interesting part and always render; everything
+ * else fades out when its geometry would collapse below a few pixels and
+ * only add visual noise. Thresholds chosen from typical OSM micromapping
+ * dimensions (a kerb is ~10cm high, markings ~50cm wide, sidewalks ~2m).
+ */
+const LOD: Record<keyof typeof layers, number> = {
+  areas: 0,        // always
+  grass: 0,       // always
+  buildings: 1,   // outlines readable from ~1 px/m
+  centerlines: 2, // 2 px/m: 2m-wide road detail visible
+  footways: 3,    // 3 px/m: ~2m sidewalks resolved
+  crossings: 4,   // 4 px/m: 50cm markings resolved
+  kerbs: 6,       // 6 px/m: 10-30cm kerbs resolved
+};
+
+function lodVisible(key: keyof typeof layers): boolean {
+  if (!layers[key]) return false;
+  if (LOD[key] === 0) return true;
+  return pxPerMeter() >= LOD[key];
+}
+
+/**
  * OSM layer=* handling. Two modes:
  *  - bird's eye (selectedLayer === null, the default): no layer filter; each
  *    feature class is drawn in ascending layer order, so at any location the
@@ -167,7 +190,7 @@ function draw() {
   const visibleAreas = layers.areas && areaIndex ? queryIndex(areaIndex, bbox) : [];
 
   // --- landuse=grass (background fill) ---
-  if (layers.grass && grassIndex) {
+  if (lodVisible("grass") && grassIndex) {
     const gs = queryIndex(grassIndex, bbox);
     if (selectedLayer === null) gs.sort((a, b) => layerSortKey(a) - layerSortKey(b));
     ctx.fillStyle = "#5d7a44";
@@ -181,7 +204,7 @@ function draw() {
   }
 
   // --- areas (bird's eye: ascending layer order, highest paints on top) ---
-  if (layers.areas && areaIndex) {
+  if (lodVisible("areas") && areaIndex) {
     if (selectedLayer === null) visibleAreas.sort((a, b) => layerSortKey(a) - layerSortKey(b));
     for (const area of visibleAreas) {
       if (!layerVisible(area)) continue;
@@ -207,7 +230,7 @@ function draw() {
   }
 
   // --- building outlines ---
-  if (layers.buildings && buildingIndex) {
+  if (lodVisible("buildings") && buildingIndex) {
     const bl = queryIndex(buildingIndex, bbox);
     if (selectedLayer === null) bl.sort((a, b) => layerSortKey(a) - layerSortKey(b));
     ctx.strokeStyle = "#8a8a94";
@@ -222,7 +245,7 @@ function draw() {
   }
 
   // --- centerlines (surface detail) ---
-  if (layers.centerlines && lineIndexes) {
+  if (lodVisible("centerlines") && lineIndexes) {
     const px = pxPerMeter();
     const cls = queryIndex(lineIndexes.centerlines, bbox);
     if (selectedLayer === null) cls.sort((a, b) => layerSortKey(a) - layerSortKey(b));
@@ -239,7 +262,7 @@ function draw() {
   }
 
   // --- footways ---
-  if (layers.footways && lineIndexes) {
+  if (lodVisible("footways") && lineIndexes) {
     const px = pxPerMeter();
     const fws = queryIndex(lineIndexes.footways, bbox);
     if (selectedLayer === null) fws.sort((a, b) => layerSortKey(a) - layerSortKey(b));
@@ -254,7 +277,7 @@ function draw() {
   }
 
   // --- crossings with markings ---
-  if (layers.crossings && lineIndexes) {
+  if (lodVisible("crossings") && lineIndexes) {
     const px = pxPerMeter();
     const crs = queryIndex(lineIndexes.crossings, bbox);
     if (selectedLayer === null) crs.sort((a, b) => layerSortKey(a) - layerSortKey(b));
@@ -298,7 +321,7 @@ function draw() {
   }
 
   // --- kerb ways (lines) ---
-  if (layers.kerbs && kerbWayIndex) {
+  if (lodVisible("kerbs") && kerbWayIndex) {
     const px = pxPerMeter();
     ctx.lineCap = "round";
     const kws = queryIndex(kerbWayIndex, bbox);
@@ -314,7 +337,7 @@ function draw() {
   }
 
   // --- kerb nodes ---
-  if (layers.kerbs && kerbGrid) {
+  if (lodVisible("kerbs") && kerbGrid) {
     const px = pxPerMeter();
     const r = Math.max(1.5, Math.min(10, 0.6 * px));
     const cells = cellsForBbox(bbox, 50000);
@@ -530,7 +553,7 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
   const tolQ = Math.round((tol / view.scale) * Q);
 
   // areas: point-in-polygon
-  if (layers.areas && areaIndex) {
+  if (lodVisible("areas") && areaIndex) {
     const areaHits = queryIndex(areaIndex, [lonQ, latQ, lonQ, latQ])
       .filter((a) => layerVisible(a));
     // bird's eye: prefer the locally highest layer at the click point
@@ -548,7 +571,7 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
   }
 
   // grass: point-in-polygon
-  if (layers.grass && grassIndex) {
+  if (lodVisible("grass") && grassIndex) {
     const gHits = queryIndex(grassIndex, [lonQ, latQ, lonQ, latQ])
       .filter((g) => layerVisible(g));
     if (selectedLayer === null && gHits.length > 1) {
@@ -564,7 +587,7 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
     }
   }
   // buildings: outline hit (point-in-polygon)
-  if (layers.buildings && buildingIndex) {
+  if (lodVisible("buildings") && buildingIndex) {
     const bHits = queryIndex(buildingIndex, [lonQ, latQ, lonQ, latQ])
       .filter((b) => layerVisible(b));
     if (selectedLayer === null && bHits.length > 1) {
@@ -577,7 +600,7 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
     }
   }
   // kerb nodes (points, closest)
-  if (layers.kerbs && kerbGrid) {
+  if (lodVisible("kerbs") && kerbGrid) {
     let best: KerbFeature | null = null;
     let bestD = tolQ * tolQ * 4;
     const cx0 = Math.floor((lonQ - tolQ * 4) / 50000), cx1 = Math.floor((lonQ + tolQ * 4) / 50000);
@@ -597,7 +620,7 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
   }
 
   // kerb ways: nearest segment within tolerance
-  if (layers.kerbs && kerbWayIndex) {
+  if (lodVisible("kerbs") && kerbWayIndex) {
     let best: { d: number; f: KerbWayFeature | null } = { d: tolQ * tolQ * 4, f: null };
     const kwHits = queryIndex(kerbWayIndex, [lonQ - tolQ * 6, latQ - tolQ * 6, lonQ + tolQ * 6, latQ + tolQ * 6])
       .filter((kw) => layerVisible(kw));
@@ -622,7 +645,7 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
     let best: { d: number; f: LineFeature | null } = { d: tolQ * tolQ * 4, f: null };
     const order: ("crossings" | "footways" | "centerlines")[] = ["crossings", "footways", "centerlines"];
     for (const kind of order) {
-      if (!layers[kind]) continue;
+      if (!lodVisible(kind)) continue;
       const hits = queryIndex(lineIndexes[kind], [lonQ - tolQ * 6, latQ - tolQ * 6, lonQ + tolQ * 6, latQ + tolQ * 6])
         .filter((f) => layerVisible(f));
       if (selectedLayer === null) hits.sort((a, b) => layerSortKey(b) - layerSortKey(a));
