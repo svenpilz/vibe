@@ -28,6 +28,7 @@ export interface ExtractResult {
   crossings: LineFeature[];
   kerbs: KerbFeature[];
   kerbWays: KerbWayFeature[];
+  laneMarkings: LineFeature[];
   /** all layer values present in the data, sorted ascending */
   layers: number[];
   /** all level values present in the data, sorted ascending */
@@ -461,6 +462,46 @@ export function extractFeatures(
   }
   void inherited;
 
+  // lane marking extraction: like crossings, lane-bearing centerlines may be
+  // covered by their highway area (and then dropped below); extract the
+  // marking data first into its own array.
+  const laneMarkings: LineFeature[] = [];
+  const laneCandidates: LineFeature[] = [];
+  for (const cl of centerlines) {
+    if (cl.lanes !== undefined && cl.lanes >= 2) laneCandidates.push(cl);
+  }
+
+  const areaGridL = buildAreaIndex(areas);
+  for (const cl of laneCandidates) {
+    const candidates = queryAreas(areaGridL, cl.bbox);
+    const mid = cl.coords[Math.floor(cl.coords.length / 2)];
+    for (const area of candidates) {
+      if (area.junction) continue;
+      if (area.layer !== cl.layer) continue;
+      if (!bboxOverlap(area.bbox, cl.bbox)) continue;
+      if (!pointInAreaQ(mid, area)) continue;
+      const i = Math.floor(cl.coords.length / 2);
+      const dx = cl.coords[i][0] - cl.coords[i - 1][0];
+      const dy = cl.coords[i][1] - cl.coords[i - 1][1];
+      const len = Math.hypot(dx, dy);
+      if (len === 0) break;
+      const nx = -dy / len, ny = dx / len;
+      const [minX, minY, maxX, maxY] = area.bbox;
+      const maxRay = Math.hypot(maxX - minX, maxY - minY) + 1000;
+      const left = rayExitInArea(mid, [nx, ny], area, maxRay);
+      const right = rayExitInArea(mid, [-nx, -ny], area, maxRay);
+      if (left === null || right === null) break;
+      const widthM = ((left + right) / 1e7) * 111_320 * Math.cos((mid[1] / 1e7) * Math.PI / 180);
+      laneMarkings.push({
+        ...cl,
+        laneW: widthM / cl.lanes!,
+        lanesFwd: cl.lanesFwd ?? Math.ceil(cl.lanes! / 2),
+        areaId: area.id,
+      });
+      break;
+    }
+  }
+
   // drop centerlines that are already represented by a corresponding area
   // (same highway type, same layer): the area fill replaces the line.
   onProgress?.(85, "filtering centerlines covered by areas…");
@@ -497,45 +538,6 @@ export function extractFeatures(
       if (area.layer !== cr.layer) continue;
       if (!bboxOverlap(area.bbox, cr.bbox)) continue;
       if (pointInAreaQ(mid, area)) { cr.areaId = area.id; break; }
-    }
-  }
-
-  // assign lane-bearing centerlines to the highway area they run in and
-  // infer the road width from the area: cast rays perpendicular to the
-  // centerline at its midpoint and measure the distance to the area edge.
-  // All lanes share the width equally; lane borders drawn at draw time are
-  // solid between opposite directions, dashed within a direction.
-  onProgress?.(89, "inferring lane widths from highway areas…");
-  const areaGrid4 = buildAreaIndex(areas);
-  for (const cl of centerlines) {
-    if (cl.lanes === undefined) continue;
-    const candidates = queryAreas(areaGrid4, cl.bbox);
-    const mid = cl.coords[Math.floor(cl.coords.length / 2)];
-    for (const area of candidates) {
-      if (area.junction) continue;
-      if (area.layer !== cl.layer) continue;
-      if (!bboxOverlap(area.bbox, cl.bbox)) continue;
-      if (!pointInAreaQ(mid, area)) continue;
-      cl.areaId = area.id;
-      // direction of the centerline at its midpoint
-      const i = Math.floor(cl.coords.length / 2);
-      const dx = cl.coords[i][0] - cl.coords[i - 1][0];
-      const dy = cl.coords[i][1] - cl.coords[i - 1][1];
-      const len = Math.hypot(dx, dy);
-      if (len === 0) break;
-      const ux = dx / len, uy = dy / len;
-      const nx = -uy, ny = ux;
-      // ray length: area bbox diagonal + margin (1e-7 deg ~ 1.1 m, safe upper bound)
-      const [minX, minY, maxX, maxY] = area.bbox;
-      const maxRay = Math.hypot(maxX - minX, maxY - minY) + 1000;
-      const left = rayExitInArea(mid, [nx, ny], area, maxRay);
-      const right = rayExitInArea(mid, [-nx, -ny], area, maxRay);
-      if (left === null || right === null) break;
-      // 1e-7 deg latitude ~ 1.11 m; good enough for lane estimation
-      const widthM = ((left + right) / 1e7) * 111_320 * Math.cos((mid[1] / 1e7) * Math.PI / 180);
-      cl.laneW = widthM / cl.lanes;
-      cl.lanesFwd = cl.lanesFwd ?? Math.ceil(cl.lanes / 2);
-      break;
     }
   }
 
@@ -591,6 +593,7 @@ export function extractFeatures(
     crossings,
     kerbs,
     kerbWays,
+    laneMarkings,
     layers,
     levels,
     bounds: [minX, minY, maxX, maxY],

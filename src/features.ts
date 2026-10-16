@@ -116,6 +116,7 @@ export interface Dataset {
   crossings: LineFeature[];
   kerbs: KerbFeature[];
   kerbWays: KerbWayFeature[];
+  laneMarkings: LineFeature[];
 }
 
 export const SURFACE_COLORS: Record<string, string> = {

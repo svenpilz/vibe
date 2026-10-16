@@ -26,12 +26,14 @@ let lineIndexes: {
 } | null = null;
 let kerbGrid: Map<number, KerbFeature[]> | null = null;
 let kerbWayIndex: Indexed<KerbWayFeature> | null = null;
+let laneMarkingIndex: Indexed<LineFeature> | null = null;
 
 const layers = {
   areas: true,
   buildings: true,
   grass: true,
   centerlines: true,
+  laneMarkings: true,
   footways: true,
   crossings: true,
   kerbs: true,
@@ -52,6 +54,7 @@ const LOD: Record<keyof typeof layers, number> = {
   footways: 20,
   crossings: 20,
   kerbs: 20,
+  laneMarkings: 17,
 };
 
 const MAJOR_ROADS = new Set([
@@ -276,11 +279,18 @@ function draw() {
       strokePolyline(cl.coords);
       ctx.stroke();
       ctx.globalAlpha = 1;
-      if (cl.lanes !== undefined && cl.laneW !== undefined && cl.lanes >= 2) {
-        clipToArea(cl.areaId);
-        drawLaneMarkings(cl);
-        ctx.restore();
-      }
+    }
+  }
+
+  // --- lane markings ---
+  if (lodVisible("laneMarkings") && laneMarkingIndex) {
+    const lms = queryIndex(laneMarkingIndex, bbox);
+    if (selectedLayer === null) lms.sort((a, b) => layerSortKey(a) - layerSortKey(b));
+    for (const lm of lms) {
+      if (!layerVisible(lm)) continue;
+      const clipped = clipToArea(lm.areaId);
+      drawLaneMarkings(lm);
+      if (clipped) ctx.restore();
     }
   }
 
@@ -310,7 +320,7 @@ function draw() {
       const m = (cr.crossingMarkings ?? "").toLowerCase();
       const widthM = cr.width ?? (m.includes("zebra") ? 3 : 1.5);
       ctx.lineCap = "butt";
-      clipToArea(cr.areaId);
+      const clipped = clipToArea(cr.areaId);
       if (stripe) {
         ctx.strokeStyle = "#5a5a60";
         ctx.lineWidth = Math.max(2, widthM * px);
@@ -340,7 +350,7 @@ function draw() {
         ctx.stroke();
         ctx.globalAlpha = 1;
       }
-      ctx.restore();
+      if (clipped) ctx.restore();
     }
     ctx.lineCap = "round";
   }
@@ -484,9 +494,9 @@ function areaById(id: string): AreaFeature | null {
 
 /** build a canvas clip path from an area's rings; returns false if not found */
 function clipToArea(areaId: string | undefined): boolean {
-  if (!areaId) return true;
+  if (!areaId) return false;
   const area = areaById(areaId);
-  if (!area) return true;
+  if (!area) return false;
   ctx.save();
   ctx.beginPath();
   for (const ring of area.outer) drawRing(ring, true);
@@ -907,6 +917,7 @@ function buildLayerPanel() {
     { key: "buildings", label: "building outlines", swatch: "#8a8a94" },
     { key: "grass", label: "landuse grass", swatch: "#5d7a44" },
     { key: "centerlines", label: "centerlines (surface)", swatch: "#7a6a52" },
+    { key: "laneMarkings", label: "lane markings", swatch: "#e8e8e8" },
     { key: "footways", label: "footways / sidewalks", swatch: "#cfcfd6" },
     { key: "crossings", label: "crossings (markings)", swatch: "#e8e8e8" },
     { key: "kerbs", label: "kerbs", swatch: "#e86e6e" },
@@ -953,6 +964,7 @@ function countFor(key: keyof typeof layers): string {
     case "buildings": return dataset.buildings.length.toLocaleString();
     case "grass": return dataset.grass.length.toLocaleString();
     case "centerlines": return dataset.centerlines.length.toLocaleString();
+    case "laneMarkings": return dataset.laneMarkings.length.toLocaleString();
     case "footways": return dataset.footways.length.toLocaleString();
     case "crossings": return dataset.crossings.length.toLocaleString();
     case "kerbs": return (dataset.kerbs.length + dataset.kerbWays.length).toLocaleString();
@@ -1054,6 +1066,7 @@ function ingestResult(result: ExtractResult, name: string) {
     crossings: result.crossings,
     kerbs: result.kerbs,
     kerbWays: result.kerbWays,
+    laneMarkings: result.laneMarkings,
   };
   areaIndex = buildIndex(dataset.areas);
   lineIndexes = {
@@ -1062,6 +1075,7 @@ function ingestResult(result: ExtractResult, name: string) {
     crossings: buildIndex(dataset.crossings),
   };
   kerbWayIndex = buildIndex(dataset.kerbWays);
+  laneMarkingIndex = buildIndex(dataset.laneMarkings);
   kerbGrid = new Map();
   for (const k of dataset.kerbs) {
     const key = Math.floor(k.lon / 50000) * 100000 + Math.floor(k.lat / 50000);
