@@ -464,6 +464,8 @@ export function extractFeatures(
           surfaceColour: tags["surface:colour"],
           width: Number.isFinite(widthNum as number) ? widthNum : undefined,
           lanes: parseLanes(tags["lanes"]),
+          // lane_markings=no: the road has lanes but no painted markings
+          noLaneMarkings: tags["lane_markings"] === "no",
           parkingLeft: parkingOnCarriageway("left", tags) || parkingOnCarriageway("both", tags),
           parkingRight: parkingOnCarriageway("right", tags) || parkingOnCarriageway("both", tags),
           oneway: tags["oneway"] === "yes" || tags["oneway"] === "-1" || tags["junction"] === "roundabout" || tags["junction"] === "circular",
@@ -658,7 +660,7 @@ export function extractFeatures(
   const laneMarkings: LineFeature[] = [];
   const laneCandidates: LineFeature[] = [];
   for (const cl of centerlines) {
-    if (cl.lanes !== undefined && cl.lanes >= 2) laneCandidates.push(cl);
+    if (cl.lanes !== undefined && cl.lanes >= 2 && !cl.noLaneMarkings) laneCandidates.push(cl);
   }
 
   const areaGridL = buildAreaIndex(areas);

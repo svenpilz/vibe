@@ -45,6 +45,8 @@ export interface LineFeature {
   areaIds?: string[];
   /** lanes=* total lane count (centerlines only) */
   lanes?: number;
+  /** lane_markings=no: lanes exist but are not painted */
+  noLaneMarkings?: boolean;
   /** lane width in meters inferred from the highway area (centerlines only) */
   laneW?: number;
   /** distance in meters from centerline to the left area edge (centerlines only) */
