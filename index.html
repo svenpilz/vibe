@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Berlin Micromapping — area:highway visualizer</title>
+  <title>OSM Micromapping — area:highway visualizer</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { height: 100%; overflow: hidden; font-family: system-ui, sans-serif; }
@@ -20,6 +20,36 @@
     }
     #panel h1 { font-size: 15px; margin-bottom: 8px; }
     #panel .sub { color: #999; margin-bottom: 10px; font-size: 12px; }
+
+    #dropzone {
+      border: 2px dashed #555;
+      border-radius: 8px;
+      padding: 18px 12px;
+      text-align: center;
+      color: #aaa;
+      cursor: pointer;
+      margin-bottom: 10px;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    #dropzone:hover { border-color: #7ec8ff; }
+    #dropzone.over { border-color: #7ec8ff; background: rgba(126, 200, 255, 0.08); }
+    #dropzone .big { font-size: 14px; color: #ddd; margin-bottom: 4px; }
+    #dropzone .hint { font-size: 11px; }
+    #dropzone input { display: none; }
+
+    #progressbar {
+      display: none;
+      margin-bottom: 10px;
+    }
+    #progressbar .label { font-size: 11px; color: #999; margin-bottom: 4px; }
+    #progressbar .track {
+      height: 6px; border-radius: 3px; background: #333; overflow: hidden;
+    }
+    #progressbar .fill {
+      height: 100%; width: 0%;
+      background: linear-gradient(90deg, #7ec8ff, #4ac8e8);
+      transition: width 0.2s;
+    }
 
     .layer { display: flex; align-items: center; gap: 8px; padding: 3px 0; user-select: none; }
     .layer input { accent-color: #7ec8ff; }
@@ -56,16 +86,28 @@
   <canvas id="map"></canvas>
 
   <div id="panel">
-    <h1>Berlin Micromapping</h1>
-    <div class="sub">area:highway polygons with surface details from centerlines, footways, crossings, kerbs. Source: <a href="https://download.geofabrik.de/europe/germany/berlin.html" target="_blank">Geofabrik Berlin PBF</a></div>
-    <div id="layers"></div>
-    <div class="sub" id="zoomhint">scroll to zoom · drag to pan · click a feature for tags</div>
+    <h1>OSM Micromapping</h1>
+    <div class="sub">area:highway polygons with surface details from centerlines, footways, crossings, kerbs. Works with any Geofabrik <code>.osm.pbf</code> extract.</div>
+
+    <div id="dropzone">
+      <div class="big">Drop a <code>.osm.pbf</code> file here</div>
+      <div class="hint">or click to choose — e.g. berlin-latest.osm.pbf from<br><a href="https://download.geofabrik.de/index.html" target="_blank">download.geofabrik.de</a></div>
+      <input type="file" id="fileinput" accept=".pbf,.osm.pbf" />
+    </div>
+
+    <div id="progressbar">
+      <div class="label" id="pbrlabel">loading…</div>
+      <div class="track"><div class="fill" id="pbrfill"></div></div>
+    </div>
+
+    <div id="layers" style="display:none"></div>
+    <div class="sub" id="zoomhint" style="display:none">scroll to zoom · drag to pan · click a feature for tags</div>
   </div>
 
   <div id="info"></div>
-  <div id="status">loading data…</div>
+  <div id="status">drop an .osm.pbf file to begin</div>
 
-  <div id="legend">
+  <div id="legend" style="display:none">
     <div style="color:#888; margin-bottom:4px">surface colors</div>
     <div id="legendSurfaces"></div>
   </div>
