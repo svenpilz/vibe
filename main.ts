@@ -51,7 +51,7 @@ const LOD: Record<keyof typeof layers, number> = {
   grass: 20,
   buildings: 20,
   centerlines: 20,
-  footways: 20,
+  footways: 22,
   crossings: 20,
   kerbs: 20,
   laneMarkings: 17,
@@ -222,8 +222,8 @@ function rand(seed: number): number {
  */
 function grassPatternTile(px: number): CanvasPattern | null {
   const patchM = 1.0;
-  let cell = Math.round(patchM * px);
-  if (cell < 6) return null; // too small to read: flat green
+  // true-to-scale patch size, at least the readable minimum (see stones)
+  let cell = Math.round(Math.max(patchM * px, 6));
   cell = Math.min(cell, 128);
   const tile = document.createElement("canvas");
   tile.width = cell * 2;
@@ -262,8 +262,10 @@ function stonePatternTile(surface: string, px: number): CanvasPattern | null {
   // stone size in meters: paving stones ~30 cm (regular, tight rows),
   // sett ~12 cm (small, less regular, running bond)
   const stoneM = isSett ? 0.12 : 0.3;
-  let size = Math.round(stoneM * px);
-  if (size < 8) return null; // too small to read: fall back to solid
+  // true-to-scale stone size, but at least the readable minimum so the
+  // pattern shows from PATTERN_ZOOM on (a 30 cm stone is sub-pixel at
+  // zoom 25; the pattern catches up to true scale as you zoom further)
+  let size = Math.round(Math.max(stoneM * px, 8));
   size = Math.min(size, 256);
   const gap = Math.max(1, Math.round(size * 0.08));
   const tile = document.createElement("canvas");
