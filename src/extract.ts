@@ -562,14 +562,6 @@ export function extractFeatures(
   const areaGridL = buildAreaIndex(areas);
   for (const cl of laneCandidates) {
     const candidates = queryAreas(areaGridL, cl.bbox);
-    // midpoint of the middle segment (a vertex could lie exactly on the
-    // area boundary, where point-in-polygon is ambiguous)
-    const i = Math.floor(cl.coords.length / 2);
-    const dxs = cl.coords[i][0] - cl.coords[i - 1][0];
-    const dys = cl.coords[i][1] - cl.coords[i - 1][1];
-    const mid = [(cl.coords[i][0] + cl.coords[i - 1][0]) / 2, (cl.coords[i][1] + cl.coords[i - 1][1]) / 2];
-    const segLen = Math.hypot(dxs, dys);
-    if (segLen === 0) continue;
     // a centerline may correspond to MULTIPLE areas (a road polygon split
     // into sections): collect all corresponding areas; same-layer areas
     // win, falling back to the highest-layer containing area when the
@@ -582,29 +574,59 @@ export function extractFeatures(
       // through a small secondary loop) must not infer its width from it
       if (!highwayTypesCompatible(cl.highway, area.highway)) continue;
       if (!bboxOverlap(area.bbox, cl.bbox)) continue;
-      if (!pointOnAreaBoundaryQ(mid, area, 10) && !pointInAreaQ(mid, area)) continue;
+      // correspondence: a segment midpoint inside the area
+      let someInside = false;
+      for (let si = 1; si < cl.coords.length && !someInside; si++) {
+        const a = cl.coords[si - 1], b = cl.coords[si];
+        const m = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+        if (pointInAreaTolQ2(m, area)) someInside = true;
+      }
+      if (!someInside) continue;
       matching.push(area);
     }
-    // sample points: a vertex strictly inside this area (the shared-edge
-    // midpoint may lie on the boundary between two area sections, where
-    // width rays would measure zero)
-    const sampleFor = (area: AreaFeature): number[] | null => {
-      for (const pt of cl.coords) {
-        if (pointInAreaQ(pt, area)) return pt;
-      }
-      return pointInAreaQ(mid, area) ? mid : null;
-    };
     if (matching.length > 1) {
       const sameLayer = matching.filter((a) => a.layer === cl.layer);
       if (sameLayer.length > 0) matching.length = 0, matching.push(...sameLayer);
     }
     for (const area of matching) {
-      const sample = sampleFor(area);
+      // sample segment per area: the LONGEST segment whose midpoint lies
+      // inside this area. The middle segment of a bent way can be a short
+      // corner-cut whose direction matches the road axis nowhere; the
+      // longest straight run represents the road's local direction.
+      let bi = -1, bLen = 0;
+      let biTol = -1, bLenTol = 0;
+      for (let si = 1; si < cl.coords.length; si++) {
+        const a = cl.coords[si - 1], b = cl.coords[si];
+        const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+        if (len === 0) continue;
+        const m = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+        if (pointInAreaQ(m, area)) {
+          if (len > bLen) { bLen = len; bi = si; }
+        } else if (pointInAreaTolQ2(m, area)) {
+          // strictly-inside segments are preferred: a segment spanning two
+          // area sections has its midpoint on the shared edge, where rays
+          // toward the other section would measure zero width
+          if (len > bLenTol) { bLenTol = len; biTol = si; }
+        }
+      }
+      if (bi < 0) { bi = biTol; bLen = bLenTol; }
+      if (bi < 0) continue;
+      const dxs = cl.coords[bi][0] - cl.coords[bi - 1][0];
+      const dys = cl.coords[bi][1] - cl.coords[bi - 1][1];
+      // sample: the segment midpoint, or — when it lies on the boundary
+      // (the segment spans two area sections) — the midpoint of the part
+      // of the segment strictly inside this area
+      let sample: number[] | null = null;
+      const a0 = cl.coords[bi - 1], a1 = cl.coords[bi];
+      for (let t = 0.5; t >= 0.05; t -= 0.05) {
+        for (const u of [t, 1 - t]) {
+          const p = [a0[0] + (a1[0] - a0[0]) * u, a0[1] + (a1[1] - a0[1]) * u];
+          if (pointInAreaQ(p, area)) { sample = p; break; }
+        }
+        if (sample) break;
+      }
       if (!sample) continue;
-      const dx = dxs, dy = dys;
-      const len = segLen;
-      if (len === 0) continue;
-      const nx = -dy / len, ny = dx / len;
+      const nx = -dys / bLen, ny = dxs / bLen;
       const [minX, minY, maxX, maxY] = area.bbox;
       const maxRay = Math.hypot(maxX - minX, maxY - minY) + 1000;
       const left = rayExitInArea(sample, [nx, ny], area, maxRay);
