@@ -589,7 +589,7 @@ function draw() {
 
     // --- bollards: black dots ---
     if (lodVisible("bollards") && bollardGrid) {
-      const br = Math.max(1.2, Math.min(8, 0.25 * px));
+      const br = Math.max(2.5, Math.min(8, 0.25 * px));
       for (const cell of cellsForBbox(bbox, 50000)) {
         const arr = bollardGrid.get(cell);
         if (!arr) continue;
