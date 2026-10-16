@@ -67,6 +67,19 @@ function bboxOverlap(
   return a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
 }
 
+/**
+ * A centerline may only donate its surface to an area of the same highway
+ * type. Exception: highway=footway centerlines also cover sidewalk areas,
+ * which are the same physical feature mapped with a different type tag.
+ */
+function highwayTypesCompatible(clHighway: string | undefined, areaHighway: string): boolean {
+  if (!clHighway) return false;
+  if (clHighway === areaHighway) return true;
+  if (clHighway === "footway" && areaHighway === "sidewalk") return true;
+  if (clHighway === "sidewalk" && areaHighway === "footway") return true;
+  return false;
+}
+
 const CENTERLINE_HIGHWAYS = new Set([
   "footway", "pedestrian", "service", "living_street", "residential", "unclassified",
   "cycleway", "path", "steps", "track", "road",
@@ -259,7 +272,10 @@ export function extractFeatures(
     }
   }
 
-  // surface inheritance: area <- intersecting centerline
+  // surface inheritance: area <- intersecting centerline of the same highway
+  // type. Without the type check, sidewalk centerlines (footway,
+  // surface=paving_stones) that cross road-area polygons donate their surface
+  // to the road, painting residential/secondary areas as paving stone.
   onProgress?.(70, "inheriting surfaces from centerlines…");
   const areaGrid = buildAreaIndex(areas);
   let inherited = 0;
@@ -268,6 +284,7 @@ export function extractFeatures(
     const candidates = queryAreas(areaGrid, cl.bbox);
     for (const area of candidates) {
       if (area.surface) continue;
+      if (!highwayTypesCompatible(cl.highway, area.highway)) continue;
       if (!bboxOverlap(area.bbox, cl.bbox)) continue;
       const mid = cl.coords[Math.floor(cl.coords.length / 2)];
       if (pointInAreaQ(mid, area)) {
