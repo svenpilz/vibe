@@ -46,18 +46,23 @@ const layers = {
  */
 const LOD: Record<keyof typeof layers, number> = {
   areas: 0,        // always
-  grass: 0.5,     // 0.5 px/m: large fills still read at low zoom
-  buildings: 1.5, // 1.5 px/m: outlines readable, dense clusters culled
-  centerlines: 1.5, // 1.5 px/m: 2m-wide road detail visible
-  footways: 2,    // 2 px/m: ~2m sidewalks resolved
-  crossings: 4,   // 4 px/m: 50cm markings resolved, not smudged
-  kerbs: 6,       // 6 px/m: 10-30cm kerbs resolved
+  grass: 20,
+  buildings: 20,
+  centerlines: 20,
+  footways: 20,
+  crossings: 20,
+  kerbs: 20,
 };
 
 function lodVisible(key: keyof typeof layers): boolean {
   if (!layers[key]) return false;
   if (LOD[key] === 0) return true;
-  return pxPerMeter() >= LOD[key];
+  return zoomLevel() >= LOD[key];
+}
+
+/** zoom level as shown in the status bar (slippy-map style) */
+function zoomLevel(): number {
+  return Math.log2(view.scale / 1200) * 2 + 11;
 }
 
 /**
@@ -531,7 +536,7 @@ canvas.addEventListener("wheel", (e) => {
   const factor = Math.exp(-e.deltaY * 0.0015);
   view.scale = Math.max(500, Math.min(3_000_000, view.scale * factor));
   requestDraw();
-  statusEl.textContent = `zoom ${(Math.log2(view.scale / 1200) * 2 + 11).toFixed(1)} (scale ${Math.round(view.scale)})`;
+  statusEl.textContent = `zoom ${zoomLevel().toFixed(1)} (scale ${Math.round(view.scale)})`;
 }, { passive: false });
 
 // click -> feature inspection
