@@ -301,7 +301,7 @@ function draw() {
     // --- lane markings ---
     for (const lm of lms) {
       if (!onLayer(lm)) continue;
-      const clipped = clipToArea(lm.areaId);
+      const clipped = clipToAreas(lm.areaIds);
       drawLaneMarkings(lm);
       if (clipped) ctx.restore();
     }
@@ -323,7 +323,7 @@ function draw() {
       const stripe = crossingStripeColor(cr.crossingMarkings);
       const m = (cr.crossingMarkings ?? "").toLowerCase();
       const widthM = cr.width ?? (m.includes("zebra") ? 3 : 1.5);
-      const clipped = clipToArea(cr.areaId);
+      const clipped = clipToAreas(cr.areaIds);
       if (stripe) {
         ctx.strokeStyle = "#5a5a60";
         ctx.lineWidth = Math.max(2, widthM * px);
@@ -497,21 +497,23 @@ function areaById(id: string): AreaFeature | null {
 }
 
 /** build a canvas clip path from an area's rings; returns false if not found */
-function clipToArea(areaId: string | undefined): boolean {
-  if (!areaId) return false;
-  const area = areaById(areaId);
-  if (!area) return false;
+function clipToAreas(areaIds: string[] | undefined): boolean {
+  if (!areaIds || areaIds.length === 0) return false;
+  const found = areaIds.map((id) => areaById(id)).filter((a) => a !== null) as AreaFeature[];
+  if (found.length === 0) return false;
   ctx.save();
   ctx.beginPath();
-  for (const ring of area.outer) drawRing(ring, true);
-  for (const hole of area.holes) drawRing(hole, true);
+  for (const area of found) {
+    for (const ring of area.outer) drawRing(ring, true);
+    for (const hole of area.holes) drawRing(hole, true);
+  }
   ctx.clip("evenodd");
   return true;
 }
 
 /**
  * Lane markings for a lane-bearing centerline: the road width is inferred
- * from the containing highway area (cl.areaId), lanes split it equally.
+ * from the containing highway area (cl.areaIds), lanes split it equally.
  * Border between opposite directions is solid; borders between lanes of
  * the same direction are dashed. Clipped to the area so markings never
  * extend past the street outline.

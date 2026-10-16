@@ -41,8 +41,8 @@ export interface LineFeature {
   layer: number;
   /** OSM level=* tag (undefined when absent) */
   level?: number;
-  /** id of the highway area the crossing lies in (markings clipped to it) */
-  areaId?: string;
+  /** ids of the highway areas the way corresponds to (markings clipped to them) */
+  areaIds?: string[];
   /** lanes=* total lane count (centerlines only) */
   lanes?: number;
   /** lane width in meters inferred from the highway area (centerlines only) */

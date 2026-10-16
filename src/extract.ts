@@ -142,6 +142,10 @@ function pointOnAreaBoundaryQ(pt: number[], area: AreaFeature, tolQ: number): bo
  * inside is a corner clip, not correspondence — and a boundary vertex is
  * not "inside" for the adjacent area either.
  */
+function pointInAreaTolQ2(pt: number[], area: AreaFeature): boolean {
+  return pointInAreaQ(pt, area) || pointOnAreaBoundaryQ(pt, area, 10);
+}
+
 function centerlineInAreaTolQ(cl: LineFeature, area: AreaFeature, tolQ: number): boolean {
   let inside = 0;
   let onBoundary = 0;
@@ -557,29 +561,45 @@ export function extractFeatures(
     const mid = [(cl.coords[i][0] + cl.coords[i - 1][0]) / 2, (cl.coords[i][1] + cl.coords[i - 1][1]) / 2];
     const segLen = Math.hypot(dxs, dys);
     if (segLen === 0) continue;
-    // prefer a same-layer containing area, fall back to any containing area
-    // (centerlines are often untagged while their area carries layer=*)
-    let chosen: AreaFeature | null = null;
+    // a centerline may correspond to MULTIPLE areas (a road polygon split
+    // into sections): collect all corresponding areas; same-layer areas
+    // win, falling back to the highest-layer containing area when the
+    // centerline is untagged while its area carries layer=*
+    const matching: AreaFeature[] = [];
     for (const area of candidates) {
       if (area.junction) continue;
       if (!bboxOverlap(area.bbox, cl.bbox)) continue;
-      if (!pointInAreaQ(mid, area)) continue;
-      if (area.layer === cl.layer) { chosen = area; break; }
-      if (chosen === null || area.layer > chosen.layer) chosen = area;
+      if (!pointOnAreaBoundaryQ(mid, area, 10) && !pointInAreaQ(mid, area)) continue;
+      matching.push(area);
     }
-    for (const area of chosen ? [chosen] : []) {
+    // sample points: a vertex strictly inside this area (the shared-edge
+    // midpoint may lie on the boundary between two area sections, where
+    // width rays would measure zero)
+    const sampleFor = (area: AreaFeature): number[] | null => {
+      for (const pt of cl.coords) {
+        if (pointInAreaQ(pt, area)) return pt;
+      }
+      return pointInAreaQ(mid, area) ? mid : null;
+    };
+    if (matching.length > 1) {
+      const sameLayer = matching.filter((a) => a.layer === cl.layer);
+      if (sameLayer.length > 0) matching.length = 0, matching.push(...sameLayer);
+    }
+    for (const area of matching) {
+      const sample = sampleFor(area);
+      if (!sample) continue;
       const dx = dxs, dy = dys;
       const len = segLen;
-      if (len === 0) break;
+      if (len === 0) continue;
       const nx = -dy / len, ny = dx / len;
       const [minX, minY, maxX, maxY] = area.bbox;
       const maxRay = Math.hypot(maxX - minX, maxY - minY) + 1000;
-      const left = rayExitInArea(mid, [nx, ny], area, maxRay);
-      const right = rayExitInArea(mid, [-nx, -ny], area, maxRay);
-      if (left === null || right === null) break;
+      const left = rayExitInArea(sample, [nx, ny], area, maxRay);
+      const right = rayExitInArea(sample, [-nx, -ny], area, maxRay);
+      if (left === null || right === null) continue;
       // convert each ray to meters: lon units scale with cos(latitude),
       // lat units are constant; the ray travels in mixed units
-      const mPerLon = (111_320 * Math.cos((mid[1] / 1e7) * Math.PI / 180)) / 1e7;
+      const mPerLon = (111_320 * Math.cos((sample[1] / 1e7) * Math.PI / 180)) / 1e7;
       const mPerLat = 111_320 / 1e7;
       const rayM = (t: number, dx2: number, dy2: number): number =>
         Math.hypot(dx2 * t * mPerLon, dy2 * t * mPerLat);
@@ -604,9 +624,8 @@ export function extractFeatures(
         laneLeftM: driveLeftM,
         laneRightM: driveLeftM + cl.lanes! * laneW,
         lanesFwd: fwd,
-        areaId: area.id,
+        areaIds: [area.id],
       });
-      break;
     }
   }
 
@@ -646,20 +665,25 @@ export function extractFeatures(
     const ci = Math.floor(cr.coords.length / 2);
     const mid = [(cr.coords[ci][0] + cr.coords[ci - 1][0]) / 2,
                  (cr.coords[ci][1] + cr.coords[ci - 1][1]) / 2];
-    // prefer a same-layer containing area, fall back to any containing area
-    // (crossings are often untagged while their area carries layer=*); the
-    // crossing adopts the area's layer so bird's-eye stacking paints it with
-    // its area instead of being occluded by it
-    let chosen: AreaFeature | null = null;
+    // a crossing may lie in MULTIPLE areas (a road polygon split into
+    // sections): clip against all of them; prefer same-layer areas, fall
+    // back to the highest-layer containing area (crossings are often
+    // untagged while their area carries layer=*); the crossing adopts that
+    // area's layer so bird's-eye stacking paints it with its area instead
+    // of being occluded by it
+    const matching: AreaFeature[] = [];
     for (const area of candidates) {
       if (!bboxOverlap(area.bbox, cr.bbox)) continue;
-      if (!pointInAreaQ(mid, area)) continue;
-      if (area.layer === cr.layer) { chosen = area; break; }
-      if (chosen === null || area.layer > chosen.layer) chosen = area;
+      if (!pointInAreaTolQ2(mid, area)) continue;
+      matching.push(area);
     }
-    if (chosen) {
-      cr.areaId = chosen.id;
-      cr.layer = chosen.layer;
+    if (matching.length > 0) {
+      const sameLayer = matching.filter((a) => a.layer === cr.layer);
+      const pick = sameLayer.length > 0 ? sameLayer : matching;
+      let top = pick[0];
+      for (const a of pick) if (a.layer > top.layer) top = a;
+      cr.areaIds = pick.map((a) => a.id);
+      cr.layer = top.layer;
     }
   }
 
