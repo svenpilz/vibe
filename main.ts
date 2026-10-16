@@ -216,18 +216,19 @@ function draw() {
       ctx.lineCap = "butt";
       if (stripe) {
         ctx.strokeStyle = "#5a5a60";
-        ctx.lineWidth = Math.max(2, widthM * px * 0.5);
+        ctx.lineWidth = Math.max(2, widthM * px);
         ctx.beginPath();
         strokePolyline(cr.coords);
         ctx.stroke();
 
-        // stripes perpendicular to direction
         const m = (cr.crossingMarkings ?? "").toLowerCase();
         if (m.includes("zebra")) {
           drawZebra(cr, widthM, stripe);
+        } else if (m.includes("dash")) {
+          drawBoundaryDashes(cr, widthM, stripe);
         } else {
           ctx.strokeStyle = stripe;
-          ctx.setLineDash(m.includes("dash") ? [8, 6] : [2, 3]);
+          ctx.setLineDash([2, 3]);
           ctx.lineWidth = Math.max(1.5, widthM * px * 0.35);
           ctx.beginPath();
           strokePolyline(cr.coords);
@@ -287,7 +288,7 @@ function draw() {
 
 function drawZebra(cr: LineFeature, widthM: number, color: string) {
   const px = pxPerMeter();
-  const halfW = (widthM * px * 0.5) / 2;
+  const halfW = (widthM * px) / 2;
   ctx.strokeStyle = color;
   ctx.lineWidth = Math.max(1.2, widthM * px * 0.14);
   const stripeGap = Math.max(widthM * px * 0.22, 3);
@@ -314,6 +315,53 @@ function drawZebra(cr: LineFeature, widthM: number, color: string) {
     }
     walked += segLen;
   }
+}
+
+/**
+ * Dashed-crossing markings: two dashed lines running along the left and
+ * right boundary of the footway, 10 cm wide each, offset to the inside of
+ * the crossing band so the stroke stays within the tagged width.
+ */
+function drawBoundaryDashes(cr: LineFeature, widthM: number, color: string) {
+  const px = pxPerMeter();
+  const halfW = (widthM * px) / 2;
+  const lineW = Math.max(1, 0.1 * px);
+  const offset = Math.max(0, halfW - lineW / 2);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lineW;
+  ctx.setLineDash([Math.max(4, 0.5 * px), Math.max(3, 0.35 * px)]);
+  ctx.lineCap = "butt";
+
+  const pts: [number, number][] = [];
+  const normals: [number, number][] = [];
+  for (let i = 0; i < cr.coords.length; i++) {
+    pts.push([lonToX(cr.coords[i][0] / Q), latToY(cr.coords[i][1] / Q)]);
+    if (i > 0) {
+      const dx = pts[i][0] - pts[i - 1][0], dy = pts[i][1] - pts[i - 1][1];
+      const len = Math.hypot(dx, dy);
+      normals.push(len === 0 ? [0, 0] : [-dy / len, dx / len]);
+    }
+  }
+
+  for (const side of [-1, 1] as const) {
+    ctx.beginPath();
+    for (let i = 0; i < pts.length; i++) {
+      let nx: number, ny: number;
+      if (i === 0) {
+        [nx, ny] = normals[0];
+      } else if (i === pts.length - 1) {
+        [nx, ny] = normals[normals.length - 1];
+      } else {
+        const [nx1, ny1] = normals[i - 1], [nx2, ny2] = normals[i];
+        const bl = Math.hypot(nx1 + nx2, ny1 + ny2);
+        [nx, ny] = bl === 0 ? [nx1, ny1] : [(nx1 + nx2) / bl, (ny1 + ny2) / bl];
+      }
+      const ox = pts[i][0] + nx * offset * side, oy = pts[i][1] + ny * offset * side;
+      if (i === 0) ctx.moveTo(ox, oy); else ctx.lineTo(ox, oy);
+    }
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
 }
 
 function cellsForBbox(bbox: [number, number, number, number], cell: number): number[] {
