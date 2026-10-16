@@ -552,7 +552,9 @@ function draw() {
           ctx.stroke();
           ctx.setLineDash([]);
         }
-      } else {
+      } else if (layers.footways) {
+        // crossings without markings render as a plain footway band: they
+        // belong to the footways toggle, not the crossings (markings) one
         ctx.strokeStyle = "#8a8a92";
         ctx.lineWidth = Math.max(1.5, widthM * px * 0.4);
         ctx.globalAlpha = 0.7;
