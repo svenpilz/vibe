@@ -214,27 +214,44 @@ function draw() {
   if (!dataset) return;
 
   const bbox = viewBboxQ();
-  const visibleAreas = layers.areas && areaIndex ? queryIndex(areaIndex, bbox) : [];
 
-  // --- landuse=grass (background fill) ---
-  if (lodVisible("grass") && grassIndex) {
-    const gs = queryIndex(grassIndex, bbox);
-    if (selectedLayer === null) gs.sort((a, b) => layerSortKey(a) - layerSortKey(b));
+  // Bird's eye: draw ALL classes in ascending layer order, so a higher layer
+  // occludes everything below it regardless of feature class (previously
+  // each class sorted internally, letting e.g. a layer-0 footway paint over
+  // a layer-1 bridge's lane markings). Explicit layer selection draws only
+  // that layer.
+  const px = pxPerMeter();
+  const visible = viewportValues();
+  const layersToDraw: number[] =
+    selectedLayer !== null ? [selectedLayer] : [...visible.layers].sort((a, b) => a - b);
+
+  const gs = lodVisible("grass") && grassIndex ? queryIndex(grassIndex, bbox) : [];
+  const areas = lodVisible("areas") && areaIndex ? visibleAreas(bbox) : [];
+  const bl = lodVisible("buildings") && buildingIndex ? queryIndex(buildingIndex, bbox) : [];
+  const cls = lodVisible("centerlines") && lineIndexes ? queryIndex(lineIndexes.centerlines, bbox) : [];
+  const lms = lodVisible("laneMarkings") && laneMarkingIndex ? queryIndex(laneMarkingIndex, bbox) : [];
+  const fws = lodVisible("footways") && lineIndexes ? queryIndex(lineIndexes.footways, bbox) : [];
+  const crs = lodVisible("crossings") && lineIndexes ? queryIndex(lineIndexes.crossings, bbox) : [];
+  const kws = lodVisible("kerbs") && kerbWayIndex ? queryIndex(kerbWayIndex, bbox) : [];
+  const kns = lodVisible("kerbs") && kerbGrid ? kerbsInBbox(bbox) : [];
+
+  for (const layer of layersToDraw) {
+    const onLayer = (f: { layer?: number; level?: number }) =>
+      (f.layer ?? 0) === layer && layerVisible(f);
+
+    // --- landuse=grass (background fill) ---
     ctx.fillStyle = "#5d7a44";
     for (const g of gs) {
-      if (!layerVisible(g)) continue;
+      if (!onLayer(g)) continue;
       ctx.beginPath();
       for (const ring of g.outer) drawRing(ring, true);
       for (const hole of g.holes) drawRing(hole, true);
       ctx.fill("evenodd");
     }
-  }
 
-  // --- areas (bird's eye: ascending layer order, highest paints on top) ---
-  if (lodVisible("areas") && areaIndex) {
-    if (selectedLayer === null) visibleAreas.sort((a, b) => layerSortKey(a) - layerSortKey(b));
-    for (const area of visibleAreas) {
-      if (!areaLodVisible(area) || !layerVisible(area)) continue;
+    // --- highway areas (surface fill) ---
+    for (const area of areas) {
+      if (!onLayer(area) || !areaLodVisible(area)) continue;
       ctx.fillStyle = area.surface || area.surfaceColour ? featureColor(area.surface, area.surfaceColour) : "#4a4a50";
       ctx.beginPath();
       for (const ring of area.outer) drawRing(ring, true);
@@ -244,40 +261,26 @@ function draw() {
         }
       }
       ctx.fill("evenodd");
-
-      // stroke the ring in the fill color, wide enough to cover both the
-      // antialiased boundary pixels and small (cm-scale) geometric gaps
-      // between neighboring OSM polygons, so areas read as one continuous
-      // surface instead of showing white seams
       ctx.lineWidth = 4;
       ctx.lineJoin = "round";
       ctx.strokeStyle = ctx.fillStyle as string;
       ctx.stroke();
     }
-  }
 
-  // --- building outlines ---
-  if (lodVisible("buildings") && buildingIndex) {
-    const bl = queryIndex(buildingIndex, bbox);
-    if (selectedLayer === null) bl.sort((a, b) => layerSortKey(a) - layerSortKey(b));
-    ctx.strokeStyle = "#8a8a94";
+    // --- building outlines ---
+    ctx.strokeStyle = "#8a8a92";
     ctx.lineWidth = 1.5;
     ctx.lineJoin = "round";
     for (const b of bl) {
-      if (!layerVisible(b)) continue;
+      if (!onLayer(b)) continue;
       ctx.beginPath();
       for (const ring of b.outer) drawRing(ring, true);
       ctx.stroke();
     }
-  }
 
-  // --- centerlines (surface detail) ---
-  if (lodVisible("centerlines") && lineIndexes) {
-    const px = pxPerMeter();
-    const cls = queryIndex(lineIndexes.centerlines, bbox);
-    if (selectedLayer === null) cls.sort((a, b) => layerSortKey(a) - layerSortKey(b));
+    // --- centerlines (surface detail) ---
     for (const cl of cls) {
-      if (!layerVisible(cl)) continue;
+      if (!onLayer(cl)) continue;
       ctx.strokeStyle = featureColor(cl.surface, cl.surfaceColour);
       ctx.lineWidth = Math.max(1, (cl.width ?? 1.5) * px * 0.5);
       ctx.globalAlpha = 0.9;
@@ -286,46 +289,32 @@ function draw() {
       ctx.stroke();
       ctx.globalAlpha = 1;
     }
-  }
 
-  // --- lane markings ---
-  if (lodVisible("laneMarkings") && laneMarkingIndex) {
-    const lms = queryIndex(laneMarkingIndex, bbox);
-    if (selectedLayer === null) lms.sort((a, b) => layerSortKey(a) - layerSortKey(b));
+    // --- lane markings ---
     for (const lm of lms) {
-      if (!layerVisible(lm)) continue;
+      if (!onLayer(lm)) continue;
       const clipped = clipToArea(lm.areaId);
       drawLaneMarkings(lm);
       if (clipped) ctx.restore();
     }
-  }
 
-  // --- footways ---
-  if (lodVisible("footways") && lineIndexes) {
-    const px = pxPerMeter();
-    const fws = queryIndex(lineIndexes.footways, bbox);
-    if (selectedLayer === null) fws.sort((a, b) => layerSortKey(a) - layerSortKey(b));
+    // --- footways ---
     for (const fw of fws) {
-      if (!layerVisible(fw)) continue;
+      if (!onLayer(fw)) continue;
       ctx.strokeStyle = fw.surface || fw.surfaceColour ? featureColor(fw.surface, fw.surfaceColour) : "#cfcfd6";
       ctx.lineWidth = Math.max(0.8, (fw.width ?? 1.8) * px * 0.3);
       ctx.beginPath();
       strokePolyline(fw.coords);
       ctx.stroke();
     }
-  }
 
-  // --- crossings with markings ---
-  if (lodVisible("crossings") && lineIndexes) {
-    const px = pxPerMeter();
-    const crs = queryIndex(lineIndexes.crossings, bbox);
-    if (selectedLayer === null) crs.sort((a, b) => layerSortKey(a) - layerSortKey(b));
+    // --- crossings with markings ---
+    ctx.lineCap = "butt";
     for (const cr of crs) {
-      if (!layerVisible(cr)) continue;
+      if (!onLayer(cr)) continue;
       const stripe = crossingStripeColor(cr.crossingMarkings);
       const m = (cr.crossingMarkings ?? "").toLowerCase();
       const widthM = cr.width ?? (m.includes("zebra") ? 3 : 1.5);
-      ctx.lineCap = "butt";
       const clipped = clipToArea(cr.areaId);
       if (stripe) {
         ctx.strokeStyle = "#5a5a60";
@@ -359,44 +348,45 @@ function draw() {
       if (clipped) ctx.restore();
     }
     ctx.lineCap = "round";
-  }
 
-  // --- kerb ways (lines) ---
-  if (lodVisible("kerbs") && kerbWayIndex) {
-    const px = pxPerMeter();
-    ctx.lineCap = "round";
-    const kws = queryIndex(kerbWayIndex, bbox);
-    if (selectedLayer === null) kws.sort((a, b) => layerSortKey(a) - layerSortKey(b));
+    // --- kerb ways ---
     for (const kw of kws) {
-      if (!layerVisible(kw)) continue;
+      if (!onLayer(kw)) continue;
       ctx.strokeStyle = kerbColor(kw.kerb, kw.tactilePaving);
       ctx.lineWidth = Math.max(1, 0.3 * px);
       ctx.beginPath();
       strokePolyline(kw.coords);
       ctx.stroke();
     }
-  }
 
-  // --- kerb nodes ---
-  if (lodVisible("kerbs") && kerbGrid) {
-    const px = pxPerMeter();
+    // --- kerb nodes ---
     const r = Math.max(1.5, Math.min(10, 0.6 * px));
-    const cells = cellsForBbox(bbox, 50000);
-    for (const cell of cells) {
-      const arr = kerbGrid.get(cell);
-      if (!arr) continue;
-      arr.sort((a, b) => layerSortKey(a) - layerSortKey(b));
-      for (const k of arr) {
-        if (!layerVisible(k)) continue;
-        const x = lonToX(k.lon / Q), y = latToY(k.lat / Q);
-        if (x < -10 || y < -10 || x > w + 10 || y > h + 10) continue;
-        ctx.beginPath();
-        ctx.arc(x, y, r, 0, Math.PI * 2);
-        ctx.fillStyle = kerbColor(k.kerb, k.tactilePaving);
-        ctx.fill();
-      }
+    for (const k of kns) {
+      if (!onLayer(k)) continue;
+      const x = lonToX(k.lon / Q), y = latToY(k.lat / Q);
+      if (x < -10 || y < -10 || x > w + 10 || y > h + 10) continue;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fillStyle = kerbColor(k.kerb, k.tactilePaving);
+      ctx.fill();
     }
   }
+}
+
+/** highway areas in the bbox, respecting the areas toggle */
+function visibleAreas(bbox: [number, number, number, number]): AreaFeature[] {
+  return areaIndex ? queryIndex(areaIndex, bbox) : [];
+}
+
+/** kerb nodes within the bbox */
+function kerbsInBbox(bbox: [number, number, number, number]): KerbFeature[] {
+  const out: KerbFeature[] = [];
+  if (!kerbGrid) return out;
+  for (const cell of cellsForBbox(bbox, 50000)) {
+    const arr = kerbGrid.get(cell);
+    if (arr) for (const k of arr) out.push(k);
+  }
+  return out;
 }
 
 function drawZebra(cr: LineFeature, widthM: number, color: string) {
