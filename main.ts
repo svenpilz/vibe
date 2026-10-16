@@ -537,7 +537,9 @@ function drawLaneMarkings(cl: LineFeature) {
     // distance from the centerline, negative = left side
     const off = -leftM + k * cl.laneW!;
     const offPx = off * px;
-    const solid = k === fwd;
+    // solid only between opposite directions: exists when some (but not
+    // all) lanes run forward — a one-way road has no solid separator
+    const solid = fwd > 0 && fwd < total && k === fwd;
     ctx.strokeStyle = "#e8e8e8";
     if (!solid) ctx.setLineDash([Math.max(3, 1.2 * px), Math.max(2, 1.0 * px)]);
 

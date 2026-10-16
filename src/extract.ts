@@ -321,7 +321,11 @@ export function extractFeatures(
           surfaceColour: tags["surface:colour"],
           width: Number.isFinite(widthNum as number) ? widthNum : undefined,
           lanes: parseLanes(tags["lanes"]),
-          lanesFwd: parseLanes(tags["lanes:forward"]) ?? parseLanes(tags["lanes:backward"]) ?? undefined,
+          oneway: tags["oneway"] === "yes" || tags["oneway"] === "-1" || tags["junction"] === "roundabout" || tags["junction"] === "circular",
+          lanesFwd: parseLanes(tags["lanes:forward"])
+            ?? (parseLanes(tags["lanes:backward"]) !== undefined
+                ? (parseLanes(tags["lanes"]) ?? 2 * parseLanes(tags["lanes:backward"])!) - parseLanes(tags["lanes:backward"])!
+                : undefined),
           lit: tags["lit"],
           name: tags["name"],
           layer: parseLayer(tags["layer"]),
@@ -508,12 +512,15 @@ export function extractFeatures(
       const leftM = rayM(left, nx, ny);
       const rightM = rayM(right, -nx, -ny);
       const widthM = leftM + rightM;
+      // lanes in the forward direction: explicit lanes:forward wins, else
+      // oneway roads carry all lanes in one direction (no solid separator)
+      const fwd = cl.lanesFwd ?? (cl.oneway ? cl.lanes! : Math.ceil(cl.lanes! / 2));
       laneMarkings.push({
         ...cl,
         laneW: widthM / cl.lanes!,
         laneLeftM: leftM,
         laneRightM: rightM,
-        lanesFwd: cl.lanesFwd ?? Math.ceil(cl.lanes! / 2),
+        lanesFwd: fwd,
         areaId: area.id,
       });
       break;

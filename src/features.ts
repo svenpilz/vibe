@@ -53,6 +53,8 @@ export interface LineFeature {
   laneRightM?: number;
   /** number of lanes forward (same direction of travel, centerlines only) */
   lanesFwd?: number;
+  /** oneway=yes / -1 / roundabout: all lanes travel in one direction */
+  oneway?: boolean;
   coords: Q[][];
   bbox: [number, number, number, number];
 }
