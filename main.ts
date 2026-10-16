@@ -1364,7 +1364,8 @@ function viewFromUrl(): boolean {
   const lon = parseFloat(m[3]);
   if (!Number.isFinite(z) || !Number.isFinite(lat) || !Number.isFinite(lon)) return false;
   if (lat < -85 || lat > 85 || lon < -180 || lon > 180) return false;
-  if (z < 5 || z > 30) return false;
+  // the app clamps scale to [500, 3_000_000] ~ zoom [2.1, 33.6]
+  if (z < 2 || z > 34) return false;
   // zoom -> scale: invert zoomLevel() = log2(scale/1200)*2 + 11
   const scale = 1200 * Math.pow(2, (z - 11) / 2);
   view = { cx: lon, cy: lat, scale: Math.max(500, Math.min(3_000_000, scale)) };
