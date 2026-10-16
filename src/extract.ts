@@ -17,10 +17,11 @@
  * layer values present so the UI can offer layer selection.
  */
 import type { OSMData, OSMTags, OSMWay } from "./osm-pbf";
-import type { Q, AreaFeature, LineFeature, KerbFeature, KerbWayFeature } from "./features";
+import type { Q, AreaFeature, BuildingFeature, LineFeature, KerbFeature, KerbWayFeature } from "./features";
 
 export interface ExtractResult {
   areas: AreaFeature[];
+  buildings: BuildingFeature[];
   centerlines: LineFeature[];
   footways: LineFeature[];
   crossings: LineFeature[];
@@ -112,6 +113,7 @@ export function extractFeatures(
   onProgress?: (pct: number, msg: string) => void
 ): ExtractResult {
   const areas: AreaFeature[] = [];
+  const buildings: BuildingFeature[] = [];
   const centerlines: LineFeature[] = [];
   const footways: LineFeature[] = [];
   const crossings: LineFeature[] = [];
@@ -144,6 +146,24 @@ export function extractFeatures(
     const tags = way.tags;
     const areaHighway = tags["area:highway"];
     const highway = tags["highway"];
+
+    if (tags["building"] !== undefined && isClosed(way)) {
+      const coords = wayCoords(way);
+      if (coords) {
+        const qc = q(coords);
+        buildings.push({
+          type: "building",
+          id: `w${way.id}`,
+          building: tags["building"] || "yes",
+          name: tags["name"],
+          layer: parseLayer(tags["layer"]),
+          level: parseLevel(tags["level"]),
+          outer: [qc],
+          bbox: bboxOfQ(qc),
+        });
+      }
+      if (!areaHighway) continue;
+    }
 
     if (areaHighway && isClosed(way)) {
       const coords = wayCoords(way);
@@ -253,7 +273,8 @@ export function extractFeatures(
   for (const rel of data.relations) {
     const tags = rel.tags;
     const areaHighway = tags["area:highway"];
-    if (!areaHighway || tags["type"] !== "multipolygon") continue;
+    const buildingTag = tags["building"];
+    if ((!areaHighway && !buildingTag) || tags["type"] !== "multipolygon") continue;
 
     const outerRings: number[][][] = [];
     const holeRings: number[][][] = [];
@@ -273,6 +294,19 @@ export function extractFeatures(
     const all: number[][] = [];
     for (const r of outerRings) all.push(...r);
     for (const r of holeRings) all.push(...r);
+    if (!areaHighway) {
+      buildings.push({
+        type: "building",
+        id: `r${rel.id}`,
+        building: buildingTag || "yes",
+        name: tags["name"],
+        layer: parseLayer(tags["layer"]),
+        level: parseLevel(tags["level"]),
+        outer: outerRings,
+        bbox: bboxOfQ(all),
+      });
+      continue;
+    }
     areas.push({
       type: "area",
       id: `r${rel.id}`,
@@ -376,6 +410,7 @@ export function extractFeatures(
   // collect all layer values
   const layerSet = new Set<number>();
   for (const a of areas) layerSet.add(a.layer);
+  for (const b of buildings) layerSet.add(b.layer);
   for (const c of centerlines) layerSet.add(c.layer);
   for (const f of footways) layerSet.add(f.layer);
   for (const c of crossings) layerSet.add(c.layer);
@@ -385,7 +420,7 @@ export function extractFeatures(
 
   // collect all level values (only features with an explicit level=*)
   const levelSet = new Set<number>();
-  for (const arr of [areas, centerlines, footways, crossings, kerbWays, kerbs]) {
+  for (const arr of [areas, buildings, centerlines, footways, crossings, kerbWays, kerbs]) {
     for (const f of arr) if (f.level !== undefined) levelSet.add(f.level);
   }
   const levels = [...levelSet].sort((a, b) => a - b);
@@ -399,6 +434,7 @@ export function extractFeatures(
     if (b[3] > maxY) maxY = b[3];
   };
   for (const a of areas) expand(a.bbox);
+  for (const b of buildings) expand(b.bbox);
   for (const c of centerlines) expand(c.bbox);
   for (const f of footways) expand(f.bbox);
   for (const c of crossings) expand(c.bbox);
@@ -414,6 +450,7 @@ export function extractFeatures(
 
   return {
     areas,
+    buildings,
     centerlines,
     footways,
     crossings,

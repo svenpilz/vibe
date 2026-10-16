@@ -43,6 +43,20 @@ export interface LineFeature {
   bbox: [number, number, number, number];
 }
 
+export interface BuildingFeature {
+  type: "building";
+  id: string;
+  /** building=* value ("yes" when tag present without a value) */
+  building: string;
+  name?: string;
+  /** OSM layer=* tag (default 0) */
+  layer: number;
+  /** OSM level=* tag (undefined when absent) */
+  level?: number;
+  outer: Q[][][];
+  bbox: [number, number, number, number];
+}
+
 export interface KerbFeature {
   type: "kerb";
   id: string;
@@ -69,10 +83,11 @@ export interface KerbWayFeature {
   bbox: [number, number, number, number];
 }
 
-export type Feature = AreaFeature | LineFeature | KerbFeature | KerbWayFeature;
+export type Feature = AreaFeature | BuildingFeature | LineFeature | KerbFeature | KerbWayFeature;
 
 export interface Dataset {
   areas: AreaFeature[];
+  buildings: BuildingFeature[];
   centerlines: LineFeature[];
   footways: LineFeature[];
   crossings: LineFeature[];

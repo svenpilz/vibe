@@ -1,6 +1,6 @@
 import { buildIndex, queryIndex, type Indexed } from "./src/loader";
 import type { ExtractResult } from "./src/extract";
-import type { AreaFeature, LineFeature, KerbFeature, KerbWayFeature, Dataset, Feature, Q } from "./src/features";
+import type { AreaFeature, BuildingFeature, LineFeature, KerbFeature, KerbWayFeature, Dataset, Feature, Q } from "./src/features";
 import { surfaceColor, normalizeSurface } from "./src/features";
 
 const canvas = document.getElementById("map") as HTMLCanvasElement;
@@ -17,6 +17,7 @@ interface View {
 let view: View = { cx: 10.0, cy: 51.0, scale: 2000 };
 let dataset: Dataset | null = null;
 let areaIndex: Indexed<AreaFeature> | null = null;
+let buildingIndex: Indexed<BuildingFeature> | null = null;
 let lineIndexes: {
   centerlines: Indexed<LineFeature>;
   footways: Indexed<LineFeature>;
@@ -27,6 +28,7 @@ let kerbWayIndex: Indexed<KerbWayFeature> | null = null;
 
 const layers = {
   areas: true,
+  buildings: true,
   centerlines: true,
   footways: true,
   crossings: true,
@@ -184,6 +186,21 @@ function draw() {
       ctx.lineWidth = 4;
       ctx.lineJoin = "round";
       ctx.strokeStyle = ctx.fillStyle as string;
+      ctx.stroke();
+    }
+  }
+
+  // --- building outlines ---
+  if (layers.buildings && buildingIndex) {
+    const bl = queryIndex(buildingIndex, bbox);
+    if (selectedLayer === null) bl.sort((a, b) => layerSortKey(a) - layerSortKey(b));
+    ctx.strokeStyle = "#8a8a94";
+    ctx.lineWidth = 1.5;
+    ctx.lineJoin = "round";
+    for (const b of bl) {
+      if (!layerVisible(b)) continue;
+      ctx.beginPath();
+      for (const ring of b.outer) drawRing(ring, true);
       ctx.stroke();
     }
   }
@@ -435,7 +452,7 @@ canvas.addEventListener("click", (e) => {
   showInfo(feature);
 });
 
-function pickFeature(px: number, py: number, bbox: [number, number, number, number]): (AreaFeature | LineFeature | KerbFeature | KerbWayFeature) | null {
+function pickFeature(px: number, py: number, bbox: [number, number, number, number]): (AreaFeature | BuildingFeature | LineFeature | KerbFeature | KerbWayFeature) | null {
   const tol = 6;
   const lon = view.cx + (((px - canvas.width / 2) / R()) * 180) / Math.PI;
   const mercC = mercY(view.cy) - (py - canvas.height / 2) / R();
@@ -461,6 +478,19 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
     }
   }
 
+  // buildings: outline hit (point-in-polygon)
+  if (layers.buildings && buildingIndex) {
+    const bHits = queryIndex(buildingIndex, [lonQ, latQ, lonQ, latQ])
+      .filter((b) => layerVisible(b));
+    if (selectedLayer === null && bHits.length > 1) {
+      bHits.sort((a, b) => layerSortKey(b) - layerSortKey(a));
+    }
+    for (const b of bHits) {
+      for (const ring of b.outer) {
+        if (pointInRingQ(lonQ, latQ, ring)) return b;
+      }
+    }
+  }
   // kerb nodes (points, closest)
   if (layers.kerbs && kerbGrid) {
     let best: KerbFeature | null = null;
@@ -542,7 +572,7 @@ function distToSegQ(px: number, py: number, a: Q[], b: Q[]): number {
 }
 
 // ---------------- info panel ----------------
-function showInfo(f: AreaFeature | LineFeature | KerbFeature | KerbWayFeature | null) {
+function showInfo(f: AreaFeature | BuildingFeature | LineFeature | KerbFeature | KerbWayFeature | null) {
   if (!f) { infoEl.style.display = "none"; return; }
   const rows: [string, string][] = [];
   const push = (k: string, v?: string | number) => {
@@ -552,6 +582,12 @@ function showInfo(f: AreaFeature | LineFeature | KerbFeature | KerbWayFeature | 
 
   push("layer", feature.layer);
   push("level", feature.level);
+  if (f.type === "building") {
+    rows.push(["feature", `building (${f.id})`]);
+    push("building", f.building);
+    push("name", f.name);
+    return;
+  }
   if (f.type === "area") {
     rows.push(["feature", `area:highway (${f.id})`]);
     push("highway (area)", f.highway);
@@ -621,6 +657,7 @@ function viewportValues(): { layers: Set<number>; levels: Set<number> } {
   };
   if (dataset) {
     if (areaIndex) for (const a of queryIndex(areaIndex, bbox)) add(a);
+    if (buildingIndex) for (const b of queryIndex(buildingIndex, bbox)) add(b);
     if (lineIndexes) {
       for (const c of queryIndex(lineIndexes.centerlines, bbox)) add(c);
       for (const f of queryIndex(lineIndexes.footways, bbox)) add(f);
@@ -716,6 +753,7 @@ function buildLayerPanel() {
 
   const defs: { key: keyof typeof layers; label: string; swatch: string }[] = [
     { key: "areas", label: "highway areas (surface fill)", swatch: "#6d6055" },
+    { key: "buildings", label: "building outlines", swatch: "#8a8a94" },
     { key: "centerlines", label: "centerlines (surface)", swatch: "#7a6a52" },
     { key: "footways", label: "footways / sidewalks", swatch: "#cfcfd6" },
     { key: "crossings", label: "crossings (markings)", swatch: "#e8e8e8" },
@@ -760,6 +798,7 @@ function countFor(key: keyof typeof layers): string {
   if (!dataset) return "";
   switch (key) {
     case "areas": return dataset.areas.length.toLocaleString();
+    case "buildings": return dataset.buildings.length.toLocaleString();
     case "centerlines": return dataset.centerlines.length.toLocaleString();
     case "footways": return dataset.footways.length.toLocaleString();
     case "crossings": return dataset.crossings.length.toLocaleString();
@@ -850,8 +889,10 @@ function ingestResult(result: ExtractResult, name: string) {
   osmLevels = result.levels ?? [];
   selectedLayer = null;
   selectedLevel = null;
+  buildingIndex = buildIndex(result.buildings);
   dataset = {
     areas: result.areas,
+    buildings: result.buildings,
     centerlines: result.centerlines,
     footways: result.footways,
     crossings: result.crossings,
@@ -872,7 +913,7 @@ function ingestResult(result: ExtractResult, name: string) {
     if (!arr) kerbGrid.set(key, (arr = []));
     arr.push(k);
   }
-  const total = dataset.areas.length + dataset.centerlines.length + dataset.footways.length +
+  const total = dataset.areas.length + dataset.buildings.length + dataset.centerlines.length + dataset.footways.length +
     dataset.crossings.length + dataset.kerbs.length + dataset.kerbWays.length;
   if (total === 0) {
     statusEl.textContent = `no micromapping features found in ${name} (try a region with area:highway mapping)`;
@@ -917,6 +958,7 @@ window.addEventListener("drop", (e) => {
 (window as any).__state = () => ({
   hasDataset: dataset !== null,
   areas: dataset?.areas.length ?? 0,
+  buildings: dataset?.buildings.length ?? 0,
   footways: dataset?.footways.length ?? 0,
   osmLayers,
   selectedLayer,
