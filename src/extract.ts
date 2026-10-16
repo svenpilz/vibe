@@ -112,11 +112,24 @@ function bboxOverlap(
   return a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
 }
 
-/** whether a parking lane exists: any parking:lane value except no/none */
+/**
+ * Whether an on-carriageway parking lane consumes road width. Two tagging
+ * schemes: the old parking:lane:left/right/both (any value except no/none)
+ * and the newer parking:left/right/both, where only the value "lane" marks
+ * parking on the carriageway (street_side/on_kerb/shoulder are off-road).
+ */
 function hasParkingLane(kind: string | undefined): boolean {
   if (kind === undefined) return false;
   const k = kind.split(";")[0];
   return k !== "no" && k !== "none";
+}
+
+function parkingOnCarriageway(side: string, tags: OSMTags): boolean {
+  // old scheme: parking:lane:left/right/both
+  if (hasParkingLane(tags[`parking:lane:${side}`])) return true;
+  // new scheme: parking:left/right/both = lane means on the carriageway
+  const p = tags[`parking:${side}`];
+  return p === "lane";
 }
 
 function parseLanes(v: string | undefined): number | undefined {
@@ -328,8 +341,8 @@ export function extractFeatures(
           surfaceColour: tags["surface:colour"],
           width: Number.isFinite(widthNum as number) ? widthNum : undefined,
           lanes: parseLanes(tags["lanes"]),
-          parkingLeft: hasParkingLane(tags["parking:lane:left"]) || hasParkingLane(tags["parking:lane:both"]),
-          parkingRight: hasParkingLane(tags["parking:lane:right"]) || hasParkingLane(tags["parking:lane:both"]),
+          parkingLeft: parkingOnCarriageway("left", tags) || parkingOnCarriageway("both", tags),
+          parkingRight: parkingOnCarriageway("right", tags) || parkingOnCarriageway("both", tags),
           oneway: tags["oneway"] === "yes" || tags["oneway"] === "-1" || tags["junction"] === "roundabout" || tags["junction"] === "circular",
           lanesFwd: parseLanes(tags["lanes:forward"])
             ?? (parseLanes(tags["lanes:backward"]) !== undefined

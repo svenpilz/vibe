@@ -580,6 +580,26 @@ function drawLaneMarkings(cl: LineFeature) {
   // parking lanes virtually subtracted (lane 1 starts at the left edge)
   const leftM = cl.laneLeftM ?? (total * cl.laneW!) / 2;
 
+  // draw a boundary between a parking unit and the adjacent traffic lane so
+  // all width units are visible (parking occupies the outer strips)
+  const boundaryOffsets: number[] = [];
+  if (cl.parkingLeft) boundaryOffsets.push(-leftM);
+  if (cl.parkingRight) boundaryOffsets.push(-leftM + total * cl.laneW!);
+  for (const offPx of boundaryOffsets.map((o) => o * px)) {
+    const offset: [number, number][] = base.map((p, i) => [
+      p[0] + normals[i][0] * offPx,
+      p[1] + normals[i][1] * offPx,
+    ]);
+    const smooth = chaikin(offset, 2);
+    ctx.strokeStyle = "#e8e8e8";
+    ctx.setLineDash([Math.max(3, 1.2 * px), Math.max(2, 1.0 * px)]);
+    ctx.beginPath();
+    ctx.moveTo(smooth[0][0], smooth[0][1]);
+    for (let i = 1; i < smooth.length; i++) ctx.lineTo(smooth[i][0], smooth[i][1]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
   for (let k = 1; k < total; k++) {
     // distance from the centerline, negative = left side
     const offPx = (-leftM + k * cl.laneW!) * px;
