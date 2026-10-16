@@ -315,9 +315,13 @@ function normalizeSurfaceKey(surface: string): string {
 
 const patternCache = new Map<string, CanvasPattern | null>();
 
+/** patterns only render from zoom 25 — below that the flat color reads better */
+const PATTERN_ZOOM = 25;
+
 /** stone pattern for a surface at the current zoom, cached per surface+px */
 function stonePattern(surface: string | undefined): CanvasPattern | null {
   if (!surface) return null;
+  if (zoomLevel() < PATTERN_ZOOM) return null;
   const key = `${normalizeSurfaceKey(surface)}@${pxPerMeter().toFixed(3)}`;
   if (patternCache.has(key)) return patternCache.get(key)!;
   const pat = stonePatternTile(surface, pxPerMeter());
@@ -327,6 +331,7 @@ function stonePattern(surface: string | undefined): CanvasPattern | null {
 
 /** grass texture at the current zoom, cached per scale */
 function grassPattern(): CanvasPattern | null {
+  if (zoomLevel() < PATTERN_ZOOM) return null;
   const key = `grass@${pxPerMeter().toFixed(3)}`;
   if (patternCache.has(key)) return patternCache.get(key)!;
   const pat = grassPatternTile(pxPerMeter());
