@@ -384,8 +384,10 @@ export function extractFeatures(
   }
   void inherited;
 
-  // drop centerlines that are already represented by a corresponding area
-  // (same highway type, same layer): the area fill replaces the line.
+  // drop centerlines whose midpoint is covered by any same-layer highway
+  // area: the area fill replaces the line. Without this, e.g. a red-surfaced
+  // cycleway segment crossing a residential area paints over the area fill
+  // even though the area (asphalt) is the surface you see there.
   onProgress?.(85, "filtering centerlines covered by areas…");
   const areaGrid2 = buildAreaIndex(areas);
   const keptCenterlines: LineFeature[] = [];
@@ -395,7 +397,6 @@ export function extractFeatures(
     const candidates = queryAreas(areaGrid2, cl.bbox);
     for (const area of candidates) {
       if (area.layer !== cl.layer) continue;
-      if (!highwayTypesCompatible(cl.highway, area.highway)) continue;
       if (!bboxOverlap(area.bbox, cl.bbox)) continue;
       if (pointInAreaQ(mid, area)) { covered = true; break; }
     }
