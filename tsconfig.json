@@ -14,5 +14,5 @@
     "allowImportingTsExtensions": true,
     "noUnusedLocals": false
   },
-  "include": ["src", "scripts", "tests", "vite.config.ts"]
+  "include": ["src", "main.ts", "tests", "vite.config.ts"]
 }
