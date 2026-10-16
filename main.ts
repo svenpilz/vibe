@@ -131,6 +131,20 @@ function crossingStripeColor(markings?: string): string | null {
   return null;
 }
 
+/**
+* A feature's paint colour: an explicit surface:colour (or colour) tag wins
+* over the palette derived from the surface type. Invalid CSS colour values
+* fall back to the surface color.
+*/
+function featureColor(surface: string | undefined, colour: string | undefined): string {
+  if (colour) {
+    ctx.fillStyle = "#000";
+    ctx.fillStyle = colour;
+    if (ctx.fillStyle !== "#000000") return ctx.fillStyle as string;
+  }
+  return surfaceColor(normalizeSurface(surface) ?? undefined);
+}
+
 function draw() {
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth, h = canvas.clientHeight;
@@ -150,8 +164,7 @@ function draw() {
     if (selectedLayer === null) visibleAreas.sort((a, b) => layerSortKey(a) - layerSortKey(b));
     for (const area of visibleAreas) {
       if (!layerVisible(area)) continue;
-      const fill = surfaceColor(normalizeSurface(area.surface) ?? undefined);
-      ctx.fillStyle = area.surface ? fill : "#4a4a50";
+      ctx.fillStyle = area.surface || area.surfaceColour ? featureColor(area.surface, area.surfaceColour) : "#4a4a50";
       ctx.beginPath();
       for (const ring of area.outer) drawRing(ring, true);
       if (area.holes.length > 0) {
@@ -179,7 +192,7 @@ function draw() {
     if (selectedLayer === null) cls.sort((a, b) => layerSortKey(a) - layerSortKey(b));
     for (const cl of cls) {
       if (!layerVisible(cl)) continue;
-      ctx.strokeStyle = surfaceColor(normalizeSurface(cl.surface) ?? undefined);
+      ctx.strokeStyle = featureColor(cl.surface, cl.surfaceColour);
       ctx.lineWidth = Math.max(1, (cl.width ?? 1.5) * px * 0.5);
       ctx.globalAlpha = 0.9;
       ctx.beginPath();
@@ -196,7 +209,7 @@ function draw() {
     if (selectedLayer === null) fws.sort((a, b) => layerSortKey(a) - layerSortKey(b));
     for (const fw of fws) {
       if (!layerVisible(fw)) continue;
-      ctx.strokeStyle = "#cfcfd6";
+      ctx.strokeStyle = fw.surface || fw.surfaceColour ? featureColor(fw.surface, fw.surfaceColour) : "#cfcfd6";
       ctx.lineWidth = Math.max(0.8, (fw.width ?? 1.8) * px * 0.3);
       ctx.beginPath();
       strokePolyline(fw.coords);
