@@ -202,6 +202,89 @@ function featureColor(surface: string | undefined, colour: string | undefined): 
   return surfaceColor(normalizeSurface(surface) ?? undefined);
 }
 
+// ---------------- surface patterns ----------------
+
+/** deterministic pseudo-random from an integer seed */
+function rand(seed: number): number {
+  let t = (seed + 0x6d2b79f5) | 0;
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+
+/** stone tile pattern in a greyish tone; null for plain surfaces */
+function stonePatternTile(surface: string, px: number): CanvasPattern | null {
+  const s = normalizeSurfaceKey(surface);
+  if (s !== "paving_stones" && s !== "sett" && s !== "cobblestone") return null;
+  const isSett = s !== "paving_stones";
+  // stone size in meters: paving stones ~30 cm (regular, tight rows),
+  // sett ~12 cm (small, less regular, running bond)
+  const stoneM = isSett ? 0.12 : 0.3;
+  let size = Math.round(stoneM * px);
+  if (size < 8) return null; // too small to read: fall back to solid
+  size = Math.min(size, 256);
+  const gap = Math.max(1, Math.round(size * 0.08));
+  const tile = document.createElement("canvas");
+  // 2x2 stones per tile for paving_stones (regular grid), running bond for sett
+  const cell = size + gap;
+  tile.width = cell * 2;
+  tile.height = cell * 2;
+  const tctx = tile.getContext("2d")!;
+  const base = isSett ? 110 : 128; // greyish tone
+  tctx.fillStyle = `rgb(${base - 22},${base - 22},${base - 22})`; // gap/joint color (darker)
+  tctx.fillRect(0, 0, tile.width, tile.height);
+  const drawStone = (x: number, y: number, w: number, h: number, seed: number): void => {
+    // per-stone brightness variation, more irregular for sett
+    const jitter = isSett ? 22 : 9;
+    const v = base + Math.round((rand(seed) - 0.5) * jitter * 2);
+    tctx.fillStyle = `rgb(${v},${v},${v + (isSett ? -4 : 0)})`;
+    let px0 = x, py0 = y, pw = w, ph = h;
+    if (isSett) {
+      // irregular placement/size for sett
+      px0 += (rand(seed + 1) - 0.5) * gap * 2;
+      py0 += (rand(seed + 2) - 0.5) * gap * 2;
+      pw *= 0.86 + rand(seed + 3) * 0.26;
+      ph *= 0.86 + rand(seed + 4) * 0.26;
+    }
+    tctx.fillRect(Math.round(px0), Math.round(py0), Math.max(2, Math.round(pw)), Math.max(2, Math.round(ph)));
+  };
+  if (isSett) {
+    // running bond: offset every other row by half a stone
+    for (let ry = 0; ry < 2; ry++) {
+      for (let rx = -1; rx < 3; rx++) {
+        const x = rx * cell + (ry % 2 === 1 ? cell / 2 : 0);
+        drawStone(x + gap / 2, ry * cell + gap / 2, size, size, ry * 31 + rx * 7 + 13);
+      }
+    }
+  } else {
+    // regular grid of larger stones with slight per-stone variance
+    for (let ry = 0; ry < 2; ry++) {
+      for (let rx = 0; rx < 2; rx++) {
+        drawStone(rx * cell + gap / 2, ry * cell + gap / 2, size, size, ry * 17 + rx * 5 + 3);
+      }
+    }
+  }
+  const pat = ctx.createPattern(tile, "repeat");
+  return pat;
+}
+
+function normalizeSurfaceKey(surface: string): string {
+  const base = surface.split(";")[0].split(":")[0];
+  return base;
+}
+
+const patternCache = new Map<string, CanvasPattern | null>();
+
+/** stone pattern for a surface at the current zoom, cached per surface+px */
+function stonePattern(surface: string | undefined): CanvasPattern | null {
+  if (!surface) return null;
+  const key = `${normalizeSurfaceKey(surface)}@${pxPerMeter().toFixed(3)}`;
+  if (patternCache.has(key)) return patternCache.get(key)!;
+  const pat = stonePatternTile(surface, pxPerMeter());
+  patternCache.set(key, pat);
+  return pat;
+}
+
 function draw() {
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth, h = canvas.clientHeight;
@@ -256,7 +339,8 @@ function draw() {
     // --- highway areas (surface fill) ---
     for (const area of areas) {
       if (!onLayer(area) || !areaLodVisible(area)) continue;
-      ctx.fillStyle = area.surface || area.surfaceColour ? featureColor(area.surface, area.surfaceColour) : "#4a4a50";
+      const pat = !area.surfaceColour ? stonePattern(area.surface) : null;
+      ctx.fillStyle = pat ?? (area.surface || area.surfaceColour ? featureColor(area.surface, area.surfaceColour) : "#4a4a50");
       ctx.beginPath();
       for (const ring of area.outer) drawRing(ring, true);
       if (area.holes.length > 0) {
@@ -1129,6 +1213,7 @@ function loadPbfFile(file: File) {
 }
 
 function ingestResult(result: ExtractResult, name: string) {
+  patternCache.clear();
   const t0 = performance.now();
   osmLayers = result.layers ?? [];
   osmLevels = result.levels ?? [];
