@@ -33,17 +33,26 @@ const layers = {
   kerbs: true,
 };
 
-/** OSM layer=* selection: null = highest layer present, number = that layer only */
+/**
+ * OSM layer=* handling. Two modes:
+ *  - bird's eye (selectedLayer === null, the default): no layer filter; each
+ *    feature class is drawn in ascending layer order, so at any location the
+ *    locally highest layer paints over lower ones and is the one you see —
+ *    like looking down on overlapping bridges/tunnels.
+ *  - explicit selection: only features on that exact layer are drawn.
+ */
 let osmLayers: number[] = [];
 let selectedLayer: number | null = null;
 
-function activeLayer(): number {
-  if (selectedLayer !== null) return selectedLayer;
-  return osmLayers.length ? osmLayers[osmLayers.length - 1] : 0;
+/** whether a feature is drawn at all under the current selection */
+function layerVisible(f: { layer?: number }): boolean {
+  if (selectedLayer === null) return true;
+  return (f.layer ?? 0) === selectedLayer;
 }
 
-function sameLayer(f: { layer?: number }): boolean {
-  return (f.layer ?? 0) === activeLayer();
+/** sort key: bird's eye draws ascending layers first */
+function layerSortKey(f: { layer?: number }): number {
+  return f.layer ?? 0;
 }
 
 // ---------------- projection ----------------
@@ -136,10 +145,11 @@ function draw() {
   const bbox = viewBboxQ();
   const visibleAreas = layers.areas && areaIndex ? queryIndex(areaIndex, bbox) : [];
 
-  // --- areas ---
+  // --- areas (bird's eye: ascending layer order, highest paints on top) ---
   if (layers.areas && areaIndex) {
+    if (selectedLayer === null) visibleAreas.sort((a, b) => layerSortKey(a) - layerSortKey(b));
     for (const area of visibleAreas) {
-      if (!sameLayer(area)) continue;
+      if (!layerVisible(area)) continue;
       const fill = surfaceColor(normalizeSurface(area.surface) ?? undefined);
       ctx.fillStyle = area.surface ? fill : "#4a4a50";
       ctx.beginPath();
@@ -165,8 +175,10 @@ function draw() {
   // --- centerlines (surface detail) ---
   if (layers.centerlines && lineIndexes) {
     const px = pxPerMeter();
-    for (const cl of queryIndex(lineIndexes.centerlines, bbox)) {
-      if (!sameLayer(cl)) continue;
+    const cls = queryIndex(lineIndexes.centerlines, bbox);
+    if (selectedLayer === null) cls.sort((a, b) => layerSortKey(a) - layerSortKey(b));
+    for (const cl of cls) {
+      if (!layerVisible(cl)) continue;
       ctx.strokeStyle = surfaceColor(normalizeSurface(cl.surface) ?? undefined);
       ctx.lineWidth = Math.max(1, (cl.width ?? 1.5) * px * 0.5);
       ctx.globalAlpha = 0.9;
@@ -180,8 +192,10 @@ function draw() {
   // --- footways ---
   if (layers.footways && lineIndexes) {
     const px = pxPerMeter();
-    for (const fw of queryIndex(lineIndexes.footways, bbox)) {
-      if (!sameLayer(fw)) continue;
+    const fws = queryIndex(lineIndexes.footways, bbox);
+    if (selectedLayer === null) fws.sort((a, b) => layerSortKey(a) - layerSortKey(b));
+    for (const fw of fws) {
+      if (!layerVisible(fw)) continue;
       ctx.strokeStyle = "#cfcfd6";
       ctx.lineWidth = Math.max(0.8, (fw.width ?? 1.8) * px * 0.3);
       ctx.beginPath();
@@ -193,8 +207,10 @@ function draw() {
   // --- crossings with markings ---
   if (layers.crossings && lineIndexes) {
     const px = pxPerMeter();
-    for (const cr of queryIndex(lineIndexes.crossings, bbox)) {
-      if (!sameLayer(cr)) continue;
+    const crs = queryIndex(lineIndexes.crossings, bbox);
+    if (selectedLayer === null) crs.sort((a, b) => layerSortKey(a) - layerSortKey(b));
+    for (const cr of crs) {
+      if (!layerVisible(cr)) continue;
       const stripe = crossingStripeColor(cr.crossingMarkings);
       const widthM = cr.width ?? 3;
       ctx.lineCap = "butt";
@@ -235,8 +251,10 @@ function draw() {
   if (layers.kerbs && kerbWayIndex) {
     const px = pxPerMeter();
     ctx.lineCap = "round";
-    for (const kw of queryIndex(kerbWayIndex, bbox)) {
-      if (!sameLayer(kw)) continue;
+    const kws = queryIndex(kerbWayIndex, bbox);
+    if (selectedLayer === null) kws.sort((a, b) => layerSortKey(a) - layerSortKey(b));
+    for (const kw of kws) {
+      if (!layerVisible(kw)) continue;
       ctx.strokeStyle = kerbColor(kw.kerb, kw.tactilePaving);
       ctx.lineWidth = Math.max(1, 0.3 * px);
       ctx.beginPath();
@@ -253,8 +271,9 @@ function draw() {
     for (const cell of cells) {
       const arr = kerbGrid.get(cell);
       if (!arr) continue;
+      arr.sort((a, b) => layerSortKey(a) - layerSortKey(b));
       for (const k of arr) {
-        if (!sameLayer(k)) continue;
+        if (!layerVisible(k)) continue;
         const x = lonToX(k.lon / Q), y = latToY(k.lat / Q);
         if (x < -10 || y < -10 || x > w + 10 || y > h + 10) continue;
         ctx.beginPath();
@@ -362,8 +381,13 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
 
   // areas: point-in-polygon
   if (layers.areas && areaIndex) {
-    for (const area of queryIndex(areaIndex, [lonQ, latQ, lonQ, latQ])) {
-      if (!sameLayer(area)) continue;
+    const areaHits = queryIndex(areaIndex, [lonQ, latQ, lonQ, latQ])
+      .filter((a) => layerVisible(a));
+    // bird's eye: prefer the locally highest layer at the click point
+    if (selectedLayer === null && areaHits.length > 1) {
+      areaHits.sort((a, b) => layerSortKey(b) - layerSortKey(a));
+    }
+    for (const area of areaHits) {
       let inOuter = false;
       for (const ring of area.outer) if (pointInRingQ(lonQ, latQ, ring)) { inOuter = true; break; }
       if (!inOuter) continue;
@@ -384,7 +408,7 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
         const arr = kerbGrid.get(x * 100000 + y);
         if (!arr) continue;
         for (const k of arr) {
-          if (!sameLayer(k)) continue;
+          if (!layerVisible(k)) continue;
           const d = (k.lon - lonQ) ** 2 + (k.lat - latQ) ** 2;
           if (d < bestD) { bestD = d; best = k; }
         }
@@ -396,8 +420,10 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
   // kerb ways: nearest segment within tolerance
   if (layers.kerbs && kerbWayIndex) {
     let best: { d: number; f: KerbWayFeature | null } = { d: tolQ * tolQ * 4, f: null };
-    for (const kw of queryIndex(kerbWayIndex, [lonQ - tolQ * 6, latQ - tolQ * 6, lonQ + tolQ * 6, latQ + tolQ * 6])) {
-      if (!sameLayer(kw)) continue;
+    const kwHits = queryIndex(kerbWayIndex, [lonQ - tolQ * 6, latQ - tolQ * 6, lonQ + tolQ * 6, latQ + tolQ * 6])
+      .filter((kw) => layerVisible(kw));
+    if (selectedLayer === null && kwHits.length > 1) kwHits.sort((a, b) => layerSortKey(b) - layerSortKey(a));
+    for (const kw of kwHits) {
       for (let i = 1; i < kw.coords.length; i++) {
         const d = distToSegQ(lonQ, latQ, kw.coords[i - 1], kw.coords[i]);
         if (d < best.d) { best.d = d; best.f = kw; }
@@ -418,8 +444,10 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
     const order: ("crossings" | "footways" | "centerlines")[] = ["crossings", "footways", "centerlines"];
     for (const kind of order) {
       if (!layers[kind]) continue;
-      for (const f of queryIndex(lineIndexes[kind], [lonQ - tolQ * 6, latQ - tolQ * 6, lonQ + tolQ * 6, latQ + tolQ * 6])) {
-        if (!sameLayer(f)) continue;
+      const hits = queryIndex(lineIndexes[kind], [lonQ - tolQ * 6, latQ - tolQ * 6, lonQ + tolQ * 6, latQ + tolQ * 6])
+        .filter((f) => layerVisible(f));
+      if (selectedLayer === null) hits.sort((a, b) => layerSortKey(b) - layerSortKey(a));
+      for (const f of hits) {
         if (f.bbox[0] > lonQ + tolQ * 6 || f.bbox[2] < lonQ - tolQ * 6) continue;
         if (f.bbox[1] > latQ + tolQ * 6 || f.bbox[3] < latQ - tolQ * 6) continue;
         check(f, best);
@@ -484,7 +512,6 @@ function showInfo(f: AreaFeature | LineFeature | KerbFeature | KerbWayFeature | 
     push("lit", f.lit);
     push("name", f.name);
   }
-  push("layer", (f as { layer?: number }).layer);
 
   infoEl.innerHTML = `<span class="close" onclick="this.parentElement.style.display='none'">✕</span>` +
     rows.map(([k, v]) => `<div class="tag"><span class="k">${k}</span><span class="v">${escapeHtml(v)}</span></div>`).join("");
@@ -507,16 +534,21 @@ function buildLayerPanel() {
     sel.style.cssText =
       "width:100%;margin-bottom:10px;padding:4px 6px;border-radius:6px;" +
       "background:#2a2a30;color:#eee;border:1px solid #444;font-size:12px;";
+    const def = document.createElement("option");
+    def.value = "";
+    def.textContent = "all layers (highest visible)";
+    sel.appendChild(def);
     for (const l of osmLayers.slice().reverse()) {
       const opt = document.createElement("option");
       opt.value = String(l);
-      opt.textContent = `layer ${l}`;
+      opt.textContent = `layer ${l} only`;
       sel.appendChild(opt);
     }
-    // default selection: highest layer (first in reversed order)
-    sel.value = String(activeLayer());
+    // default: bird's eye (no explicit layer)
+    sel.value = "";
     sel.addEventListener("change", () => {
-      selectedLayer = parseInt((sel as HTMLSelectElement).value, 10);
+      const v = (sel as HTMLSelectElement).value;
+      selectedLayer = v === "" ? null : parseInt(v, 10);
       requestDraw();
     });
     wrap.appendChild(sel);
@@ -713,8 +745,16 @@ window.addEventListener("drop", (e) => {
   if (f) loadPbfFile(f);
 });
 
-// expose view control for tests/tools
+// expose view control + picking probe for tests/tools
 (window as any).__setView = (cx: number, cy: number, scale: number) => {
   view = { cx, cy, scale };
   requestDraw();
 };
+(window as any).__pick = (px: number, py: number) => pickFeature(px, py, viewBboxQ());
+(window as any).__state = () => ({
+  hasDataset: dataset !== null,
+  areas: dataset?.areas.length ?? 0,
+  footways: dataset?.footways.length ?? 0,
+  osmLayers,
+  selectedLayer,
+});
