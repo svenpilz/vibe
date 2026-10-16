@@ -329,11 +329,20 @@ export function extractFeatures(
       const coords = wayCoords(way);
       if (!coords) continue;
       const qc = q(coords);
+      // kerb nodes on this way locally override the kerb type
+      const overrides: { idx: number; kerb: string }[] = [];
+      for (let ri = 0; ri < way.refs.length; ri++) {
+        const nt = data.nodeTags.get(way.refs[ri]);
+        if (nt && (nt["kerb"] !== undefined || nt["barrier"] === "kerb")) {
+          overrides.push({ idx: ri, kerb: nt["kerb"] ?? nt["barrier"] });
+        }
+      }
       kerbWays.push({
         type: "kerbway",
         id: `w${way.id}`,
         kerb: tags["kerb"] ?? tags["barrier"],
         tactilePaving: tags["tactile_paving"],
+        overrides: overrides.length > 0 ? overrides : undefined,
         layer: parseLayer(tags["layer"]),
       level: parseLevel(tags["level"]),
         coords: qc,

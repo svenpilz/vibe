@@ -533,27 +533,126 @@ function draw() {
     }
     ctx.lineCap = "round";
 
-    // --- kerb ways ---
-    for (const kw of kws) {
-      if (!onLayer(kw)) continue;
-      ctx.strokeStyle = kerbColor(kw.kerb, kw.tactilePaving);
-      ctx.lineWidth = Math.max(1, 0.3 * px);
-      ctx.beginPath();
-      strokePolyline(kw.coords);
-      ctx.stroke();
+    // --- kerb ways: dark edge between sidewalk and road ---
+    drawKerbWays(kws, onLayer, px);
+
+    // standalone kerb nodes (not part of a kerb way) are no longer drawn
+    void kns;
+  }
+}
+
+/** kerb height class of a kerb=* value */
+function kerbClass(kerb: string): "high" | "lowered" | "flush" {
+  const k = kerb.split(";")[0];
+  if (k === "flush" || k === "no") return "flush";
+  if (k === "lowered" || k === "rolled") return "lowered";
+  return "high";
+}
+
+/**
+ * Draw kerb ways as a dark edge between sidewalk and road. The way is
+ * oriented with the lower end (road) on its right side.
+ *  - high: solid dark line + small shadow on the road side
+ *  - lowered: gradient across the kerb width (bright sidewalk side fading
+ *    to dark road side) so it appears 3D-shaped
+ *  - flush: not drawn
+ * Kerb nodes on the way locally override the type within ~1 m.
+ */
+function drawKerbWays(
+  kws: KerbWayFeature[],
+  onLayer: (f: { layer?: number; level?: number }) => boolean,
+  px: number
+): void {
+  const kerbW = Math.max(1.5, 0.18 * px); // ~18 cm kerb width
+  const shadowW = kerbW * 0.3;
+  // darker than paving-stone grey (#808080): the visual break
+  const dark = "#3a3a3e";
+  const bright = "#9a9a9e";
+
+  for (const kw of kws) {
+    if (!onLayer(kw)) continue;
+    const base = kerbClass(kw.kerb);
+
+    // screen coords + per-vertex normals (right side = road)
+    const pts: [number, number][] = kw.coords.map((c) => [lonToX(c[0] / Q), latToY(c[1] / Q)]);
+    if (pts.length < 2) continue;
+    const normals: [number, number][] = [];
+    for (let i = 0; i < pts.length; i++) {
+      let nx = 0, ny = 0;
+      if (i > 0) {
+        const dx = pts[i][0] - pts[i - 1][0], dy = pts[i][1] - pts[i - 1][1];
+        const l = Math.hypot(dx, dy);
+        if (l > 0) { nx += dy / l; ny += -dx / l; } // right normal = (dy,-dx)
+      }
+      if (i < pts.length - 1) {
+        const dx = pts[i + 1][0] - pts[i][0], dy = pts[i + 1][1] - pts[i][1];
+        const l = Math.hypot(dx, dy);
+        if (l > 0) { nx += dy / l; ny += -dx / l; }
+      }
+      const l = Math.hypot(nx, ny);
+      normals.push(l > 0 ? [nx / l, ny / l] : [0, 0]);
     }
 
-    // --- kerb nodes ---
-    const r = Math.max(1.5, Math.min(10, 0.6 * px));
-    for (const k of kns) {
-      if (!onLayer(k)) continue;
-      const x = lonToX(k.lon / Q), y = latToY(k.lat / Q);
-      if (x < -10 || y < -10 || x > w + 10 || y > h + 10) continue;
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fillStyle = kerbColor(k.kerb, k.tactilePaving);
-      ctx.fill();
+    // local type per vertex: way's base type, overridden within ~1 m of a
+    // kerb node on the way
+    const types: ("high" | "lowered" | "flush")[] = pts.map(() => base);
+    if (kw.overrides && kw.overrides.length > 0) {
+      const rPx = Math.max(1, px); // 1 m radius
+      for (const o of kw.overrides) {
+        const cls = kerbClass(o.kerb);
+        if (o.idx >= pts.length) continue;
+        const ox = pts[o.idx][0], oy = pts[o.idx][1];
+        for (let i = 0; i < pts.length; i++) {
+          if (Math.hypot(pts[i][0] - ox, pts[i][1] - oy) <= rPx) types[i] = cls;
+        }
+      }
     }
+
+    // draw segment by segment, grouped by local type
+    ctx.lineCap = "butt";
+    ctx.lineJoin = "round";
+    for (let i = 1; i < pts.length; i++) {
+      const t = types[i];
+      const tPrev = types[i - 1];
+      const a = pts[i - 1], b = pts[i];
+      const na = normals[i - 1], nb = normals[i];
+      if (t === "flush" && tPrev === "flush") continue;
+
+      if (t === "high" || tPrev === "high") {
+        // solid dark kerb line
+        ctx.strokeStyle = dark;
+        ctx.lineWidth = kerbW;
+        ctx.beginPath();
+        ctx.moveTo(a[0], a[1]);
+        ctx.lineTo(b[0], b[1]);
+        ctx.stroke();
+        // shadow on the road side (right)
+        ctx.strokeStyle = "rgba(0,0,0,0.28)";
+        ctx.lineWidth = kerbW;
+        ctx.beginPath();
+        ctx.moveTo(a[0] + na[0] * (kerbW + shadowW) / 2, a[1] + na[1] * (kerbW + shadowW) / 2);
+        ctx.lineTo(b[0] + nb[0] * (kerbW + shadowW) / 2, b[1] + nb[1] * (kerbW + shadowW) / 2);
+        ctx.stroke();
+      } else if (t === "lowered" || tPrev === "lowered") {
+        // gradient across the kerb width: bright (sidewalk, left) fading
+        // to dark (road, right) — appears 3D-shaped
+        const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+        const nmx = (na[0] + nb[0]) / 2, nmy = (na[1] + nb[1]) / 2;
+        const grad = ctx.createLinearGradient(
+          mx - nmx * kerbW / 2, my - nmy * kerbW / 2,
+          mx + nmx * kerbW / 2, my + nmy * kerbW / 2
+        );
+        grad.addColorStop(0, bright);
+        grad.addColorStop(1, dark);
+        ctx.strokeStyle = grad;
+        ctx.lineWidth = kerbW;
+        ctx.beginPath();
+        ctx.moveTo(a[0], a[1]);
+        ctx.lineTo(b[0], b[1]);
+        ctx.stroke();
+      }
+    }
+    ctx.lineCap = "round";
   }
 }
 

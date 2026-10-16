@@ -107,6 +107,8 @@ export interface KerbWayFeature {
   id: string;
   kerb: string;
   tactilePaving?: string;
+  /** kerb nodes on this way: vertex index + kerb type (local override, ~1 m radius) */
+  overrides?: { idx: number; kerb: string }[];
   /** OSM layer=* tag (default 0) */
   layer: number;
   /** OSM level=* tag (undefined when absent) */
