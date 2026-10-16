@@ -16,6 +16,8 @@ export interface AreaFeature {
   lit?: string;
   /** OSM layer=* tag (default 0) */
   layer: number;
+  /** OSM level=* tag (undefined when absent) */
+  level?: number;
   outer: Q[][][];
   holes: Q[][][];
   bbox: [number, number, number, number];
@@ -35,6 +37,8 @@ export interface LineFeature {
   name?: string;
   /** OSM layer=* tag (default 0) */
   layer: number;
+  /** OSM level=* tag (undefined when absent) */
+  level?: number;
   coords: Q[][];
   bbox: [number, number, number, number];
 }
@@ -46,6 +50,8 @@ export interface KerbFeature {
   tactilePaving?: string;
   /** OSM layer=* tag (default 0) */
   layer: number;
+  /** OSM level=* tag (undefined when absent) */
+  level?: number;
   lat: Q;
   lon: Q;
 }
@@ -57,6 +63,8 @@ export interface KerbWayFeature {
   tactilePaving?: string;
   /** OSM layer=* tag (default 0) */
   layer: number;
+  /** OSM level=* tag (undefined when absent) */
+  level?: number;
   coords: Q[][];
   bbox: [number, number, number, number];
 }

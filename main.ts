@@ -1,6 +1,6 @@
 import { buildIndex, queryIndex, type Indexed } from "./src/loader";
 import type { ExtractResult } from "./src/extract";
-import type { AreaFeature, LineFeature, KerbFeature, KerbWayFeature, Dataset, Q } from "./src/features";
+import type { AreaFeature, LineFeature, KerbFeature, KerbWayFeature, Dataset, Feature, Q } from "./src/features";
 import { surfaceColor, normalizeSurface } from "./src/features";
 
 const canvas = document.getElementById("map") as HTMLCanvasElement;
@@ -43,16 +43,19 @@ const layers = {
  */
 let osmLayers: number[] = [];
 let selectedLayer: number | null = null;
+let osmLevels: number[] = [];
+let selectedLevel: number | null = null;
 
 /** whether a feature is drawn at all under the current selection */
-function layerVisible(f: { layer?: number }): boolean {
-  if (selectedLayer === null) return true;
-  return (f.layer ?? 0) === selectedLayer;
+function layerVisible(f: { layer?: number; level?: number }): boolean {
+  if (selectedLayer !== null && (f.layer ?? 0) !== selectedLayer) return false;
+  if (selectedLevel !== null && f.level !== undefined && f.level !== selectedLevel) return false;
+  return true;
 }
 
 /** sort key: bird's eye draws ascending layers first */
-function layerSortKey(f: { layer?: number }): number {
-  return f.layer ?? 0;
+function layerSortKey(f: { layer?: number; level?: number }): number {
+  return (f.layer ?? 0) * 100 + (f.level ?? 0);
 }
 
 // ---------------- projection ----------------
@@ -545,7 +548,10 @@ function showInfo(f: AreaFeature | LineFeature | KerbFeature | KerbWayFeature | 
   const push = (k: string, v?: string | number) => {
     if (v !== undefined && v !== "") rows.push([k, String(v)]);
   };
+  const feature = f as Feature;
 
+  push("layer", feature.layer);
+  push("level", feature.level);
   if (f.type === "area") {
     rows.push(["feature", `area:highway (${f.id})`]);
     push("highway (area)", f.highway);
@@ -593,36 +599,120 @@ function escapeHtml(s: string): string {
 }
 
 // ---------------- layer panel ----------------
+
+const SELECT_STYLE =
+  "width:100%;margin-bottom:10px;padding:4px 6px;border-radius:6px;" +
+  "background:#2a2a30;color:#eee;border:1px solid #444;font-size:12px;";
+
+let layerSelect: HTMLSelectElement | null = null;
+let levelSelect: HTMLSelectElement | null = null;
+
+/** values present among features intersecting the current viewport */
+function viewportValues(): { layers: Set<number>; levels: Set<number> } {
+  const bbox = viewBboxQ();
+  const layers = new Set<number>();
+  const levels = new Set<number>();
+  const seen = new Set<Feature>();
+  const add = (f: Feature) => {
+    if (seen.has(f)) return;
+    seen.add(f);
+    layers.add(f.layer ?? 0);
+    if (f.level !== undefined) levels.add(f.level);
+  };
+  if (dataset) {
+    if (areaIndex) for (const a of queryIndex(areaIndex, bbox)) add(a);
+    if (lineIndexes) {
+      for (const c of queryIndex(lineIndexes.centerlines, bbox)) add(c);
+      for (const f of queryIndex(lineIndexes.footways, bbox)) add(f);
+      for (const c of queryIndex(lineIndexes.crossings, bbox)) add(c);
+    }
+    if (kerbWayIndex) for (const k of queryIndex(kerbWayIndex, bbox)) add(k);
+    if (kerbGrid) {
+      for (const cell of cellsForBbox(bbox, 50000)) {
+        const arr = kerbGrid.get(cell);
+        if (arr) for (const k of arr) add(k);
+      }
+    }
+  }
+  return { layers, levels };
+}
+
+/**
+ * Rebuild the layer and level selector options from the features currently in
+ * the viewport. Only values present in the viewport are offered; the selectors
+ * are hidden entirely when the viewport has fewer than two distinct values.
+ */
+function updateSelectors() {
+  const inView = viewportValues();
+
+  // layer selector
+  const viewLayers = [...inView.layers].sort((a, b) => b - a);
+  if (layerSelect) {
+    const prev = layerSelect.value;
+    layerSelect.innerHTML = "";
+    const def = document.createElement("option");
+    def.value = "";
+    def.textContent = "all layers (highest visible)";
+    layerSelect.appendChild(def);
+    for (const l of viewLayers) {
+      const opt = document.createElement("option");
+      opt.value = String(l);
+      opt.textContent = `layer ${l} only`;
+      layerSelect.appendChild(opt);
+    }
+    layerSelect.value = viewLayers.some((l) => String(l) === prev) ? prev : "";
+    if (!viewLayers.some((l) => String(l) === prev)) selectedLayer = null;
+    layerSelect.style.display = viewLayers.length > 1 ? "" : "none";
+  }
+
+  // level selector
+  const viewLevels = [...inView.levels].sort((a, b) => b - a);
+  if (levelSelect) {
+    const prev = levelSelect.value;
+    levelSelect.innerHTML = "";
+    const def = document.createElement("option");
+    def.value = "";
+    def.textContent = "all levels";
+    levelSelect.appendChild(def);
+    for (const l of viewLevels) {
+      const opt = document.createElement("option");
+      opt.value = String(l);
+      opt.textContent = `level ${l} only`;
+      levelSelect.appendChild(opt);
+    }
+    levelSelect.value = viewLevels.some((l) => String(l) === prev) ? prev : "";
+    if (!viewLevels.some((l) => String(l) === prev)) selectedLevel = null;
+    levelSelect.style.display = viewLevels.length > 1 ? "" : "none";
+  }
+}
+
 function buildLayerPanel() {
   const wrap = document.getElementById("layers")!;
   wrap.innerHTML = "";
 
   // OSM layer selector
-  if (osmLayers.length > 1) {
-    const sel = document.createElement("select");
-    sel.id = "layerSelect";
-    sel.style.cssText =
-      "width:100%;margin-bottom:10px;padding:4px 6px;border-radius:6px;" +
-      "background:#2a2a30;color:#eee;border:1px solid #444;font-size:12px;";
-    const def = document.createElement("option");
-    def.value = "";
-    def.textContent = "all layers (highest visible)";
-    sel.appendChild(def);
-    for (const l of osmLayers.slice().reverse()) {
-      const opt = document.createElement("option");
-      opt.value = String(l);
-      opt.textContent = `layer ${l} only`;
-      sel.appendChild(opt);
-    }
-    // default: bird's eye (no explicit layer)
-    sel.value = "";
-    sel.addEventListener("change", () => {
-      const v = (sel as HTMLSelectElement).value;
-      selectedLayer = v === "" ? null : parseInt(v, 10);
-      requestDraw();
-    });
-    wrap.appendChild(sel);
-  }
+  layerSelect = document.createElement("select");
+  layerSelect.id = "layerSelect";
+  layerSelect.style.cssText = SELECT_STYLE;
+  layerSelect.addEventListener("change", () => {
+    const v = layerSelect!.value;
+    selectedLayer = v === "" ? null : parseInt(v, 10);
+    requestDraw();
+  });
+  wrap.appendChild(layerSelect);
+
+  // OSM level selector
+  levelSelect = document.createElement("select");
+  levelSelect.id = "levelSelect";
+  levelSelect.style.cssText = SELECT_STYLE;
+  levelSelect.addEventListener("change", () => {
+    const v = levelSelect!.value;
+    selectedLevel = v === "" ? null : parseFloat(v);
+    requestDraw();
+  });
+  wrap.appendChild(levelSelect);
+
+  updateSelectors();
 
   const defs: { key: keyof typeof layers; label: string; swatch: string }[] = [
     { key: "areas", label: "highway areas (surface fill)", swatch: "#6d6055" },
@@ -686,6 +776,7 @@ function requestDraw() {
   requestAnimationFrame(() => {
     drawQueued = false;
     draw();
+    updateSelectors();
   });
 }
 
@@ -756,7 +847,9 @@ function loadPbfFile(file: File) {
 function ingestResult(result: ExtractResult, name: string) {
   const t0 = performance.now();
   osmLayers = result.layers ?? [];
+  osmLevels = result.levels ?? [];
   selectedLayer = null;
+  selectedLevel = null;
   dataset = {
     areas: result.areas,
     centerlines: result.centerlines,

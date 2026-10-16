@@ -28,6 +28,8 @@ export interface ExtractResult {
   kerbWays: KerbWayFeature[];
   /** all layer values present in the data, sorted ascending */
   layers: number[];
+  /** all level values present in the data, sorted ascending */
+  levels: number[];
   /** bbox of all extracted features: [minLonQ, minLatQ, maxLonQ, maxLatQ] */
   bounds: [number, number, number, number];
 }
@@ -73,6 +75,12 @@ function bboxOverlap(
   b: [number, number, number, number]
 ): boolean {
   return a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
+}
+
+function parseLevel(v: string | undefined): number | undefined {
+  if (v === undefined) return undefined;
+  const n = parseFloat(v);
+  return Number.isFinite(n) ? n : undefined;
 }
 
 function parseLayer(v: string | undefined): number {
@@ -151,6 +159,7 @@ export function extractFeatures(
         wheelchair: tags["wheelchair"],
         lit: tags["lit"],
         layer: parseLayer(tags["layer"]),
+      level: parseLevel(tags["level"]),
         outer: [qc],
         holes: [],
         bbox: bboxOfQ(qc),
@@ -169,6 +178,7 @@ export function extractFeatures(
         kerb: tags["kerb"] ?? tags["barrier"],
         tactilePaving: tags["tactile_paving"],
         layer: parseLayer(tags["layer"]),
+      level: parseLevel(tags["level"]),
         coords: qc,
         bbox: bboxOfQ(qc),
       });
@@ -197,6 +207,7 @@ export function extractFeatures(
           lit: tags["lit"],
           name: tags["name"],
           layer: parseLayer(tags["layer"]),
+      level: parseLevel(tags["level"]),
           coords: qc,
           bbox: bboxOfQ(qc),
         });
@@ -213,6 +224,7 @@ export function extractFeatures(
           lit: tags["lit"],
           name: tags["name"],
           layer: parseLayer(tags["layer"]),
+      level: parseLevel(tags["level"]),
           coords: qc,
           bbox: bboxOfQ(qc),
         });
@@ -229,6 +241,7 @@ export function extractFeatures(
           lit: tags["lit"],
           name: tags["name"],
           layer: parseLayer(tags["layer"]),
+      level: parseLevel(tags["level"]),
           coords: qc,
           bbox: bboxOfQ(qc),
         });
@@ -270,6 +283,7 @@ export function extractFeatures(
       wheelchair: tags["wheelchair"],
       lit: tags["lit"],
       layer: parseLayer(tags["layer"]),
+      level: parseLevel(tags["level"]),
       outer: outerRings,
       holes: holeRings,
       bbox: bboxOfQ(all),
@@ -305,6 +319,7 @@ export function extractFeatures(
         kerb: tags["kerb"] ?? tags["barrier"],
         tactilePaving: tags["tactile_paving"],
         layer,
+        level: parseLevel(tags["level"]),
         lat: Math.round(c.lat * 1e7),
         lon: Math.round(c.lon * 1e7),
       });
@@ -368,6 +383,13 @@ export function extractFeatures(
   for (const k of kerbs) layerSet.add(k.layer);
   const layers = [...layerSet].sort((a, b) => a - b);
 
+  // collect all level values (only features with an explicit level=*)
+  const levelSet = new Set<number>();
+  for (const arr of [areas, centerlines, footways, crossings, kerbWays, kerbs]) {
+    for (const f of arr) if (f.level !== undefined) levelSet.add(f.level);
+  }
+  const levels = [...levelSet].sort((a, b) => a - b);
+
   // compute overall bounds
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   const expand = (b: [number, number, number, number]) => {
@@ -398,6 +420,7 @@ export function extractFeatures(
     kerbs,
     kerbWays,
     layers,
+    levels,
     bounds: [minX, minY, maxX, maxY],
   };
 }
