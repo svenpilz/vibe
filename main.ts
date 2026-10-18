@@ -1788,10 +1788,10 @@ function showInfo(
       .join("") +
     (link
       ? `<div class="tag"><span class="k">osm</span><span class="v"><a href="${link}" target="_blank" rel="noopener">${link}</a></span></div>`
+      : "") +
+    (oplink
+      ? `<div class="tag"><span class="k">overpass</span><span class="v"><a href="${oplink}" target="_blank" rel="noopener">fetch relevant elements</a></span></div>`
       : "");
-  +(oplink
-    ? `<div class="tag"><span class="k">overpass</span><span class="v"><a href="${oplink}" target="_blank" rel="noopener">fetch relevant elements</a></span></div>`
-    : "");
   infoEl.style.display = "block";
 }
 
