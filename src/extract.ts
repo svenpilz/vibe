@@ -1149,8 +1149,6 @@ export function extractFeatures(
       const anchorByPiece = new Map<MarkingSample & { cl: LineFeature }, number>();
       const laneWByPiece = new Map<MarkingSample & { cl: LineFeature }, number>();
       let cluster: (MarkingSample & { cl: LineFeature })[] = [];
-      const unitsOf = (p: MarkingSample & { cl: LineFeature }): number =>
-        p.cl.lanes! + (p.cl.parkingLeft ? 1 : 0) + (p.cl.parkingRight ? 1 : 0);
       const flush = () => {
         // one shared measured span per cluster: median left and right
         // edge. Individual samples vary along a curved road; the cluster
@@ -1163,14 +1161,22 @@ export function extractFeatures(
         for (const c of cluster) rightMByPiece.set(c, rM);
         const lM = median(cluster.map((p) => p.leftM));
         for (const c of cluster) leftMByPiece.set(c, lM);
-        const byUnits = new Map<number, (MarkingSample & { cl: LineFeature })[]>();
+        // traffic lanes keep their width across the cluster: pieces WITHOUT
+        // parking donate their lane width to same-lane-count pieces, so a
+        // parking strip appearing along the road does not narrow the
+        // painted lanes (the parking unit absorbs the remaining width).
+        // Pieces with parking keep their own even split when no no-parking
+        // donor exists (all-parking roads, e.g. Vorarlberger Damm)
+        const byLanes = new Map<number, (MarkingSample & { cl: LineFeature })[]>();
         for (const c of cluster) {
-          const u = unitsOf(c);
-          const arr = byUnits.get(u);
-          if (arr) arr.push(c); else byUnits.set(u, [c]);
+          const arr = byLanes.get(c.cl.lanes!);
+          if (arr) arr.push(c); else byLanes.set(c.cl.lanes!, [c]);
         }
-        for (const arr of byUnits.values()) {
-          const w = median(arr.map(laneWOf));
+        for (const arr of byLanes.values()) {
+          const donors = arr.filter((c) => !c.cl.parkingLeft && !c.cl.parkingRight);
+          const w = donors.length > 0
+            ? median(donors.map(laneWOf))
+            : median(arr.map(laneWOf));
           for (const c of arr) laneWByPiece.set(c, w);
         }
         cluster = [];
