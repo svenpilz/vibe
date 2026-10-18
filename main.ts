@@ -1828,12 +1828,14 @@ function showInfo(
         `way["amenity"="parking"]${bboxQ};` +
         `node["barrier"="kerb"]${bboxQ};` +
         `node["barrier"="bollard"]${bboxQ};` +
+        `node["highway"="traffic_signals"]${bboxQ};` +
         ");out geom tags;";
     } else {
       query =
         "[out:json][timeout:60];(" +
         `way(around:15,${minLat},${minLon})["highway"];` +
         `way(around:15,${minLat},${minLon})["area:highway"];` +
+        `node(around:15,${minLat},${minLon})["highway"="traffic_signals"];` +
         ");out geom tags;";
     }
     return "https://overpass-turbo.eu/?Q=" + encodeURIComponent(query) + "&R";
