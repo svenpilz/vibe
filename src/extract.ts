@@ -17,7 +17,21 @@
  * layer values present so the UI can offer layer selection.
  */
 import type { OSMData, OSMTags, OSMWay } from "./osm-pbf";
-import type { Q, AreaFeature, BuildingFeature, GrassFeature, LineFeature, KerbFeature, KerbWayFeature, BollardFeature, FenceFeature, LanduseFeature, StreetLampFeature, ParkingFeature, ManholeFeature } from "./features";
+import type {
+  Q,
+  AreaFeature,
+  BuildingFeature,
+  GrassFeature,
+  LineFeature,
+  KerbFeature,
+  KerbWayFeature,
+  BollardFeature,
+  FenceFeature,
+  LanduseFeature,
+  StreetLampFeature,
+  ParkingFeature,
+  ManholeFeature,
+} from "./features";
 
 export interface ExtractResult {
   areas: AreaFeature[];
@@ -44,7 +58,10 @@ export interface ExtractResult {
 }
 
 function bboxOfQ(coords: number[][]): [number, number, number, number] {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  let minX = Infinity,
+    minY = Infinity,
+    maxX = -Infinity,
+    maxY = -Infinity;
   for (const [x, y] of coords) {
     if (x < minX) minX = x;
     if (y < minY) minY = y;
@@ -55,7 +72,12 @@ function bboxOfQ(coords: number[][]): [number, number, number, number] {
 }
 
 /** distance along direction d from pt until leaving the area, or null if never */
-function rayExitInArea(pt: number[], d: number[], area: AreaFeature, maxRay: number): number | null {
+function rayExitInArea(
+  pt: number[],
+  d: number[],
+  area: AreaFeature,
+  maxRay: number,
+): number | null {
   let best: number | null = null;
   const test = (t: number): void => {
     const p = [pt[0] + d[0] * t, pt[1] + d[1] * t];
@@ -73,11 +95,13 @@ function rayExitInArea(pt: number[], d: number[], area: AreaFeature, maxRay: num
     const inside = pointInAreaQ(p, area);
     if (prevInside && !inside) {
       // binary refine between t-step and t
-      let lo = t - step, hi = t;
+      let lo = t - step,
+        hi = t;
       for (let k = 0; k < 24; k++) {
         const midT = (lo + hi) / 2;
         const pm = [pt[0] + d[0] * midT, pt[1] + d[1] * midT];
-        if (pointInAreaQ(pm, area)) lo = midT; else hi = midT;
+        if (pointInAreaQ(pm, area)) lo = midT;
+        else hi = midT;
       }
       best = (lo + hi) / 2;
       break;
@@ -90,10 +114,13 @@ function rayExitInArea(pt: number[], d: number[], area: AreaFeature, maxRay: num
 
 function pointInRingQ(pt: number[], ring: number[][]): boolean {
   let inside = false;
-  const x = pt[0], y = pt[1];
+  const x = pt[0],
+    y = pt[1];
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-    const xi = ring[i][0], yi = ring[i][1];
-    const xj = ring[j][0], yj = ring[j][1];
+    const xi = ring[i][0],
+      yi = ring[i][1];
+    const xj = ring[j][0],
+      yj = ring[j][1];
     if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) {
       inside = !inside;
     }
@@ -104,7 +131,10 @@ function pointInRingQ(pt: number[], ring: number[][]): boolean {
 function pointInAreaQ(pt: number[], area: AreaFeature): boolean {
   let inOuter = false;
   for (const ring of area.outer) {
-    if (pointInRingQ(pt, ring)) { inOuter = true; break; }
+    if (pointInRingQ(pt, ring)) {
+      inOuter = true;
+      break;
+    }
   }
   if (!inOuter) return false;
   for (const hole of area.holes) {
@@ -115,11 +145,13 @@ function pointInAreaQ(pt: number[], area: AreaFeature): boolean {
 
 /** squared distance from pt to segment a-b in quantized units */
 function distToSegQ2(px: number, py: number, a: number[], b: number[]): number {
-  const dx = b[0] - a[0], dy = b[1] - a[1];
+  const dx = b[0] - a[0],
+    dy = b[1] - a[1];
   const len2 = dx * dx + dy * dy;
   let t = len2 === 0 ? 0 : ((px - a[0]) * dx + (py - a[1]) * dy) / len2;
   t = Math.max(0, Math.min(1, t));
-  const x = a[0] + t * dx, y = a[1] + t * dy;
+  const x = a[0] + t * dx,
+    y = a[1] + t * dy;
   return (px - x) ** 2 + (py - y) ** 2;
 }
 
@@ -129,7 +161,11 @@ function distToSegQ2(px: number, py: number, a: number[], b: number[]): number {
  * nodes with the area ring; their vertices lie exactly on the boundary,
  * where the strict test is ambiguous.
  */
-function pointOnAreaBoundaryQ(pt: number[], area: AreaFeature, tolQ: number): boolean {
+function pointOnAreaBoundaryQ(
+  pt: number[],
+  area: AreaFeature,
+  tolQ: number,
+): boolean {
   const tol2 = tolQ * tolQ;
   const onRing = (ring: number[][]): boolean => {
     for (let i = 1; i < ring.length; i++) {
@@ -154,14 +190,21 @@ function pointInAreaTolQ2(pt: number[], area: AreaFeature): boolean {
   return pointInAreaQ(pt, area) || pointOnAreaBoundaryQ(pt, area, 10);
 }
 
-function centerlineInAreaTolQ(cl: LineFeature, area: AreaFeature, tolQ: number): boolean {
+function centerlineInAreaTolQ(
+  cl: LineFeature,
+  area: AreaFeature,
+  tolQ: number,
+): boolean {
   let inside = 0;
   let onBoundary = 0;
   for (const pt of cl.coords) {
     // boundary first: a vertex exactly on the ring must never count as
     // inside (the strict test is ambiguous there) — also for the adjacent
     // area, which shares this boundary
-    if (pointOnAreaBoundaryQ(pt, area, tolQ)) { onBoundary++; continue; }
+    if (pointOnAreaBoundaryQ(pt, area, tolQ)) {
+      onBoundary++;
+      continue;
+    }
     if (pointInAreaQ(pt, area)) inside++;
     // a vertex strictly outside disqualifies the donor: the way must lie
     // ENTIRELY inside — a long road merely ENDING on the area boundary
@@ -174,7 +217,7 @@ function centerlineInAreaTolQ(cl: LineFeature, area: AreaFeature, tolQ: number):
 
 function bboxOverlap(
   a: [number, number, number, number],
-  b: [number, number, number, number]
+  b: [number, number, number, number],
 ): boolean {
   return a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
 }
@@ -202,8 +245,17 @@ function parkingOnCarriageway(side: string, tags: OSMTags): boolean {
 /** residential building classes (light orange fill); everything else is "other" */
 function buildingUsage(tags: OSMTags): "residential" | "other" {
   const b = tags["building"];
-  if (b === "residential" || b === "house" || b === "apartments" || b === "detached"
-    || b === "terrace" || b === "semi" || b === "semidetached_house" || b === "bungalow") return "residential";
+  if (
+    b === "residential" ||
+    b === "house" ||
+    b === "apartments" ||
+    b === "detached" ||
+    b === "terrace" ||
+    b === "semi" ||
+    b === "semidetached_house" ||
+    b === "bungalow"
+  )
+    return "residential";
   return "other";
 }
 
@@ -230,7 +282,10 @@ function parseLayer(v: string | undefined): number {
  * type. Exception: highway=footway centerlines also cover sidewalk areas,
  * which are the same physical feature mapped with a different type tag.
  */
-function highwayTypesCompatible(clHighway: string | undefined, areaHighway: string): boolean {
+function highwayTypesCompatible(
+  clHighway: string | undefined,
+  areaHighway: string,
+): boolean {
   if (!clHighway) return false;
   if (clHighway === areaHighway) return true;
   if (clHighway === "footway" && areaHighway === "sidewalk") return true;
@@ -239,15 +294,32 @@ function highwayTypesCompatible(clHighway: string | undefined, areaHighway: stri
 }
 
 const CENTERLINE_HIGHWAYS = new Set([
-  "footway", "pedestrian", "service", "living_street", "residential", "unclassified",
-  "cycleway", "path", "steps", "track", "road",
-  "motorway", "trunk", "primary", "secondary", "tertiary",
-  "motorway_link", "trunk_link", "primary_link", "secondary_link", "tertiary_link",
+  "footway",
+  "pedestrian",
+  "service",
+  "living_street",
+  "residential",
+  "unclassified",
+  "cycleway",
+  "path",
+  "steps",
+  "track",
+  "road",
+  "motorway",
+  "trunk",
+  "primary",
+  "secondary",
+  "tertiary",
+  "motorway_link",
+  "trunk_link",
+  "primary_link",
+  "secondary_link",
+  "tertiary_link",
 ]);
 
 export function extractFeatures(
   data: OSMData,
-  onProgress?: (pct: number, msg: string) => void
+  onProgress?: (pct: number, msg: string) => void,
 ): ExtractResult {
   const areas: AreaFeature[] = [];
   const buildings: BuildingFeature[] = [];
@@ -264,7 +336,13 @@ export function extractFeatures(
   const parking: ParkingFeature[] = [];
   // amenity=parking + parking=lane polygons on a road's carriageway:
   // a parking lane of that road, not a separate parking ground
-  const parkingLanesOnCarriageway: { id: string; layer: number; outer: Q[][][]; holes: Q[][][]; bbox: [number, number, number, number] }[] = [];
+  const parkingLanesOnCarriageway: {
+    id: string;
+    layer: number;
+    outer: Q[][][];
+    holes: Q[][][];
+    bbox: [number, number, number, number];
+  }[] = [];
   const manholes: ManholeFeature[] = [];
 
   const wayCoords = (way: OSMWay): [number, number][] | null => {
@@ -328,9 +406,12 @@ export function extractFeatures(
       continue;
     }
 
-    const landuseKind = tags["landuse"] === "residential" ? "residential"
-      : tags["landuse"] === "commercial" || tags["landuse"] === "retail" ? "commercial"
-      : undefined;
+    const landuseKind =
+      tags["landuse"] === "residential"
+        ? "residential"
+        : tags["landuse"] === "commercial" || tags["landuse"] === "retail"
+          ? "commercial"
+          : undefined;
     if (landuseKind && isClosed(way)) {
       const coords = wayCoords(way);
       if (coords) {
@@ -376,14 +457,16 @@ export function extractFeatures(
         type: "area",
         id: `w${way.id}`,
         highway: areaHighway,
-        surface: tags["surface"] ?? (areaHighway === "traffic_island" ? "sett" : undefined),
+        surface:
+          tags["surface"] ??
+          (areaHighway === "traffic_island" ? "sett" : undefined),
         surfaceColour: tags["surface:colour"] ?? tags["colour"],
         name: tags["name"],
         wheelchair: tags["wheelchair"],
         lit: tags["lit"],
         junction: areaHighway === "junction" || tags["junction"] !== undefined,
         layer: parseLayer(tags["layer"]),
-      level: parseLevel(tags["level"]),
+        level: parseLevel(tags["level"]),
         outer: [qc],
         holes: [],
         bbox: bboxOfQ(qc),
@@ -391,10 +474,14 @@ export function extractFeatures(
       continue;
     }
 
-    const greenKind = tags["landuse"] === "grass" ? "grass"
-      : tags["natural"] === "scrub" ? "scrub"
-      : tags["leisure"] === "garden" ? "garden"
-      : undefined;
+    const greenKind =
+      tags["landuse"] === "grass"
+        ? "grass"
+        : tags["natural"] === "scrub"
+          ? "scrub"
+          : tags["leisure"] === "garden"
+            ? "garden"
+            : undefined;
     if (greenKind && isClosed(way)) {
       const coords = wayCoords(way);
       if (coords) {
@@ -450,7 +537,7 @@ export function extractFeatures(
         tactilePaving: tags["tactile_paving"],
         overrides: overrides.length > 0 ? overrides : undefined,
         layer: parseLayer(tags["layer"]),
-      level: parseLevel(tags["level"]),
+        level: parseLevel(tags["level"]),
         coords: qc,
         bbox: bboxOfQ(qc),
       });
@@ -461,7 +548,8 @@ export function extractFeatures(
       const coords = wayCoords(way);
       if (!coords) continue;
       const footway = tags["footway"];
-      const isCrossing = footway === "crossing" || tags["crossing"] !== undefined;
+      const isCrossing =
+        footway === "crossing" || tags["crossing"] !== undefined;
       const widthNum = tags["width"] ? parseFloat(tags["width"]) : undefined;
 
       if (isCrossing) {
@@ -472,14 +560,16 @@ export function extractFeatures(
           highway,
           footway,
           crossing: tags["crossing"],
-          crossingMarkings: tags["crossing:markings"] ?? (tags["crossing"] === "zebra" ? "zebra" : undefined),
+          crossingMarkings:
+            tags["crossing:markings"] ??
+            (tags["crossing"] === "zebra" ? "zebra" : undefined),
           surface: tags["surface"],
           surfaceColour: tags["surface:colour"],
           width: Number.isFinite(widthNum as number) ? widthNum : undefined,
           lit: tags["lit"],
           name: tags["name"],
           layer: parseLayer(tags["layer"]),
-      level: parseLevel(tags["level"]),
+          level: parseLevel(tags["level"]),
           coords: qc,
           bbox: bboxOfQ(qc),
         });
@@ -496,13 +586,17 @@ export function extractFeatures(
           lit: tags["lit"],
           name: tags["name"],
           layer: parseLayer(tags["layer"]),
-      level: parseLevel(tags["level"]),
+          level: parseLevel(tags["level"]),
           coords: qc,
           bbox: bboxOfQ(qc),
         });
-      } else if (CENTERLINE_HIGHWAYS.has(highway) && !isClosed(way)
-                 && (tags["surface"] !== undefined || widthNum !== undefined
-                     || parseLanes(tags["lanes"]) !== undefined)) {
+      } else if (
+        CENTERLINE_HIGHWAYS.has(highway) &&
+        !isClosed(way) &&
+        (tags["surface"] !== undefined ||
+          widthNum !== undefined ||
+          parseLanes(tags["lanes"]) !== undefined)
+      ) {
         const qc = q(coords);
         centerlines.push({
           type: "centerline",
@@ -514,17 +608,28 @@ export function extractFeatures(
           lanes: parseLanes(tags["lanes"]),
           // lane_markings=no: the road has lanes but no painted markings
           noLaneMarkings: tags["lane_markings"] === "no",
-          parkingLeft: parkingOnCarriageway("left", tags) || parkingOnCarriageway("both", tags),
-          parkingRight: parkingOnCarriageway("right", tags) || parkingOnCarriageway("both", tags),
-          oneway: tags["oneway"] === "yes" || tags["oneway"] === "-1" || tags["junction"] === "roundabout" || tags["junction"] === "circular",
-          lanesFwd: parseLanes(tags["lanes:forward"])
-            ?? (parseLanes(tags["lanes:backward"]) !== undefined
-                ? (parseLanes(tags["lanes"]) ?? 2 * parseLanes(tags["lanes:backward"])!) - parseLanes(tags["lanes:backward"])!
-                : undefined),
+          parkingLeft:
+            parkingOnCarriageway("left", tags) ||
+            parkingOnCarriageway("both", tags),
+          parkingRight:
+            parkingOnCarriageway("right", tags) ||
+            parkingOnCarriageway("both", tags),
+          oneway:
+            tags["oneway"] === "yes" ||
+            tags["oneway"] === "-1" ||
+            tags["junction"] === "roundabout" ||
+            tags["junction"] === "circular",
+          lanesFwd:
+            parseLanes(tags["lanes:forward"]) ??
+            (parseLanes(tags["lanes:backward"]) !== undefined
+              ? (parseLanes(tags["lanes"]) ??
+                  2 * parseLanes(tags["lanes:backward"])!) -
+                parseLanes(tags["lanes:backward"])!
+              : undefined),
           lit: tags["lit"],
           name: tags["name"],
           layer: parseLayer(tags["layer"]),
-      level: parseLevel(tags["level"]),
+          level: parseLevel(tags["level"]),
           coords: qc,
           bbox: bboxOfQ(qc),
         });
@@ -542,7 +647,11 @@ export function extractFeatures(
       const outerRingsP: number[][][] = [];
       const holeRingsP: number[][][] = [];
       for (const m of rel.members) {
-        if (m.type !== "way" || (m.role !== "outer" && m.role !== "inner" && m.role !== "")) continue;
+        if (
+          m.type !== "way" ||
+          (m.role !== "outer" && m.role !== "inner" && m.role !== "")
+        )
+          continue;
         const way = data.ways.get(m.ref);
         if (!way || !isClosed(way)) continue;
         const coords = wayCoords(way);
@@ -570,18 +679,33 @@ export function extractFeatures(
       }
     }
 
-    const grassTag = tags["landuse"] === "grass" || tags["natural"] === "scrub" || tags["leisure"] === "garden";
-    const greenKind = tags["landuse"] === "grass" ? "grass"
-      : tags["natural"] === "scrub" ? "scrub"
-      : tags["leisure"] === "garden" ? "garden"
-      : "grass";
-    if ((!areaHighway && !buildingTag && !grassTag) || tags["type"] !== "multipolygon") continue;
+    const grassTag =
+      tags["landuse"] === "grass" ||
+      tags["natural"] === "scrub" ||
+      tags["leisure"] === "garden";
+    const greenKind =
+      tags["landuse"] === "grass"
+        ? "grass"
+        : tags["natural"] === "scrub"
+          ? "scrub"
+          : tags["leisure"] === "garden"
+            ? "garden"
+            : "grass";
+    if (
+      (!areaHighway && !buildingTag && !grassTag) ||
+      tags["type"] !== "multipolygon"
+    )
+      continue;
 
     const outerRings: number[][][] = [];
     const holeRings: number[][][] = [];
 
     for (const m of rel.members) {
-      if (m.type !== "way" || (m.role !== "outer" && m.role !== "inner" && m.role !== "")) continue;
+      if (
+        m.type !== "way" ||
+        (m.role !== "outer" && m.role !== "inner" && m.role !== "")
+      )
+        continue;
       const way = data.ways.get(m.ref);
       if (!way || !isClosed(way)) continue;
       const coords = wayCoords(way);
@@ -626,7 +750,9 @@ export function extractFeatures(
       type: "area",
       id: `r${rel.id}`,
       highway: areaHighway,
-      surface: tags["surface"] ?? (areaHighway === "traffic_island" ? "sett" : undefined),
+      surface:
+        tags["surface"] ??
+        (areaHighway === "traffic_island" ? "sett" : undefined),
       surfaceColour: tags["surface:colour"] ?? tags["colour"],
       name: tags["name"],
       wheelchair: tags["wheelchair"],
@@ -650,7 +776,10 @@ export function extractFeatures(
     const wl = parseLayer(way.tags["layer"]);
     for (const ref of way.refs) {
       const prev = nodeWayLayer.get(ref);
-      nodeWayLayer.set(ref, prev === undefined || prev === wl ? wl : Number.NaN);
+      nodeWayLayer.set(
+        ref,
+        prev === undefined || prev === wl ? wl : Number.NaN,
+      );
     }
   }
 
@@ -700,7 +829,8 @@ export function extractFeatures(
       let layer = parseLayer(tags["layer"]);
       if (tags["layer"] === undefined) {
         const inherited = nodeWayLayer.get(id);
-        if (inherited !== undefined && Number.isFinite(inherited)) layer = inherited;
+        if (inherited !== undefined && Number.isFinite(inherited))
+          layer = inherited;
       }
       kerbs.push({
         type: "kerb",
@@ -762,9 +892,13 @@ export function extractFeatures(
       if (!highwayTypesCompatible(cl.highway, area.highway)) continue;
       if (!bboxOverlap(area.bbox, cl.bbox)) continue;
       for (let i = 1; i < cl.coords.length; i++) {
-        const a = cl.coords[i - 1], b = cl.coords[i];
+        const a = cl.coords[i - 1],
+          b = cl.coords[i];
         const m = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-        if (pointInAreaQ(m, area)) { areasWithCenterline.add(area); break; }
+        if (pointInAreaQ(m, area)) {
+          areasWithCenterline.add(area);
+          break;
+        }
       }
     }
   }
@@ -779,19 +913,29 @@ export function extractFeatures(
       // area boundary must not donate
       let lenIn = 0;
       for (let i = 1; i < cl.coords.length; i++) {
-        const a = cl.coords[i - 1], b = cl.coords[i];
+        const a = cl.coords[i - 1],
+          b = cl.coords[i];
         const m = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-        if (pointInAreaQ(m, area)) lenIn += Math.hypot(b[0] - a[0], b[1] - a[1]);
+        if (pointInAreaQ(m, area))
+          lenIn += Math.hypot(b[0] - a[0], b[1] - a[1]);
       }
       if (lenIn <= 0) continue;
       let byArea = surfaceByArea.get(area);
-      if (!byArea) { byArea = new Map(); surfaceByArea.set(area, byArea); }
+      if (!byArea) {
+        byArea = new Map();
+        surfaceByArea.set(area, byArea);
+      }
       byArea.set(cl.surface!, (byArea.get(cl.surface!) ?? 0) + lenIn);
     }
   }
   for (const [area, bySurface] of surfaceByArea) {
-    let topS = "", topL = -1;
-    for (const [sf, l] of bySurface) if (l > topL) { topL = l; topS = sf; }
+    let topS = "",
+      topL = -1;
+    for (const [sf, l] of bySurface)
+      if (l > topL) {
+        topL = l;
+        topS = sf;
+      }
     if (topS) area.surface = topS;
   }
 
@@ -801,7 +945,8 @@ export function extractFeatures(
   const laneMarkings: LineFeature[] = [];
   const laneCandidates: LineFeature[] = [];
   for (const cl of centerlines) {
-    if (cl.lanes !== undefined && cl.lanes >= 2 && !cl.noLaneMarkings) laneCandidates.push(cl);
+    if (cl.lanes !== undefined && cl.lanes >= 2 && !cl.noLaneMarkings)
+      laneCandidates.push(cl);
   }
   // on-carriageway parking strips (amenity=parking + parking=lane): the
   // nearest lane-bearing centerline on the same layer gains a parking
@@ -810,8 +955,15 @@ export function extractFeatures(
   // strip's centroid; positive = left of the way
   {
     for (const st of parkingLanesOnCarriageway) {
-      let sx = 0, sy = 0, cnt = 0;
-      for (const ring of st.outer) for (const pt of ring) { sx += pt[0]; sy += pt[1]; cnt++; }
+      let sx = 0,
+        sy = 0,
+        cnt = 0;
+      for (const ring of st.outer)
+        for (const pt of ring) {
+          sx += pt[0];
+          sy += pt[1];
+          cnt++;
+        }
       if (cnt === 0) continue;
       const mid: [number, number] = [sx / cnt, sy / cnt];
       let best: LineFeature | null = null;
@@ -821,20 +973,29 @@ export function extractFeatures(
         if (cl.layer !== st.layer) continue;
         if (!bboxOverlap(cl.bbox, st.bbox)) continue;
         for (let i = 1; i < cl.coords.length; i++) {
-          const a = cl.coords[i - 1], b = cl.coords[i];
-          const dx = b[0] - a[0], dy = b[1] - a[1];
+          const a = cl.coords[i - 1],
+            b = cl.coords[i];
+          const dx = b[0] - a[0],
+            dy = b[1] - a[1];
           const len2 = dx * dx + dy * dy;
           if (len2 === 0) continue;
           let t = ((mid[0] - a[0]) * dx + (mid[1] - a[1]) * dy) / len2;
           t = Math.max(0, Math.min(1, t));
-          const px = a[0] + t * dx, py = a[1] + t * dy;
+          const px = a[0] + t * dx,
+            py = a[1] + t * dy;
           const d = (mid[0] - px) ** 2 + (mid[1] - py) ** 2;
-          if (d < bestD) { bestD = d; best = cl; bestSeg = i; }
+          if (d < bestD) {
+            bestD = d;
+            best = cl;
+            bestSeg = i;
+          }
         }
       }
       if (!best) continue;
-      const a = best.coords[bestSeg - 1], b = best.coords[bestSeg];
-      const cross = (b[0] - a[0]) * (mid[1] - a[1]) - (b[1] - a[1]) * (mid[0] - a[0]);
+      const a = best.coords[bestSeg - 1],
+        b = best.coords[bestSeg];
+      const cross =
+        (b[0] - a[0]) * (mid[1] - a[1]) - (b[1] - a[1]) * (mid[0] - a[0]);
       if (cross > 0) best.parkingLeft = true;
       else if (cross < 0) best.parkingRight = true;
     }
@@ -881,7 +1042,8 @@ export function extractFeatures(
       // correspondence: a segment midpoint inside the area
       let someInside = false;
       for (let si = 1; si < cl.coords.length && !someInside; si++) {
-        const a = cl.coords[si - 1], b = cl.coords[si];
+        const a = cl.coords[si - 1],
+          b = cl.coords[si];
         const m = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
         if (pointInAreaTolQ2(m, area)) someInside = true;
       }
@@ -890,7 +1052,8 @@ export function extractFeatures(
     }
     if (matching.length > 1) {
       const sameLayer = matching.filter((a) => a.layer === cl.layer);
-      if (sameLayer.length > 0) matching.length = 0, matching.push(...sameLayer);
+      if (sameLayer.length > 0)
+        ((matching.length = 0), matching.push(...sameLayer));
     }
     for (const area of matching) {
       // sample MULTIPLE segments per area (median of the ray-cast edges),
@@ -905,7 +1068,8 @@ export function extractFeatures(
       const insideSegs: number[] = [];
       const tolSegs: number[] = [];
       for (let si = 1; si < cl.coords.length; si++) {
-        const a = cl.coords[si - 1], b = cl.coords[si];
+        const a = cl.coords[si - 1],
+          b = cl.coords[si];
         if (a[0] === b[0] && a[1] === b[1]) continue;
         const m = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
         if (pointInAreaQ(m, area)) insideSegs.push(si);
@@ -913,9 +1077,18 @@ export function extractFeatures(
       }
       const segs = insideSegs.length > 0 ? insideSegs : tolSegs;
       if (segs.length === 0) continue;
-      const sampled = segs.length <= 12
-        ? segs
-        : [...Array(12).keys()].map((k) => segs[Math.min(segs.length - 1, Math.round((k * (segs.length - 1)) / 11))]);
+      const sampled =
+        segs.length <= 12
+          ? segs
+          : [...Array(12).keys()].map(
+              (k) =>
+                segs[
+                  Math.min(
+                    segs.length - 1,
+                    Math.round((k * (segs.length - 1)) / 11),
+                  )
+                ],
+            );
       const lefts: number[] = [];
       const rights: number[] = [];
       for (const bi of sampled) {
@@ -925,16 +1098,24 @@ export function extractFeatures(
         // sample: the segment midpoint, or — when it lies on the boundary —
         // a point of the segment strictly inside this area
         let sample: number[] | null = null;
-        const a0 = cl.coords[bi - 1], a1 = cl.coords[bi];
+        const a0 = cl.coords[bi - 1],
+          a1 = cl.coords[bi];
         for (let t = 0.5; t >= 0.05; t -= 0.05) {
           for (const u of [t, 1 - t]) {
-            const p = [a0[0] + (a1[0] - a0[0]) * u, a0[1] + (a1[1] - a0[1]) * u];
-            if (pointInAreaQ(p, area)) { sample = p; break; }
+            const p = [
+              a0[0] + (a1[0] - a0[0]) * u,
+              a0[1] + (a1[1] - a0[1]) * u,
+            ];
+            if (pointInAreaQ(p, area)) {
+              sample = p;
+              break;
+            }
           }
           if (sample) break;
         }
         if (!sample) continue;
-        const nx = -dys / segLen, ny = dxs / segLen;
+        const nx = -dys / segLen,
+          ny = dxs / segLen;
         const [minX, minY, maxX, maxY] = area.bbox;
         const maxRay = Math.hypot(maxX - minX, maxY - minY) + 1000;
         const left = rayExitInArea(sample, [nx, ny], area, maxRay);
@@ -942,7 +1123,8 @@ export function extractFeatures(
         if (left === null || right === null) continue;
         // convert each ray to meters: lon units scale with cos(latitude),
         // lat units are constant; the ray travels in mixed units
-        const mPerLon = (111_320 * Math.cos((sample[1] / 1e7) * Math.PI / 180)) / 1e7;
+        const mPerLon =
+          (111_320 * Math.cos(((sample[1] / 1e7) * Math.PI) / 180)) / 1e7;
         const mPerLat = 111_320 / 1e7;
         const rayM = (t: number, dx2: number, dy2: number): number =>
           Math.hypot(dx2 * t * mPerLon, dy2 * t * mPerLat);
@@ -956,7 +1138,10 @@ export function extractFeatures(
         return s2.length % 2 ? s2[m] : (s2[m - 1] + s2[m]) / 2;
       };
       let arr = samplesOf.get(cl);
-      if (!arr) { arr = []; samplesOf.set(cl, arr); }
+      if (!arr) {
+        arr = [];
+        samplesOf.set(cl, arr);
+      }
       arr.push({ area, leftM: median(lefts), rightM: median(rights) });
     }
   }
@@ -971,30 +1156,40 @@ export function extractFeatures(
   // not break the group: geometry alone decides.
   const parent = laneCandidates.map((_, i) => i);
   const find = (i: number): number => {
-    while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; }
+    while (parent[i] !== i) {
+      parent[i] = parent[parent[i]];
+      i = parent[i];
+    }
     return i;
   };
   const union = (a: number, b: number): void => {
-    a = find(a); b = find(b);
+    a = find(a);
+    b = find(b);
     if (a !== b) parent[b] = a;
   };
   // all way ends by coordinate (named and unnamed alike)
   const byEnd = new Map<string, { i: number; atStart: boolean }[]>();
   const endKey = (p: Q[]): string => `${p[0]},${p[1]}`;
   laneCandidates.forEach((cl, i) => {
-    const first = cl.coords[0], last = cl.coords[cl.coords.length - 1];
-    for (const [end, atStart] of [[first, true], [last, false]] as [Q[], boolean][]) {
+    const first = cl.coords[0],
+      last = cl.coords[cl.coords.length - 1];
+    for (const [end, atStart] of [
+      [first, true],
+      [last, false],
+    ] as [Q[], boolean][]) {
       const k = endKey(end);
       const arr = byEnd.get(k);
       const e = { i, atStart };
-      if (arr) arr.push(e); else byEnd.set(k, [e]);
+      if (arr) arr.push(e);
+      else byEnd.set(k, [e]);
     }
   });
   // unit direction pointing OUT of the way at the given end
   const endDir = (cl: LineFeature, atStart: boolean): [number, number] => {
     const a = atStart ? cl.coords[1] : cl.coords[cl.coords.length - 2];
     const b = atStart ? cl.coords[0] : cl.coords[cl.coords.length - 1];
-    const dx = b[0] - a[0], dy = b[1] - a[1];
+    const dx = b[0] - a[0],
+      dy = b[1] - a[1];
     const l = Math.hypot(dx, dy);
     return l > 0 ? [dx / l, dy / l] : [0, 0];
   };
@@ -1007,7 +1202,9 @@ export function extractFeatures(
     for (let a = 0; a < ends.length; a++) {
       const dA = endDir(laneCandidates[ends[a].i], ends[a].atStart);
       if (dA[0] === 0 && dA[1] === 0) continue;
-      let bestB = -1, bestDot = -2, secondDot = -2;
+      let bestB = -1,
+        bestDot = -2,
+        secondDot = -2;
       for (let b = 0; b < ends.length; b++) {
         if (b === a) continue;
         const B = laneCandidates[ends[b].i];
@@ -1026,7 +1223,9 @@ export function extractFeatures(
         const dB = endDir(B, ends[b].atStart);
         const dot = dA[0] * dB[0] + dA[1] * dB[1];
         if (dot <= -0.7 && dot > bestDot) {
-          secondDot = bestDot; bestDot = dot; bestB = b;
+          secondDot = bestDot;
+          bestDot = dot;
+          bestB = b;
         } else if (dot > secondDot) secondDot = dot;
       }
       if (bestB < 0) continue;
@@ -1034,7 +1233,8 @@ export function extractFeatures(
       if (secondDot > bestDot - 0.15) continue;
       // mutuality: the partner must also pick this end as its best
       const dB = endDir(laneCandidates[ends[bestB].i], ends[bestB].atStart);
-      let mutBest = -1, mutDot = -2;
+      let mutBest = -1,
+        mutDot = -2;
       for (let c = 0; c < ends.length; c++) {
         if (c === bestB) continue;
         if (find(ends[bestB].i) === find(ends[c].i)) continue;
@@ -1044,7 +1244,10 @@ export function extractFeatures(
         if (laneCandidates[ends[bestB].i].highway !== C.highway) continue;
         const dC = endDir(C, ends[c].atStart);
         const dot = dB[0] * dC[0] + dB[1] * dC[1];
-        if (dot <= -0.7 && dot > mutDot) { mutDot = dot; mutBest = c; }
+        if (dot <= -0.7 && dot > mutDot) {
+          mutDot = dot;
+          mutBest = c;
+        }
       }
       if (mutBest === a) union(ends[a].i, ends[bestB].i);
     }
@@ -1053,7 +1256,8 @@ export function extractFeatures(
   laneCandidates.forEach((cl, i) => {
     const r = find(i);
     const arr = groups.get(r);
-    if (arr) arr.push(cl); else groups.set(r, [cl]);
+    if (arr) arr.push(cl);
+    else groups.set(r, [cl]);
   });
   const median = (xs: number[]): number => {
     const s = [...xs].sort((a, b) => a - b);
@@ -1065,7 +1269,8 @@ export function extractFeatures(
   for (const ways of groups.values()) {
     // one marking piece per (way, area section) of the road
     const pieces: (MarkingSample & { cl: LineFeature })[] = [];
-    for (const w of ways) for (const s of samplesOf.get(w) ?? []) pieces.push({ cl: w, ...s });
+    for (const w of ways)
+      for (const s of samplesOf.get(w) ?? []) pieces.push({ cl: w, ...s });
     if (pieces.length === 0) continue;
     // PER-PIECE lane width: each piece splits its OWN measured width
     // evenly among its units (traffic + parking lanes), so the layout
@@ -1100,10 +1305,12 @@ export function extractFeatures(
     // distance from the road edge on every piece, all units stay visible,
     // and wider pieces leave their extra width unpainted
     let anchorOf: (p: MarkingSample & { cl: LineFeature }) => number;
-    let laneWShared: (p: MarkingSample & { cl: LineFeature }) => number = laneWOf;
+    let laneWShared: (p: MarkingSample & { cl: LineFeature }) => number =
+      laneWOf;
     if (anchorBorder) {
-      const anchorM = median(borderPieces.map((p) =>
-        trafficLeftM(p) - fwdOf(p.cl) * laneWOf(p)));
+      const anchorM = median(
+        borderPieces.map((p) => trafficLeftM(p) - fwdOf(p.cl) * laneWOf(p)),
+      );
       anchorOf = () => anchorM;
     } else {
       anchorOf = (p) => trafficLeftM(p);
@@ -1125,9 +1332,7 @@ export function extractFeatures(
       // clamp below keeps the block inside the road
       const hasBorder = fwd > 0 && fwd < p.cl.lanes!;
       const lw = laneWShared(p);
-      let laneLeftM = hasBorder
-        ? anchorOf(p) + fwd * lw
-        : anchorOf(p);
+      let laneLeftM = hasBorder ? anchorOf(p) + fwd * lw : anchorOf(p);
       // clamp into this piece's (cluster-shared) measured span so markings
       // never extend past the road edge even where the centerline wanders
       // off-center
@@ -1162,14 +1367,18 @@ export function extractFeatures(
       if (area.layer !== cl.layer) continue;
       if (!highwayTypesCompatible(cl.highway, area.highway)) continue;
       if (!bboxOverlap(area.bbox, cl.bbox)) continue;
-      if (pointInAreaQ(mid, area)) { covered = true; break; }
+      if (pointInAreaQ(mid, area)) {
+        covered = true;
+        break;
+      }
     }
     if (!covered) keptCenterlines.push(cl);
   }
   const droppedCenterlines = centerlines.length - keptCenterlines.length;
   // replace contents in place (no spread — avoids stack overflow on large arrays)
   centerlines.length = 0;
-  for (let i = 0; i < keptCenterlines.length; i++) centerlines[i] = keptCenterlines[i];
+  for (let i = 0; i < keptCenterlines.length; i++)
+    centerlines[i] = keptCenterlines[i];
   void droppedCenterlines;
 
   // assign each crossing to the highway area it lies in: the crossing band
@@ -1183,8 +1392,10 @@ export function extractFeatures(
     // midpoint of the middle segment (a vertex can sit exactly on an area
     // boundary, where point-in-polygon is ambiguous)
     const ci = Math.floor(cr.coords.length / 2);
-    const mid = [(cr.coords[ci][0] + cr.coords[ci - 1][0]) / 2,
-                 (cr.coords[ci][1] + cr.coords[ci - 1][1]) / 2];
+    const mid = [
+      (cr.coords[ci][0] + cr.coords[ci - 1][0]) / 2,
+      (cr.coords[ci][1] + cr.coords[ci - 1][1]) / 2,
+    ];
     // a crossing may lie in MULTIPLE areas (a road polygon split into
     // sections): clip against all of them; prefer same-layer areas, fall
     // back to the highest-layer containing area (crossings are often
@@ -1212,7 +1423,12 @@ export function extractFeatures(
   // adjacent means the rings share at least one vertex
   const areaGridP = buildAreaIndex(areas);
   const inheritFromAdjacent = (
-    feats: { surface?: string; surfaceColour?: string; outer: Q[][][]; bbox: [number, number, number, number] }[],
+    feats: {
+      surface?: string;
+      surfaceColour?: string;
+      outer: Q[][][];
+      bbox: [number, number, number, number];
+    }[],
   ): void => {
     for (const f of feats) {
       if (f.surface) continue;
@@ -1228,14 +1444,20 @@ export function extractFeatures(
           for (const aRing of area.outer) {
             for (const p1 of fRing) {
               for (const p2 of aRing) {
-                if (p1[0] === p2[0] && p1[1] === p2[1]) { touches = true; break outer; }
+                if (p1[0] === p2[0] && p1[1] === p2[1]) {
+                  touches = true;
+                  break outer;
+                }
               }
             }
           }
         }
         if (!touches) continue;
         const a = (area.bbox[2] - area.bbox[0]) * (area.bbox[3] - area.bbox[1]);
-        if (a > bestArea) { bestArea = a; best = area; }
+        if (a > bestArea) {
+          bestArea = a;
+          best = area;
+        }
       }
       if (best) {
         f.surface = best.surface;
@@ -1258,7 +1480,9 @@ export function extractFeatures(
   // absence is what makes the adjacency fallback meaningful). Footway
   // areas never inherit by adjacency: a sidewalk next to a road is not
   // made of the road's asphalt
-  inheritFromAdjacent(areas.filter((a) => a.highway === "service" && !areasWithCenterline.has(a)));
+  inheritFromAdjacent(
+    areas.filter((a) => a.highway === "service" && !areasWithCenterline.has(a)),
+  );
 
   // collect all layer values
   const layerSet = new Set<number>();
@@ -1280,13 +1504,31 @@ export function extractFeatures(
 
   // collect all level values (only features with an explicit level=*)
   const levelSet = new Set<number>();
-  for (const arr of [areas, buildings, grass, centerlines, footways, crossings, kerbWays, kerbs, bollards, fences, landuse, streetLamps, parking, manholes]) {
+  for (const arr of [
+    areas,
+    buildings,
+    grass,
+    centerlines,
+    footways,
+    crossings,
+    kerbWays,
+    kerbs,
+    bollards,
+    fences,
+    landuse,
+    streetLamps,
+    parking,
+    manholes,
+  ]) {
     for (const f of arr) if (f.level !== undefined) levelSet.add(f.level);
   }
   const levels = [...levelSet].sort((a, b) => a - b);
 
   // compute overall bounds
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  let minX = Infinity,
+    minY = Infinity,
+    maxX = -Infinity,
+    maxY = -Infinity;
   const expand = (b: [number, number, number, number]) => {
     if (b[0] < minX) minX = b[0];
     if (b[1] < minY) minY = b[1];
@@ -1328,7 +1570,10 @@ export function extractFeatures(
     if (b.lat > maxY) maxY = b.lat;
   }
 
-  onProgress?.(100, `done (${areas.length} areas, ${centerlines.length} centerlines (-${droppedCenterlines} covered), ${crossings.length} crossings, ${kerbs.length + kerbWays.length} kerbs)`);
+  onProgress?.(
+    100,
+    `done (${areas.length} areas, ${centerlines.length} centerlines (-${droppedCenterlines} covered), ${crossings.length} crossings, ${kerbs.length + kerbWays.length} kerbs)`,
+  );
 
   return {
     areas,
@@ -1360,8 +1605,10 @@ function buildAreaIndex(areas: AreaFeature[]): Map<string, AreaFeature[]> {
   const grid = new Map<string, AreaFeature[]>();
   for (const a of areas) {
     const [minX, minY, maxX, maxY] = a.bbox;
-    const x0 = Math.floor(minX / AREA_CELL), x1 = Math.floor(maxX / AREA_CELL);
-    const y0 = Math.floor(minY / AREA_CELL), y1 = Math.floor(maxY / AREA_CELL);
+    const x0 = Math.floor(minX / AREA_CELL),
+      x1 = Math.floor(maxX / AREA_CELL);
+    const y0 = Math.floor(minY / AREA_CELL),
+      y1 = Math.floor(maxY / AREA_CELL);
     for (let x = x0; x <= x1; x++) {
       for (let y = y0; y <= y1; y++) {
         const key = `${x},${y}`;
@@ -1376,19 +1623,24 @@ function buildAreaIndex(areas: AreaFeature[]): Map<string, AreaFeature[]> {
 
 function queryAreas(
   grid: Map<string, AreaFeature[]>,
-  bbox: [number, number, number, number]
+  bbox: [number, number, number, number],
 ): AreaFeature[] {
   const [minX, minY, maxX, maxY] = bbox;
   const seen = new Set<AreaFeature>();
   const out: AreaFeature[] = [];
-  const x0 = Math.floor(minX / AREA_CELL) - 1, x1 = Math.floor(maxX / AREA_CELL) + 1;
-  const y0 = Math.floor(minY / AREA_CELL) - 1, y1 = Math.floor(maxY / AREA_CELL) + 1;
+  const x0 = Math.floor(minX / AREA_CELL) - 1,
+    x1 = Math.floor(maxX / AREA_CELL) + 1;
+  const y0 = Math.floor(minY / AREA_CELL) - 1,
+    y1 = Math.floor(maxY / AREA_CELL) + 1;
   for (let x = x0; x <= x1; x++) {
     for (let y = y0; y <= y1; y++) {
       const arr = grid.get(`${x},${y}`);
       if (!arr) continue;
       for (const a of arr) {
-        if (!seen.has(a)) { seen.add(a); out.push(a); }
+        if (!seen.has(a)) {
+          seen.add(a);
+          out.push(a);
+        }
       }
     }
   }
