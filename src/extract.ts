@@ -987,23 +987,14 @@ export function extractFeatures(
     }
   }
   // group the lane-bearing ways into roads: centerlines that touch
-  // end-to-end and continue in the same direction (a cross street ending
-  // at the same node is perpendicular and never joins). Continuity is only
-  // kept BETWEEN junctions: a shared end node inside a junction area
-  // breaks the group, and so does a fork (y-junction) — either when a way
-  // end has SEVERAL collinear candidates (the continuation is ambiguous),
-  // or when the collinear continuation carries a DIFFERENT name (a road
-  // changing name at a fork is a different road). Names never join
-  // non-touching ways: the two carriageways of a dual carriageway share a
-  // name but must never share a layout.
-  const junctionAreas = areas.filter((a) => a.junction);
-  const inJunction = (p: number[]): boolean => {
-    for (const ja of junctionAreas) {
-      if (!bboxOverlap([p[0], p[1], p[0], p[1]], ja.bbox)) continue;
-      if (pointInAreaTolQ2(p, ja)) return true;
-    }
-    return false;
-  };
+  // end-to-end and continue in the same direction. A fork (y-junction)
+  // breaks the group — either when a way end has SEVERAL collinear
+  // candidates (the continuation is ambiguous), or when the collinear
+  // continuation carries a DIFFERENT name (a road changing name at a fork
+  // is a different road). Names never join non-touching ways: the two
+  // carriageways of a dual carriageway share a name but must never share
+  // a layout. Junction areas do NOT break the group (ignored for now):
+  // geometry alone decides.
   const parent = laneCandidates.map((_, i) => i);
   const find = (i: number): number => {
     while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; }
@@ -1035,10 +1026,6 @@ export function extractFeatures(
   };
   for (const ends of byEnd.values()) {
     if (ends.length < 2) continue;
-    // continuity ends at junction areas: a shared node inside one means
-    // the ways meet at an intersection, not along a through road
-    const e0 = laneCandidates[ends[0].i];
-    if (inJunction(e0.coords[ends[0].atStart ? 0 : e0.coords.length - 1])) continue;
     // join two way ends when they are each other's UNIQUE collinear
     // continuation: mutual best match, clearly ahead of any competitor
     // (a fork gives the incoming way two collinear branches — ambiguous,

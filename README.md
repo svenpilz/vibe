@@ -142,6 +142,7 @@ For a centerline with `lanes ≥ 2` that runs inside a non-junction highway area
    **different name** (a road changing name at a fork is a different road, e.g.
    Rheinstraße → Hauptstraße). `name=*` never joins non-touching ways (the two
    carriageways of a dual carriageway share a name but must not share a layout).
+   Junction areas do not break the group: geometry alone decides continuity.
 5. Lane boundaries are drawn as continuous offset curves of the centerline, using
    averaged vertex normals and **Chaikin corner-cutting** (two iterations), so the
    markings flow smoothly around corners instead of breaking at each vertex. They are
