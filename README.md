@@ -159,12 +159,20 @@ group, continuity is kept by anchoring:
   the median of the pieces' natural border positions. Adding forward lanes extends
   the layout to the left of the anchor, adding backward lanes to the right, so a
   2 → 3 lane change keeps the existing boundaries and adds one outside.
-- **One-way roads** have no border; each piece anchors on its **own measured left road
-  edge** (pure geometry: the outline is continuous where the ways meet). The lane
-  width is shared across the whole group as the **minimum** of the pieces' even-split
-  widths, so the through lanes fit the narrowest piece (where parking eats into the
-  width): the divider runs at the same distance from the road edge on every piece,
-  all units stay visible, and wider pieces leave their extra width unpainted.
+- **One-way roads** have no border. Where the road **grows** along the group decides
+  the anchor — the measured left/right edges of the pieces reveal which side gained
+  the extra lanes:
+  - lanes added on the **right** (left edge constant): the block anchors on the **left**
+    traffic edge, extending rightwards — the left lanes continue;
+  - lanes added on the **left** (right edge constant, e.g. Prellerweg 2→4→5 lanes):
+    the block anchors on the **right** traffic edge, extending leftwards — the right
+    lanes continue;
+  - lanes added on **both sides** (centerline constant): the block centers on the
+    centerline, continuous outwards from it.
+  The through-lane width is shared across the group as the **minimum** of the pieces'
+  traffic-lane widths (parking strips absorb the remaining width rather than narrowing
+  the through lanes), so the lanes fit the narrowest piece and the shared boundaries
+  run at the same distance from the anchor edge on every piece.
 
 Each piece's lane block is finally **clamped** into its own measured road span, so
 markings never extend past the road edge even where the centerline wanders off-center.

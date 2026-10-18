@@ -53,6 +53,10 @@ export interface LineFeature {
   laneLeftM?: number;
   /** distance in meters from centerline to the right area edge (centerlines only) */
   laneRightM?: number;
+  /** measured distance in meters from centerline to the LEFT road edge of the piece (markings only) */
+  roadLeftM?: number;
+  /** measured distance in meters from centerline to the RIGHT road edge of the piece (markings only) */
+  roadRightM?: number;
   /** number of lanes forward (same direction of travel, centerlines only) */
   lanesFwd?: number;
   /** oneway=yes / -1 / roundabout: all lanes travel in one direction */

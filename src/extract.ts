@@ -1277,9 +1277,18 @@ export function extractFeatures(
     // follows the local road width and every piece fills its road exactly
     // (a 12 m piece with 4 units gets 3 m lanes, the neighbouring 12 m
     // piece with 3 units gets 4 m lanes)
+    // even split of the piece's width over all its units (traffic+parking)
     const laneWOf = (p: MarkingSample & { cl: LineFeature }): number =>
       (p.leftM + p.rightM) /
       (p.cl.lanes! + (p.cl.parkingLeft ? 1 : 0) + (p.cl.parkingRight ? 1 : 0));
+    // the through-lane width when the parking strips absorb the remaining
+    // road width instead of narrowing the traffic lanes: total minus one
+    // parking unit per side, split over the traffic lanes
+    const trafficLaneWOf = (p: MarkingSample & { cl: LineFeature }): number => {
+      const park = (p.cl.parkingLeft ? 1 : 0) + (p.cl.parkingRight ? 1 : 0);
+      const unitsW = laneWOf(p);
+      return (p.leftM + p.rightM - park * unitsW) / p.cl.lanes!;
+    };
     // left traffic edge of a piece (its parking lane virtually removed)
     const trafficLeftM = (p: MarkingSample & { cl: LineFeature }): number =>
       p.leftM - (p.cl.parkingLeft ? laneWOf(p) : 0);
@@ -1305,6 +1314,9 @@ export function extractFeatures(
     // distance from the road edge on every piece, all units stay visible,
     // and wider pieces leave their extra width unpainted
     let anchorOf: (p: MarkingSample & { cl: LineFeature }) => number;
+    // one-way roads: which side of the road the block is anchored on
+    // ("left" | "right" | "center"), decided by where the road grows
+    let anchorKind: "left" | "right" | "center" = "left";
     let laneWShared: (p: MarkingSample & { cl: LineFeature }) => number =
       laneWOf;
     if (anchorBorder) {
@@ -1313,8 +1325,49 @@ export function extractFeatures(
       );
       anchorOf = () => anchorM;
     } else {
-      anchorOf = (p) => trafficLeftM(p);
-      const w = Math.min(...pieces.map(laneWOf));
+      // which side does the road GROW on along the group? Compare the
+      // pieces' measured edges: when the lane count rises from one piece
+      // to the next, the extra units sit on the side whose measured edge
+      // moved further out. Lanes added on the RIGHT (left edge roughly
+      // constant) anchor on the LEFT edge, so the left lanes continue;
+      // lanes added on the LEFT anchor on the RIGHT edge, so the right
+      // lanes continue; lanes added on BOTH sides (centerline stays)
+      // anchor on the centerline itself, continuous outwards from it
+      const edges = pieces.map((p) => ({ l: trafficLeftM(p), r: p.rightM }));
+      // max edge movement between any two pieces
+      let dl = 0,
+        dr = 0;
+      for (const a of edges)
+        for (const b of edges) {
+          if (a.l - b.l > dl) dl = a.l - b.l;
+          if (b.l - a.l > dl) dl = b.l - a.l;
+          if (a.r - b.r > dr) dr = a.r - b.r;
+          if (b.r - a.r > dr) dr = b.r - a.r;
+        }
+      // a piece's traffic block is laid FROM the anchor edge; the anchor
+      // edge is the one that did NOT move (the continuous side)
+      const rightTrafficM = (p: MarkingSample & { cl: LineFeature }): number =>
+        p.rightM - (p.cl.parkingRight ? laneWOf(p) : 0);
+      // the LEFT edge moved much more than the right -> the road grew LEFT
+      // (added lanes sit on the left); symmetric for the right
+      const anchorLeftCase = dl > dr + 0.75;
+      const anchorRightCase = dr > dl + 0.75;
+      if (anchorLeftCase) {
+        // the right edge stayed: lanes were added on the LEFT, the block
+        // extends leftwards from the right traffic edge
+        anchorKind = "right";
+        anchorOf = (p) => rightTrafficM(p);
+      } else if (anchorRightCase) {
+        // the left edge stayed: lanes were added on the RIGHT, the block
+        // extends rightwards from the left traffic edge
+        anchorKind = "left";
+        anchorOf = (p) => trafficLeftM(p);
+      } else {
+        // both sides expanded: anchor on the centerline
+        anchorKind = "center";
+        anchorOf = () => 0;
+      }
+      const w = Math.min(...pieces.map(trafficLaneWOf));
       laneWShared = () => w;
     }
     for (const p of pieces) {
@@ -1332,13 +1385,39 @@ export function extractFeatures(
       // clamp below keeps the block inside the road
       const hasBorder = fwd > 0 && fwd < p.cl.lanes!;
       const lw = laneWShared(p);
-      let laneLeftM = hasBorder ? anchorOf(p) + fwd * lw : anchorOf(p);
+      let laneLeftM: number;
+      if (hasBorder) {
+        // bidirectional: the anchor is the direction border, forward
+        // lanes extend to its left, backward lanes to its right
+        laneLeftM = anchorOf(p) + fwd * lw;
+      } else if (anchorKind === "left") {
+        // lanes added on the right: the LEFT edge is continuous, the
+        // block extends rightwards from it
+        laneLeftM = anchorOf(p);
+      } else if (anchorKind === "right") {
+        // lanes added on the left: the RIGHT edge is continuous, the
+        // block extends leftwards from the right traffic edge
+        laneLeftM = anchorOf(p) - p.cl.lanes! * lw;
+      } else {
+        // both sides expanded: the centerline stays, lanes run
+        // continuously outwards from it
+        laneLeftM = anchorOf(p) - (p.cl.lanes! * lw) / 2;
+      }
       // clamp into this piece's (cluster-shared) measured span so markings
       // never extend past the road edge even where the centerline wanders
       // off-center
       const blockW = p.cl.lanes! * laneW;
-      const minLeft = blockW - p.rightM;
-      const maxLeft = p.leftM;
+      // the traffic block plus the parking strips (one laneW each,
+      // outside the block on their sides) must fit inside the measured
+      // road span: the block's left edge at laneLeftM, the parking strip
+      // extends laneW further left; the right edge at laneLeftM-blockW
+      // with parking laneW further right
+      const parkLeft = p.cl.parkingLeft ? laneW : 0;
+      const parkRight = p.cl.parkingRight ? laneW : 0;
+      const minLeft = blockW + parkRight - p.rightM;
+      const maxLeft = p.leftM - parkLeft;
+      if (laneLeftM < minLeft) laneLeftM = minLeft;
+      if (laneLeftM > maxLeft) laneLeftM = maxLeft;
       if (laneLeftM < minLeft) laneLeftM = minLeft;
       if (laneLeftM > maxLeft) laneLeftM = maxLeft;
       laneMarkings.push({
@@ -1349,6 +1428,8 @@ export function extractFeatures(
         laneW,
         laneLeftM,
         laneRightM: laneLeftM + p.cl.lanes! * laneW,
+        roadLeftM: p.leftM,
+        roadRightM: p.rightM,
         lanesFwd: fwd,
         areaIds: [p.area.id],
       });
