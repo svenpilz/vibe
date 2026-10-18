@@ -1123,55 +1123,26 @@ export function extractFeatures(
       return f > 0 && f < p.cl.lanes!;
     });
     const anchorBorder = borderPieces.length > 0;
-    // bidirectional roads: one shared border anchor (median). One-way
-    // roads anchor on the left road edge; pieces whose measured left edges
-    // agree within 0.75 m form a cluster sharing the median edge, so
-    // same-shaped neighbors line up at the seams, while genuinely
-    // different placements (e.g. placement=* on a dual carriageway) keep
-    // their own edge. Within a cluster, all pieces share the MINIMUM of
-    // their even-split lane widths: the through lanes must fit the
-    // narrowest piece (where parking eats into the width), so the divider
-    // never jumps at a seam, every unit stays visible, and wider pieces
-    // leave their extra width unpainted — as on a real road
+    // bidirectional roads: one shared border anchor (median of the
+    // pieces' natural border positions). One-way roads have no border:
+    // every piece anchors on its OWN measured left road edge — pure
+    // geometry, following the actual road outline, which is continuous
+    // where the ways meet (placement=* tags are ignored). The lane width
+    // is shared across the whole road group as the MINIMUM of the pieces'
+    // even-split widths, so the through lanes fit the narrowest piece
+    // (where parking eats into the width): the divider runs at the same
+    // distance from the road edge on every piece, all units stay visible,
+    // and wider pieces leave their extra width unpainted
     let anchorOf: (p: MarkingSample & { cl: LineFeature }) => number;
     let laneWShared: (p: MarkingSample & { cl: LineFeature }) => number = laneWOf;
-    const leftMByPiece = new Map<MarkingSample & { cl: LineFeature }, number>();
-    const rightMByPiece = new Map<MarkingSample & { cl: LineFeature }, number>();
     if (anchorBorder) {
       const anchorM = median(borderPieces.map((p) =>
         trafficLeftM(p) - fwdOf(p.cl) * laneWOf(p)));
       anchorOf = () => anchorM;
     } else {
-      const sorted = [...pieces].sort((a, b) => trafficLeftM(a) - trafficLeftM(b));
-      const anchorByPiece = new Map<MarkingSample & { cl: LineFeature }, number>();
-      const laneWByPiece = new Map<MarkingSample & { cl: LineFeature }, number>();
-      let cluster: (MarkingSample & { cl: LineFeature })[] = [];
-      const flush = () => {
-        const m = median(cluster.map((p) => trafficLeftM(p)));
-        for (const c of cluster) anchorByPiece.set(c, m);
-        // shared measured span: the cluster's median left/right edges, so
-        // the clamp treats clustered pieces identically and the layout
-        // does not step at their seams from measurement variation
-        const lM = median(cluster.map((p) => p.leftM));
-        const rM = median(cluster.map((p) => p.rightM));
-        for (const c of cluster) { leftMByPiece.set(c, lM); rightMByPiece.set(c, rM); }
-        // the through lanes must fit the NARROWEST piece of the cluster:
-        // where a parking strip eats into the road width the lanes are
-        // narrow, and the same lanes continue through the wider pieces
-        // (their extra width stays unpainted). The divider then never
-        // jumps at seams and every unit stays visible
-        const w = Math.min(...cluster.map(laneWOf));
-        for (const c of cluster) laneWByPiece.set(c, w);
-        cluster = [];
-      };
-      for (const p of sorted) {
-        if (cluster.length > 0
-          && Math.abs(trafficLeftM(p) - trafficLeftM(cluster[cluster.length - 1])) > 0.75) flush();
-        cluster.push(p);
-      }
-      if (cluster.length > 0) flush();
-      anchorOf = (p) => anchorByPiece.get(p) ?? trafficLeftM(p);
-      laneWShared = (p) => laneWByPiece.get(p) ?? laneWOf(p);
+      anchorOf = (p) => trafficLeftM(p);
+      const w = Math.min(...pieces.map(laneWOf));
+      laneWShared = () => w;
     }
     for (const p of pieces) {
       const fwd = fwdOf(p.cl);
@@ -1195,8 +1166,8 @@ export function extractFeatures(
       // never extend past the road edge even where the centerline wanders
       // off-center
       const blockW = p.cl.lanes! * laneW;
-      const minLeft = blockW - (rightMByPiece.get(p) ?? p.rightM);
-      const maxLeft = leftMByPiece.get(p) ?? p.leftM;
+      const minLeft = blockW - p.rightM;
+      const maxLeft = p.leftM;
       if (laneLeftM < minLeft) laneLeftM = minLeft;
       if (laneLeftM > maxLeft) laneLeftM = maxLeft;
       laneMarkings.push({
