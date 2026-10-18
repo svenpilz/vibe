@@ -762,37 +762,63 @@ export function extractFeatures(
   void inherited;
   // highway areas still without surface (e.g. a junction area no centerline
   // runs ENTIRELY through): take the majority surface of the centerlines
-  // passing through it (at least one segment midpoint inside, compatible
+  // passing through it (segment midpoint strictly inside, compatible
   // highway type, same layer) — weighted by the length inside the area, so
-  // a long Rembrandtstraße sett run beats a short clipping driveway
+  // a long Rembrandtstraße sett run beats a short clipping driveway.
+  // Footway areas get the same treatment from footway/sidewalk lines; a
+  // footway=crossing never donates its surface (crossings lie in the road
+  // they cross and would smear asphalt over the footway area)
   const surfaceByArea = new Map<AreaFeature, Map<string, number>>();
-  for (const cl of centerlines) {
-    if (!cl.surface) continue;
+  // areas that have at least one compatible centerline/footway passing
+  // through (strictly inside): surface inference from them is possible,
+  // and adjacency inference is then forbidden
+  const areasWithCenterline = new Set<AreaFeature>();
+  const surfaceDonors: LineFeature[] = [];
+  for (const cl of centerlines) if (cl.surface) surfaceDonors.push(cl);
+  for (const fw of footways) if (fw.surface) surfaceDonors.push(fw);
+  // ANY compatible way passing strictly through marks the area as having a
+  // centerline — even one without surface=*, which blocks the adjacency
+  // fallback below (surface inference by adjacency only happens when there
+  // is no centerline at all)
+  const passingLines: LineFeature[] = [...centerlines, ...footways];
+  for (const cl of passingLines) {
+    const candidates = queryAreas(areaGrid, cl.bbox);
+    for (const area of candidates) {
+      if (areasWithCenterline.has(area)) continue;
+      if (!highwayTypesCompatible(cl.highway, area.highway)) continue;
+      if (!bboxOverlap(area.bbox, cl.bbox)) continue;
+      for (let i = 1; i < cl.coords.length; i++) {
+        const a = cl.coords[i - 1], b = cl.coords[i];
+        const m = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+        if (pointInAreaQ(m, area)) { areasWithCenterline.add(area); break; }
+      }
+    }
+  }
+  for (const cl of surfaceDonors) {
     const candidates = queryAreas(areaGrid, cl.bbox);
     for (const area of candidates) {
       if (area.surface) continue;
       if (!highwayTypesCompatible(cl.highway, area.highway)) continue;
       if (!bboxOverlap(area.bbox, cl.bbox)) continue;
-      // length of the centerline inside the area (segment midpoints)
+      // length of the way inside the area: a segment counts when its
+      // midpoint lies STRICTLY inside — a way merely running along the
+      // area boundary must not donate
       let lenIn = 0;
       for (let i = 1; i < cl.coords.length; i++) {
         const a = cl.coords[i - 1], b = cl.coords[i];
         const m = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-        if (pointInAreaTolQ2(m, area)) lenIn += Math.hypot(b[0] - a[0], b[1] - a[1]);
+        if (pointInAreaQ(m, area)) lenIn += Math.hypot(b[0] - a[0], b[1] - a[1]);
       }
       if (lenIn <= 0) continue;
       let byArea = surfaceByArea.get(area);
       if (!byArea) { byArea = new Map(); surfaceByArea.set(area, byArea); }
-      byArea.set(cl.surface, (byArea.get(cl.surface) ?? 0) + lenIn);
+      byArea.set(cl.surface!, (byArea.get(cl.surface!) ?? 0) + lenIn);
     }
   }
   for (const [area, bySurface] of surfaceByArea) {
     let topS = "", topL = -1;
     for (const [sf, l] of bySurface) if (l > topL) { topL = l; topS = sf; }
-    if (topS) {
-      area.surface = topS;
-      area.surfaceColour = area.surfaceColour;
-    }
+    if (topS) area.surface = topS;
   }
 
   // lane marking extraction: like crossings, lane-bearing centerlines may be
@@ -1240,7 +1266,14 @@ export function extractFeatures(
   // area it is adjacent to (the centerline donation below only fires for a
   // centerline running entirely INSIDE the area, which service areas
   // rarely have)
-  inheritFromAdjacent(areas.filter((a) => a.highway === "service"));
+  // service highway areas without surface: the same rule — a parking lot or
+  // driveway mapped as area:highway=service takes the surface of the road
+  // area it is adjacent to. Only for areas with NO compatible centerline
+  // passing through (a centerline inside defines the surface, and its
+  // absence is what makes the adjacency fallback meaningful). Footway
+  // areas never inherit by adjacency: a sidewalk next to a road is not
+  // made of the road's asphalt
+  inheritFromAdjacent(areas.filter((a) => a.highway === "service" && !areasWithCenterline.has(a)));
 
   // collect all layer values
   const layerSet = new Set<number>();

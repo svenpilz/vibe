@@ -65,7 +65,10 @@ same layer. A way that merely clips a polygon corner does not donate its surface
 vertex strictly outside the area disqualifies the donor entirely. A highway area still
 without `surface=*` afterwards (e.g. a junction area no centerline crosses completely)
 takes the **majority surface of the centerlines passing through it**, weighted by the
-length inside the area (compatible type, same layer).
+length inside the area (compatible type, same layer); footway areas draw from footway/
+sidewalk lines the same way, and `footway=crossing` never donates (a crossing lies in the
+road it crosses). Adjacency inheritance applies only to areas with **no** compatible
+centerline at all, never to footway areas.
 
 **Adjacency inheritance.** `amenity=parking` areas and `area:highway=service` areas
 without `surface=*` take the surface of the **largest adjacent highway area** (rings
