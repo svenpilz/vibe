@@ -1124,13 +1124,15 @@ export function extractFeatures(
     });
     const anchorBorder = borderPieces.length > 0;
     // bidirectional roads: one shared border anchor (median). One-way
-    // roads: the anchor is the left road edge, but measured edges differ
-    // between pieces for two different reasons — genuine centerline
-    // placement differences (placement=*, e.g. right_of:3) which must
-    // anchor per piece, and measurement variation along a curved road,
-    // which must NOT create a jump. Pieces whose measured left edges agree
-    // within 0.75 m therefore share the median anchor of their cluster;
-    // pieces that differ keep their own measured edge
+    // roads anchor on the left road edge; pieces whose measured left edges
+    // agree within 0.75 m form a cluster sharing the median edge, so
+    // same-shaped neighbors line up at the seams, while genuinely
+    // different placements (e.g. placement=* on a dual carriageway) keep
+    // their own edge. Within a cluster, all pieces share the MINIMUM of
+    // their even-split lane widths: the through lanes must fit the
+    // narrowest piece (where parking eats into the width), so the divider
+    // never jumps at a seam, every unit stays visible, and wider pieces
+    // leave their extra width unpainted — as on a real road
     let anchorOf: (p: MarkingSample & { cl: LineFeature }) => number;
     let laneWShared: (p: MarkingSample & { cl: LineFeature }) => number = laneWOf;
     const leftMByPiece = new Map<MarkingSample & { cl: LineFeature }, number>();
@@ -1140,45 +1142,26 @@ export function extractFeatures(
         trafficLeftM(p) - fwdOf(p.cl) * laneWOf(p)));
       anchorOf = () => anchorM;
     } else {
-      // cluster by measured left edge; within a cluster, pieces with the
-      // SAME unit count also SHARE the median lane width, so their lane
-      // boundaries line up exactly at the seams (pieces with different
-      // unit counts keep per-piece widths — the road widens for the
-      // extra units, e.g. turn lanes or parking)
       const sorted = [...pieces].sort((a, b) => trafficLeftM(a) - trafficLeftM(b));
       const anchorByPiece = new Map<MarkingSample & { cl: LineFeature }, number>();
       const laneWByPiece = new Map<MarkingSample & { cl: LineFeature }, number>();
       let cluster: (MarkingSample & { cl: LineFeature })[] = [];
       const flush = () => {
-        // one shared measured span per cluster: median left and right
-        // edge. Individual samples vary along a curved road; the cluster
-        // agrees within tolerance, so the shared span removes the
-        // measurement noise that would otherwise step the layout at the
-        // seams (the clamp then never diverges between clustered pieces)
         const m = median(cluster.map((p) => trafficLeftM(p)));
         for (const c of cluster) anchorByPiece.set(c, m);
-        const rM = median(cluster.map((p) => p.rightM));
-        for (const c of cluster) rightMByPiece.set(c, rM);
+        // shared measured span: the cluster's median left/right edges, so
+        // the clamp treats clustered pieces identically and the layout
+        // does not step at their seams from measurement variation
         const lM = median(cluster.map((p) => p.leftM));
-        for (const c of cluster) leftMByPiece.set(c, lM);
-        // traffic lanes keep their width across the cluster: pieces WITHOUT
-        // parking donate their lane width to same-lane-count pieces, so a
-        // parking strip appearing along the road does not narrow the
-        // painted lanes (the parking unit absorbs the remaining width).
-        // Pieces with parking keep their own even split when no no-parking
-        // donor exists (all-parking roads, e.g. Vorarlberger Damm)
-        const byLanes = new Map<number, (MarkingSample & { cl: LineFeature })[]>();
-        for (const c of cluster) {
-          const arr = byLanes.get(c.cl.lanes!);
-          if (arr) arr.push(c); else byLanes.set(c.cl.lanes!, [c]);
-        }
-        for (const arr of byLanes.values()) {
-          const donors = arr.filter((c) => !c.cl.parkingLeft && !c.cl.parkingRight);
-          const w = donors.length > 0
-            ? median(donors.map(laneWOf))
-            : median(arr.map(laneWOf));
-          for (const c of arr) laneWByPiece.set(c, w);
-        }
+        const rM = median(cluster.map((p) => p.rightM));
+        for (const c of cluster) { leftMByPiece.set(c, lM); rightMByPiece.set(c, rM); }
+        // the through lanes must fit the NARROWEST piece of the cluster:
+        // where a parking strip eats into the road width the lanes are
+        // narrow, and the same lanes continue through the wider pieces
+        // (their extra width stays unpainted). The divider then never
+        // jumps at seams and every unit stays visible
+        const w = Math.min(...cluster.map(laneWOf));
+        for (const c of cluster) laneWByPiece.set(c, w);
         cluster = [];
       };
       for (const p of sorted) {

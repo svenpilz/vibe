@@ -119,13 +119,12 @@ For a centerline with `lanes ≥ 2` that runs inside a non-junction highway area
    shared **border anchor**: the direction border (the solid line between forward and
    backward lanes) sits at the same offset on every piece (median of the pieces'
    natural positions); a purely one-way road has no border — its pieces are clustered by
-   measured left edge (agreement within 0.75 m): a cluster shares the median left edge
-   and median road span, and pieces with the same lane count share one lane width —
-   donated by the pieces WITHOUT parking, so a parking strip appearing along the road
-   does not narrow the painted lanes (the parking unit absorbs the remaining width;
-   all-parking clusters fall back to the median of their own even splits). Pieces whose
-   measured edges genuinely differ (e.g. `placement=*` offsets on a dual carriageway)
-   anchor on their own measured edge. Each piece's lane block is clamped into its own measured road span, so
+   measured left edge (agreement within 0.75 m): a cluster shares the median left edge,
+   the median road span and the **minimum** of its pieces' even-split lane widths, so
+   the through lanes fit the narrowest piece (where parking eats into the width), all
+   units stay visible, and wider pieces leave their extra width unpainted — as on a real
+   road. Pieces whose measured edges genuinely differ (e.g. `placement=*` offsets on a
+   dual carriageway) form their own cluster and anchor on their own measured edge. Each piece's lane block is clamped into its own measured road span, so
    markings never extend past the road edge even where the centerline wanders
    off-center.
 4. **Continuity across a road** (like real-life markings): all marking pieces of one
