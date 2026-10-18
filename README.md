@@ -44,9 +44,15 @@ git commit.
 | Centerlines    | Non-closed ways of common highway types with `surface=*`, `width=*` or `lanes=*` | Includes major roads (motorway…tertiary + links) |
 | Footways       | `highway=footway` or `footway=sidewalk` ways                              | |
 | Crossings      | `footway=crossing` or `crossing=*` ways                                    | `crossing:markings=*`, falling back to `crossing=zebra → zebra` |
-| Kerbs          | `barrier=kerb` or `kerb=*` nodes **and** ways                              | `kerb` type + `tactile_paving` |
+| Kerbs          | `barrier=kerb` or `kerb=*` nodes **and** ways                              | `kerb` type + `tactile_paving`; kerb nodes on a kerb way override locally (~1 m) |
 | Buildings      | `building=*` closed ways and multipolygon relations                        | Outline only |
-| Grass          | `landuse=grass` closed ways and multipolygon relations (holes supported)    | |
+| Grass          | `landuse=grass` closed ways and multipolygon relations (holes supported)    | also `natural=scrub`, `leisure=garden` |
+| Parking        | `amenity=parking` closed ways and multipolygon relations (holes supported) | `amenity=parking` + `parking=lane` ways on a carriageway are parking lanes instead (§5) |
+| Landuse        | `landuse=residential/commercial/retail` closed ways                        | translucent fill |
+| Bollards       | `barrier=bollard` nodes                                                    | |
+| Fences         | `barrier=fence` ways                                                       | |
+| Street lamps   | `highway=street_lamp` nodes                                                | |
+| Manholes       | `man_made=manhole` nodes                                                   | |
 | Lane markings  | Derived from `lanes=*` centerlines (see §5)                                 | Not directly tagged |
 
 All features carry their `layer=*` value (default 0, clamped to ±16) and, when tagged,
@@ -58,21 +64,26 @@ their `level=*` value.
 parent way when it belongs to exactly one way, or when all its parent ways share the same
 layer value. Conflicting parents leave the node at the default layer 0.
 
-**Surface inheritance.** A highway area without `surface=*` takes the surface of a
-centerline that (a) has a compatible highway type — equal, or the footway/sidewalk pair —
-(b) lies **entirely** inside the area (every vertex, holes respected), and (c) is on the
-same layer. A way that merely clips a polygon corner does not donate its surface; any
-vertex strictly outside the area disqualifies the donor entirely. A highway area still
-without `surface=*` afterwards (e.g. a junction area no centerline crosses completely)
-takes the **majority surface of the centerlines passing through it**, weighted by the
-length inside the area (compatible type, same layer); footway areas draw from footway/
-sidewalk lines the same way, and `footway=crossing` never donates (a crossing lies in the
-road it crosses). Adjacency inheritance applies only to areas with **no** compatible
-centerline at all, never to footway areas.
+**Surface inference for highway areas.** A highway area without `surface=*` gets its
+surface from the compatible ways (centerlines and footway/sidewalk lines) running
+through it, by **one majority vote**: every compatible way with `surface=*` contributes
+the length of its parts lying strictly inside the area (a segment counts when its
+midpoint is strictly inside; compatible type = equal, or the footway/sidewalk pair;
+same layer). The surface with the greatest total inside length wins. Edge cases:
+
+- `footway=crossing` lines **never donate** — a crossing lies in the road it crosses
+  and would smear asphalt over the footway area.
+- Ways merely running along the area boundary don't donate either: their segment
+  midpoints are not strictly inside.
+- A short spur crossing the interior cannot beat long sidewalks running along the
+  boundary (the vote is length-weighted).
 
 **Adjacency inheritance.** `amenity=parking` areas and `area:highway=service` areas
 without `surface=*` take the surface of the **largest adjacent highway area** (rings
-sharing at least one vertex); the surface of the biggest touching area wins.
+sharing at least one vertex; the biggest touching area by bbox area wins). This
+fallback applies only to areas with **no compatible way passing through at all** (even
+an untagged centerline inside blocks it), and **never to footway areas**: a sidewalk is
+not made of the adjacent road's asphalt.
 
 **Centerline suppression.** A centerline is not drawn when a same-type, same-layer highway
 area covers its midpoint: the area fill replaces the line.
@@ -92,73 +103,85 @@ area covers its midpoint: the area fill replaces the line.
 
 ### 5. Lane markings
 
-For a centerline with `lanes ≥ 2` that runs inside a non-junction highway area:
+For every centerline (`type=centerline`) with `lanes >= 2`, `lane_markings != no`, that
+runs inside a non-junction highway area, one marking piece is produced **per
+(way, area section)**. Junction areas never contribute pieces.
 
-1. At the midpoint of its middle segment, two rays are cast **orthogonally** to the
-   centerline (left and right along the segment normal) until they leave the area
-   (coarse scan, then binary refinement). Each ray length is converted to meters
-   (§1); the road width is `leftM + rightM`. This works even when the centerline is not
-   the geometric center of the road.
-2. **Parking lanes**: tagged either as `parking:lane:left/right/both` (any value except
-   `no`/`none`) or via the new `parking:left/right/both=lane` scheme — or as a closed
-   `amenity=parking` + `parking=lane` way lying on the carriageway inside the same
-   highway area (a mapped on-street parking strip, e.g. way 1442125974): the strip is
-   then a parking lane of the nearest lane-bearing centerline on its side (cross
-   product of centerline direction and the vector to the strip centroid), NOT a
-   separate parking ground. Parking lanes
-   consume space on the road but do not count as regular lanes: the total width is
-   split into **equal units shared by traffic and parking lanes** — two lanes plus one
-   parking lane give three equal units, the parking unit occupying the outer strip on
-   its side.
-3. All units have the same width **within one piece**: `laneW = (leftM + rightM) /
-   (lanes + parkingLanes)` — each piece splits its own measured width evenly, so the
-   layout follows the local road (the width changes along a way) and every piece fills
-   its road exactly. Width is measured by sampling up to 12 segments per area section
-   (median of the ray-cast edges), so long curving ways follow their local geometry
-   instead of one smoothed measurement. Continuity across a road's pieces is kept by a
-   shared **border anchor**: the direction border (the solid line between forward and
-   backward lanes) sits at the same offset on every piece (median of the pieces'
-   natural positions); a purely one-way road has no border — every piece anchors on its
-   **own measured left road edge**, pure geometry following the road outline (placement
-   markers are ignored; the outline is continuous where the ways meet). The lane width
-   is shared across the road group as the **minimum** of the pieces' even-split widths:
-   the through lanes fit the narrowest piece (where parking eats into the width), so
-   the divider runs at the same distance from the road edge on every piece, all units
-   stay visible, and wider pieces leave their extra width unpainted. Each piece's lane block is clamped into its own measured road span, so
-   markings never extend past the road edge even where the centerline wanders
-   off-center.
-4. **Continuity across a road** (like real-life markings): all marking pieces of one
-   road group are anchored on the **direction border** — the solid line between
-   forward and backward lanes — or, on purely one-way roads, on the left edge of the
-   leftmost lane. Lane changes then only **add or remove lanes on the outer side**:
-   switching 2 → 3 lanes keeps the two existing boundaries and adds one outside, and
-   parking lanes appearing or disappearing move only the dashed parking boundary,
-   never a lane boundary. Ways join a road group only when their centerlines touch
-   end-to-end and continue in the same direction (mutual unique collinear
-   continuation); continuity is kept **between junctions only** — a shared end node
-   inside a junction area breaks the group, and so does a fork (y-junction): when a
-   way end has several near-collinear candidates, the continuation is ambiguous and
-   both legs start their own group. A collinear continuation joins only when the
-   **highway type** matches (a residential road continuing as a service driveway never
-   joins; a road changing name mid-block does — names no longer affect grouping).
-   Same-type forks are assumed to occur only at junctions/y-junctions, where the
-   ambiguity check breaks the group. The two carriageways of a dual carriageway share
-   a name and type but run parallel, never touching end-to-end, so they never join.
-   Junction areas do not break the group: geometry alone decides continuity.
-5. Lane boundaries are drawn as continuous offset curves of the centerline, using
-   averaged vertex normals and **Chaikin corner-cutting** (two iterations), so the
-   markings flow smoothly around corners instead of breaking at each vertex. They are
-   laid out from the anchored left traffic edge (lane 1) to the right edge (lane n),
-   so markings stay inside the street polygon even for off-center centerlines.
-6. Line style:
-   - **Solid** only between opposite directions — the boundary between forward and
-     backward lanes. Forward lanes = `lanes:forward` if tagged, else `lanes − lanes:backward`,
-     else `ceil(lanes/2)` for bidirectional roads.
-   - **Dashed** between lanes of the same direction.
-   - **No solid line** on one-way roads (`oneway=yes`/`-1`, `junction=roundabout`/`circular`):
-     all lanes run forward, so all boundaries are dashed.
-7. Markings are clipped to the containing highway area and are skipped for junction
-   areas. Markings adopt the area's layer (bird's-eye stacking, selector filtering).
+**Width measurement.** For each (way, area) piece, up to 12 segments whose midpoints
+lie inside the area are sampled (evenly spaced when more exist; segments strictly
+inside preferred over boundary-touching ones). At each sample, two rays are cast
+orthogonally to the centerline until they leave the area (coarse scan, then binary
+refinement), converted to meters (§1). The piece's road span is the **median** of the
+sampled left and right edges — long curving ways follow their local geometry instead
+of one smoothed measurement. This works even when the centerline is not the
+geometric center of the road.
+
+**Parking lanes.** A parking lane consumes road width but does not count as a traffic
+lane. It is recognised from three taggings:
+
+- `parking:lane:left/right/both` (any value except `no`/`none`), or
+- `parking:left/right/both = lane` (the new scheme; `street_side`/`on_kerb`/
+  `shoulder` are off-road and don't count), or
+- a closed `amenity=parking` + `parking=lane` way lying on the carriageway inside the
+  same highway area (a mapped on-street parking strip, e.g. way 1442125974): the strip
+  is assigned to the **nearest lane-bearing centerline on the same layer** as a
+  parking lane on the side it occupies (cross product of the centerline direction and
+  the vector to the strip centroid), and is **not** rendered as a separate parking
+  ground.
+
+Traffic lanes + parking lanes split the piece's measured width into **equal units**;
+the parking units occupy the outer strips on their sides.
+
+**Road grouping (continuity).** The lane-bearing ways of one road are grouped so their
+markings form one continuous layout:
+
+- Ways join when their centerlines **touch end-to-end** and continue in the **same
+  direction** (each end is the other's *unique* mutual collinear continuation —
+  direction vectors pointing opposite, ≤135° apart, and clearly ahead of any
+  competitor), with the **same highway type, layer and oneway status**.
+- A **fork (y-junction)** breaks the group: when a way end has *several* near-collinear
+  candidates, the continuation is ambiguous and both legs start their own group.
+- A road **changing name** mid-block still joins (names do not affect grouping); a
+  different highway type never joins (residential → service etc.).
+- Same-type forks are assumed to occur only at junctions/y-junctions, where the
+  ambiguity check breaks the group.
+- The two carriageways of a dual carriageway never join: they run parallel, never
+  touching end-to-end.
+- Junction areas do **not** break the group; geometry alone decides continuity.
+  `placement=*` tags are ignored — only measured geometry is used.
+
+**Per-piece layout.** Within one piece all units are equal:
+`laneW = (leftM + rightM) / (lanes + parkingLanes)`. Across the pieces of a road
+group, continuity is kept by anchoring:
+
+- **Bidirectional roads** share one **border anchor**: the direction border (the solid
+  line between forward and backward lanes) sits at the same offset on every piece —
+  the median of the pieces' natural border positions. Adding forward lanes extends
+  the layout to the left of the anchor, adding backward lanes to the right, so a
+  2 → 3 lane change keeps the existing boundaries and adds one outside.
+- **One-way roads** have no border; each piece anchors on its **own measured left road
+  edge** (pure geometry: the outline is continuous where the ways meet). The lane
+  width is shared across the whole group as the **minimum** of the pieces' even-split
+  widths, so the through lanes fit the narrowest piece (where parking eats into the
+  width): the divider runs at the same distance from the road edge on every piece,
+  all units stay visible, and wider pieces leave their extra width unpainted.
+
+Each piece's lane block is finally **clamped** into its own measured road span, so
+markings never extend past the road edge even where the centerline wanders off-center.
+
+**Drawing.** Lane boundaries are continuous offset curves of the centerline using
+averaged vertex normals and **Chaikin corner-cutting** (two iterations), laid out from
+the anchored left traffic edge (lane 1) to the right edge (lane n). Line style:
+
+- **Solid** only between opposite directions — the forward/backward boundary.
+  Forward lanes = `lanes:forward` if tagged, else `lanes − lanes:backward`, else
+  `ceil(lanes/2)`; on one-way roads (`oneway=yes`/`-1`, `junction=roundabout`/
+  `circular`) all lanes run forward, so all boundaries are dashed.
+- **Dashed** between lanes of the same direction, and for the parking/traffic
+  boundary (parking occupies the outer strips; the boundary makes all width units
+  visible).
+- Markings are **clipped to the containing highway area** and adopt its layer
+  (bird's-eye stacking, selector filtering).
 
 ### 6. Crossing markings
 
