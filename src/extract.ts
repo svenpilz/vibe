@@ -726,40 +726,13 @@ export function extractFeatures(
   // bucket: they must also donate surfaces to matching areas (e.g. a
   // footway=sidewalk/traffic_island line inside an area:highway=footway
   // polygon, as with mapped traffic islands)
-  const donors: LineFeature[] = [];
-  for (const cl of centerlines) if (cl.surface) donors.push(cl);
-  for (const fw of footways) if (fw.surface) donors.push(fw);
-  // several donors may match one area (a sidewalk centerline crossing it
-  // plus small footway branches merely clipping it): the LONGEST donor
-  // wins — it is the one actually running through the area
-  const best = new Map<AreaFeature, { len: number; surface: string; surfaceColour?: string }>();
-  const wayLength = (f: LineFeature): number => {
-    let len = 0;
-    for (let i = 1; i < f.coords.length; i++) {
-      len += Math.hypot(f.coords[i][0] - f.coords[i - 1][0], f.coords[i][1] - f.coords[i - 1][1]);
-    }
-    return len;
-  };
-  for (const cl of donors) {
-    const len = wayLength(cl);
-    const candidates = queryAreas(areaGrid, cl.bbox);
-    for (const area of candidates) {
-      if (area.surface) continue;
-      if (!highwayTypesCompatible(cl.highway, area.highway)) continue;
-      if (!bboxOverlap(area.bbox, cl.bbox)) continue;
-      if (!centerlineInAreaTolQ(cl, area, 10)) continue;
-      const prev = best.get(area);
-      if (prev === undefined || len > prev.len) {
-        best.set(area, { len, surface: cl.surface!, surfaceColour: cl.surfaceColour });
-      }
-    }
-  }
-  for (const [area, b] of best) {
-    area.surface = b.surface;
-    area.surfaceColour = area.surfaceColour ?? b.surfaceColour;
-    inherited++;
-  }
-  void inherited;
+  // surface inference for highway areas without surface=*: ONE majority
+  // vote. Every compatible centerline/footway with surface=* contributes
+  // the length of its parts lying strictly inside the area (segment
+  // midpoints); the surface with the greatest total inside length wins.
+  // This replaces the earlier entirely-inside containment rule, which a
+  // short spur could win against long sidewalks running along the
+  // boundary.
   // highway areas still without surface (e.g. a junction area no centerline
   // runs ENTIRELY through): take the majority surface of the centerlines
   // passing through it (segment midpoint strictly inside, compatible
@@ -776,6 +749,7 @@ export function extractFeatures(
   const surfaceDonors: LineFeature[] = [];
   for (const cl of centerlines) if (cl.surface) surfaceDonors.push(cl);
   for (const fw of footways) if (fw.surface) surfaceDonors.push(fw);
+
   // ANY compatible way passing strictly through marks the area as having a
   // centerline — even one without surface=*, which blocks the adjacency
   // fallback below (surface inference by adjacency only happens when there

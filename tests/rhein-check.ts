@@ -79,16 +79,17 @@ for (const p of lm) {
 }
 console.log("separate parking features (ground only):", result.parking.length,
   result.parking.map((p) => p.id).join(","));
-const rhein = lm.find((m) => m.name === "Rheinstraße");
-console.log("Rheinstraße parking from strip: L", rhein?.parkingLeft, "R", rhein?.parkingRight);
-const rhein2 = lm.find((m) => m.name === "Rheinstraße");
-const haupt = lm.filter((m) => m.name === "Hauptstraße");
-if (!rhein || haupt.length !== 2) {
-  console.log(`\nPROBLEM: expected 1 Rheinstraße + 2 Hauptstraße pieces, got ${lm.length}`);
-} else if (rhein2.laneW !== haupt[0].laneW || haupt[0].laneW === haupt[1].laneW === undefined) {
-  console.log("\nOK: fork legs separate, each width split evenly");
-} else if (haupt[0].laneW !== haupt[1].laneW) {
-  console.log(`\nOK: fork legs separate (Hauptstraße carriageways ${haupt[0].laneW.toFixed(2)} / ${haupt[1].laneW.toFixed(2)}), Rheinstraße ${rhein2.laneW.toFixed(2)}`);
-} else {
+const rheinPiece = lm.find((m) => m.name === "Rheinstraße");
+console.log("Rheinstraße parking from strip: L", rheinPiece?.parkingLeft, "R", rheinPiece?.parkingRight);
+const hauptPieces = lm.filter((m) => m.name === "Hauptstraße");
+const rheinW = rheinPiece?.laneW;
+const hauptW = hauptPieces.map((p) => p.laneW);
+if (rheinW === undefined || hauptPieces.length !== 2
+    || hauptW.some((w) => w === undefined)) {
+  console.log(`\nPROBLEM: expected 1 Rheinstraße + 2 Hauptstraße pieces with widths, got ${lm.length}`);
+} else if (rheinW === hauptW[0]) {
   console.log("\nPROBLEM: fork legs share one lane width");
+} else {
+  console.log(`\nOK: fork legs separate, each width split evenly ` +
+    `(Rheinstraße ${rheinW.toFixed(2)}, Hauptstraße ${hauptW.map((w) => w!.toFixed(2)).join(" / ")})`);
 }
