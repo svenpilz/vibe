@@ -860,10 +860,12 @@ export function extractFeatures(
   // end-to-end and continue in the same direction (a cross street ending
   // at the same node is perpendicular and never joins). Continuity is only
   // kept BETWEEN junctions: a shared end node inside a junction area
-  // breaks the group, and so does a fork (y-junction) — when a way end has
-  // SEVERAL collinear candidates, the continuation is ambiguous and the
-  // group ends there. Names do NOT join anything: the two carriageways of
-  // a dual carriageway share a name but must never share a layout.
+  // breaks the group, and so does a fork (y-junction) — either when a way
+  // end has SEVERAL collinear candidates (the continuation is ambiguous),
+  // or when the collinear continuation carries a DIFFERENT name (a road
+  // changing name at a fork is a different road). Names never join
+  // non-touching ways: the two carriageways of a dual carriageway share a
+  // name but must never share a layout.
   const junctionAreas = areas.filter((a) => a.junction);
   const inJunction = (p: number[]): boolean => {
     for (const ja of junctionAreas) {
@@ -921,6 +923,9 @@ export function extractFeatures(
         if (find(ends[a].i) === find(ends[b].i)) continue;
         const A = laneCandidates[ends[a].i];
         if (A.layer !== B.layer || A.oneway !== B.oneway) continue;
+        // a collinear continuation under a different name is a different
+        // road (the Rheinstraße→Hauptstraße fork): never join
+        if (A.name && B.name && A.name !== B.name) continue;
         const dB = endDir(B, ends[b].atStart);
         const dot = dA[0] * dB[0] + dA[1] * dB[1];
         if (dot <= -0.7 && dot > bestDot) {
@@ -939,6 +944,8 @@ export function extractFeatures(
         const C = laneCandidates[ends[c].i];
         if (laneCandidates[ends[bestB].i].layer !== C.layer) continue;
         if (laneCandidates[ends[bestB].i].oneway !== C.oneway) continue;
+        const nB = laneCandidates[ends[bestB].i].name, nC = C.name;
+        if (nB && nC && nB !== nC) continue;
         const dC = endDir(C, ends[c].atStart);
         const dot = dB[0] * dC[0] + dB[1] * dC[1];
         if (dot <= -0.7 && dot > mutDot) { mutDot = dot; mutBest = c; }
