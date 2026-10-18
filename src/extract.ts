@@ -19,6 +19,7 @@
 import type { OSMData, OSMTags, OSMWay } from "./osm-pbf";
 import type {
   Q,
+  StopLineFeature,
   AreaFeature,
   BuildingFeature,
   GrassFeature,
@@ -49,6 +50,7 @@ export interface ExtractResult {
   parking: ParkingFeature[];
   manholes: ManholeFeature[];
   laneMarkings: LineFeature[];
+  stopLines: StopLineFeature[];
   /** all layer values present in the data, sorted ascending */
   layers: number[];
   /** all level values present in the data, sorted ascending */
@@ -943,6 +945,7 @@ export function extractFeatures(
   // covered by their highway area (and then dropped below); extract the
   // marking data first into its own array.
   const laneMarkings: LineFeature[] = [];
+  const stopLines: StopLineFeature[] = [];
   const laneCandidates: LineFeature[] = [];
   for (const cl of centerlines) {
     if (cl.lanes !== undefined && cl.lanes >= 2 && !cl.noLaneMarkings)
@@ -1009,11 +1012,38 @@ export function extractFeatures(
   // runs into the signalized crossing; at the START, traffic flows away
   // (one-way roads get no stop line there - it belongs to the opposite
   // carriageway); mid-way on a bidirectional road, both directions stop.
+  // lane candidates AND car-only ways without lanes=* (lanes defaults to
+  // 2, one per direction; a lanes=1 residential road still gets a stop
+  // line for its single direction). Footway/crossing ways never carry car
+  // stop lines - stop lines are for cars
+  const stopWays: LineFeature[] = [...laneCandidates];
+  for (const cl of centerlines) {
+    if (stopWays.includes(cl)) continue;
+    if (
+      cl.highway === "footway" ||
+      cl.footway === "sidewalk" ||
+      cl.footway === "crossing"
+    )
+      continue;
+    if (
+      cl.highway === "cycleway" ||
+      cl.highway === "path" ||
+      cl.highway === "steps" ||
+      cl.highway === "pedestrian" ||
+      cl.highway === "track"
+    )
+      continue;
+    stopWays.push(cl);
+  }
   const stopLineAt = new Map<
     LineFeature,
-    { idx: number; side: "start" | "mid" | "end" }[]
+    {
+      idx: number;
+      side: "start" | "mid" | "end";
+      sigDir: "forward" | "backward" | "both" | undefined;
+    }[]
   >();
-  for (const cl of laneCandidates) {
+  for (const cl of stopWays) {
     const way = data.ways.get(parseInt(cl.id.slice(1), 10));
     if (!way) continue;
     const n = cl.coords.length;
@@ -1025,12 +1055,24 @@ export function extractFeatures(
       // signal there), never the start
       const side: "start" | "mid" | "end" =
         ri >= n - 2 ? "end" : ri <= 1 ? "start" : "mid";
+      // traffic_signals:direction on the node tells which direction the
+      // signal FACES (forward = along the way, backward = against it);
+      // without it, signals apply to the direction(s) implied by the
+      // node's position on the way
+      const sigDir: "forward" | "backward" | "both" | undefined =
+        nt["traffic_signals:direction"] === "forward"
+          ? "forward"
+          : nt["traffic_signals:direction"] === "backward"
+            ? "backward"
+            : nt["traffic_signals:direction"] === "both"
+              ? "both"
+              : undefined;
       let arr = stopLineAt.get(cl);
       if (!arr) {
         arr = [];
         stopLineAt.set(cl, arr);
       }
-      arr.push({ idx: ri, side });
+      arr.push({ idx: ri, side, sigDir });
     }
   }
   // resolve each signal to its stop position: walk from the signal node
@@ -1044,7 +1086,7 @@ export function extractFeatures(
   // the piece of that area carries it
   const areasOfWay = new Map<LineFeature, AreaFeature[]>();
   const slAreaGrid = buildAreaIndex(areas);
-  for (const cl of laneCandidates) {
+  for (const cl of stopWays) {
     const found: AreaFeature[] = [];
     for (const area of queryAreas(slAreaGrid, cl.bbox)) {
       if (area.junction) continue;
@@ -1064,7 +1106,12 @@ export function extractFeatures(
   }
   const stopLineResolved = new Map<
     LineFeature,
-    { idx: number; side: "start" | "mid" | "end"; area: AreaFeature }[]
+    {
+      idx: number;
+      side: "start" | "mid" | "end";
+      sigDir: "forward" | "backward" | "both" | undefined;
+      area: AreaFeature;
+    }[]
   >();
   for (const [cl, sigs] of stopLineAt) {
     const myAreas = areasOfWay.get(cl) ?? [];
@@ -1086,11 +1133,65 @@ export function extractFeatures(
             arr = [];
             stopLineResolved.set(cl, arr);
           }
-          arr.push({ idx: i, side: sl.side, area: hit });
+          arr.push({
+            idx: i,
+            side: sl.side,
+            sigDir: sl.sigDir,
+            area: hit,
+          });
           break;
         }
         steps++;
       }
+    }
+  }
+  // standalone stop lines: car ways WITHOUT drawn lane markings (no
+  // lanes=* or lane_markings=no) still stop at signals - measure their
+  // road width at the resolved position and emit a stop line spanning
+  // the full width (one-way: all traffic stops; the width is the road's)
+  for (const [cl, sigs] of stopLineResolved) {
+    if (laneCandidates.includes(cl)) continue;
+    for (const sl of sigs) {
+      const bi = sl.idx;
+      const a = cl.coords[Math.max(0, bi - 1)];
+      const b = cl.coords[Math.min(cl.coords.length - 1, bi + 1)];
+      const dx = b[0] - a[0],
+        dy = b[1] - a[1];
+      const l = Math.hypot(dx, dy);
+      if (l === 0) continue;
+      const dir: [number, number] = [dx / l, dy / l];
+      const nx = -dy / l,
+        ny = dx / l;
+      const pt = cl.coords[bi];
+      const mPerLon =
+        (111_320 * Math.cos(((pt[1] / 1e7) * Math.PI) / 180)) / 1e7;
+      const mPerLat = 111_320 / 1e7;
+      const area = sl.area;
+      const [minX, minY, maxX, maxY] = area.bbox;
+      const maxRay = Math.hypot(maxX - minX, maxY - minY) + 1000;
+      const left = rayExitInArea(pt, [nx, ny], area, maxRay);
+      const right = rayExitInArea(pt, [-nx, -ny], area, maxRay);
+      if (left === null || right === null) continue;
+      const leftM = Math.hypot(nx * left * mPerLon, ny * left * mPerLat);
+      const rightM = Math.hypot(nx * left * mPerLon, ny * left * mPerLat);
+      void rightM;
+      const widthM =
+        leftM + Math.hypot(nx * right * mPerLon, ny * right * mPerLat);
+      stopLines.push({
+        type: "stopline",
+        id: cl.id,
+        layer: cl.layer,
+        level: cl.level,
+        atQ: pt,
+        dir,
+        widthM,
+        bbox: [
+          pt[0] - Math.round(widthM / mPerLon),
+          pt[1] - Math.round(widthM / mPerLat),
+          pt[0] + Math.round(widthM / mPerLon),
+          pt[1] + Math.round(widthM / mPerLat),
+        ],
+      });
     }
   }
   // ---------------------------------------------------------------------
@@ -1540,8 +1641,22 @@ export function extractFeatures(
       const laneBlockRight = laneLeftM - p.cl.lanes! * laneW;
       let stopFrom = 0,
         stopTo = 0;
-      if (stopLine) {
-        if (stopLine.side === "end") {
+      // which direction does the signal FACE? traffic_signals:direction on
+      // the node wins (forward = along the way, backward = against); a
+      // one-way way flows in its own direction only, so a backward-facing
+      // signal on it is ignored
+      let effectiveSide = stopLine?.side;
+      if (stopLine?.sigDir) {
+        if (stopLine.sigDir === "forward") effectiveSide = "end";
+        else if (stopLine.sigDir === "backward") {
+          // a backward-facing signal stops the backward lanes; on a
+          // one-way road nothing flows backward -> no stop line
+          effectiveSide = bidirectional ? "start" : undefined;
+        }
+        // "both" keeps the node-position side (mid stays full width)
+      }
+      if (stopLine && effectiveSide) {
+        if (effectiveSide === "end") {
           // forward lanes: from the left edge down to the direction
           // border (all lanes on a one-way road)
           // forward side: extend through the LEFT parking strip to the
@@ -1552,7 +1667,7 @@ export function extractFeatures(
             : p.cl.parkingRight
               ? -p.rightM
               : laneBlockRight;
-        } else if (stopLine.side === "start") {
+        } else if (effectiveSide === "start") {
           if (bidirectional) {
             // backward side: extend through the RIGHT parking strip
             stopFrom = laneBlockRight + (p.cl.lanes! - fwd) * laneW;
@@ -1824,6 +1939,7 @@ export function extractFeatures(
     parking,
     manholes,
     laneMarkings,
+    stopLines,
     layers,
     levels,
     bounds: [minX, minY, maxX, maxY],

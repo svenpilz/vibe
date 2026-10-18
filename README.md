@@ -178,9 +178,14 @@ by anchoring:
 Each piece's lane block is finally **clamped** into its own measured road span, so
 markings never extend past the road edge even where the centerline wanders off-center.
 
-**Stop lines.** A lane-bearing way carrying a `highway=traffic_signals` node gets a
-solid stop line across the road at that node (signals stand at the stop line). Which
-lanes it covers depends on where the node sits on the way:
+**Stop lines.** A car way carrying a `highway=traffic_signals` node gets a solid
+stop line across the road at that node (signals stand at the stop line). Ways without
+`lanes=*` (or with `lane_markings=no`) get a standalone stop line spanning the full
+measured road width — footway/crossing ways never do, stop lines are for cars.
+`traffic_signals:direction` on the node decides which direction the signal faces:
+`forward` stops the forward lanes, `backward` the backward lanes (nothing on a one-way
+road — no traffic flows backward there); without the tag, the covered lanes follow
+from the node's position on the way:
 
 - at the way's **end** (traffic runs into the signal): the stop line spans the
   **full width** on a one-way road — including its parking lanes — and only the

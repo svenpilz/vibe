@@ -206,4 +206,114 @@ if (failures > 0) {
   }
 }
 
+// traffic_signals:direction on the node decides the covered lanes
+{
+  // bidirectional road, MID signal facing backward: only the backward
+  // lanes (right half) get the stop line
+  const sg = node(105000, 2, {
+    highway: "traffic_signals",
+    "traffic_signals:direction": "backward",
+  });
+  way(
+    [node(100000, 0), node(102500, 0), sg, node(107500, 0), node(110000, 0)],
+    {
+      highway: "tertiary",
+      surface: "asphalt",
+      lanes: "2",
+      name: "G-Stra\u00dfe",
+    },
+  );
+  const ga = node(99550, -450),
+    gb2 = node(110450, -450),
+    gc2 = node(110450, 450),
+    gd2 = node(99550, 450);
+  way([ga, gb2, gc2, gd2, ga], {
+    "area:highway": "tertiary",
+    surface: "asphalt",
+  });
+  const g = extractFeatures(data).laneMarkings.find(
+    (m) => m.name === "G-Stra\u00dfe",
+  );
+  check(
+    "direction tag: stop line present",
+    g !== undefined && g.stopLineAtQ !== undefined,
+  );
+  if (g?.stopLineFromM !== undefined && g?.stopLineToM !== undefined) {
+    const span = Math.abs(g.stopLineFromM - g.stopLineToM);
+    check(
+      "direction=backward on bidirectional: only the backward (right) half",
+      Math.abs(span - g.laneW!) < 0.5,
+      `span=${span.toFixed(2)} laneW=${g.laneW!.toFixed(2)}`,
+    );
+  }
+  // one-way road, backward-facing signal: no traffic stops -> no line
+  const sg2 = node(125000, 2, {
+    highway: "traffic_signals",
+    "traffic_signals:direction": "backward",
+  });
+  way(
+    [node(120000, 0), node(122500, 0), sg2, node(127500, 0), node(130000, 0)],
+    {
+      highway: "tertiary",
+      surface: "asphalt",
+      lanes: "2",
+      name: "H-Stra\u00dfe",
+      oneway: "yes",
+    },
+  );
+  const ha = node(119550, -450),
+    hb2 = node(130450, -450),
+    hc2 = node(130450, 450),
+    hd2 = node(119550, 450);
+  way([ha, hb2, hc2, hd2, ha], {
+    "area:highway": "tertiary",
+    surface: "asphalt",
+  });
+  const h = extractFeatures(data).laneMarkings.find(
+    (m) => m.name === "H-Stra\u00dfe",
+  );
+  check(
+    "direction=backward on one-way: no stop line",
+    h === undefined || h.stopLineAtQ === undefined,
+  );
+}
+
+// no-lanes car way (e.g. lanes=1 or untagged residential) still gets a
+// standalone stop line at its signal
+{
+  const sg = node(140000, 0, { highway: "traffic_signals" });
+  way([node(134000, 0), node(137000, 0), sg], {
+    highway: "residential",
+    surface: "asphalt",
+    name: "I-Stra\u00dfe",
+  });
+  const ia = node(134550, -350),
+    ib2 = node(140450, -350),
+    ic2 = node(140450, 350),
+    id2 = node(134550, 350);
+  way([ia, ib2, ic2, id2, ia], {
+    "area:highway": "residential",
+    surface: "asphalt",
+  });
+  const res2 = extractFeatures(data);
+  const sl = res2.stopLines.find(
+    (m) =>
+      m.id.includes("I-Stra\u00dfe") ||
+      m.id === res2.stopLines.find((x) => true)?.id,
+  );
+  check(
+    "no-lanes way: standalone stop line present",
+    res2.stopLines.length > 0,
+    `count=${res2.stopLines.length}`,
+  );
+  if (res2.stopLines.length > 0) {
+    const s0 = res2.stopLines[0];
+    check(
+      "no-lanes way: stop line spans the full road width",
+      s0.widthM > 5 && s0.widthM < 8.5,
+      `width=${s0.widthM.toFixed(2)}`,
+    );
+  }
+}
+
 console.log("all stop line tests passed");

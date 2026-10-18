@@ -1,6 +1,7 @@
 import { buildIndex, queryIndex, type Indexed } from "./src/loader";
 import type { ExtractResult } from "./src/extract";
 import type {
+  StopLineFeature,
   AreaFeature,
   BuildingFeature,
   GrassFeature,
@@ -49,6 +50,8 @@ let streetLampGrid: Map<number, StreetLampFeature[]> | null = null;
 let parkingIndex: Indexed<ParkingFeature> | null = null;
 let manholeGrid: Map<number, ManholeFeature[]> | null = null;
 let laneMarkingIndex: Indexed<LineFeature> | null = null;
+
+let stopLineIndex: Indexed<StopLineFeature> | null = null;
 
 const layers = {
   areas: true,
@@ -639,6 +642,33 @@ function draw() {
       const clipped = clipToAreas(lm.areaIds);
       drawLaneMarkings(lm);
       if (clipped) ctx.restore();
+    }
+    // --- standalone stop lines (car ways without drawn lane markings) ---
+    const sls2 =
+      lodVisible("laneMarkings") && stopLineIndex
+        ? queryIndex(stopLineIndex, bbox)
+        : [];
+    for (const sl of sls2) {
+      if (!onLayer(sl)) continue;
+      const px2 = pxPerMeter();
+      // position in screen coords
+      const sx = lonToX(sl.atQ[0] / Q),
+        sy = latToY(sl.atQ[1] / Q);
+      // dir is a unit vector in quantized lon/lat space; to screen space:
+      // x grows with lon, y grows DOWN as lat grows -> mirror dy
+      const dirX = sl.dir[0],
+        dirY = -sl.dir[1];
+      // right-hand normal in screen space
+      const nx = -dirY,
+        ny = dirX;
+      const half = (sl.widthM / 2) * px2;
+      ctx.strokeStyle = "#e8e8e8";
+      ctx.setLineDash([]);
+      ctx.lineWidth = Math.max(2, 0.4 * px2);
+      ctx.beginPath();
+      ctx.moveTo(sx + nx * half, sy + ny * half);
+      ctx.lineTo(sx - nx * half, sy - ny * half);
+      ctx.stroke();
     }
 
     // --- footways ---
@@ -2217,6 +2247,7 @@ function ingestResult(result: ExtractResult, name: string) {
     parking: result.parking,
     manholes: result.manholes,
     laneMarkings: result.laneMarkings,
+    stopLines: result.stopLines,
   };
   areaIndex = buildIndex(dataset.areas);
   lineIndexes = {
@@ -2252,6 +2283,7 @@ function ingestResult(result: ExtractResult, name: string) {
     barr.push(b);
   }
   laneMarkingIndex = buildIndex(dataset.laneMarkings);
+  stopLineIndex = buildIndex(dataset.stopLines);
   kerbGrid = new Map();
   for (const k of dataset.kerbs) {
     const key = Math.floor(k.lon / 50000) * 100000 + Math.floor(k.lat / 50000);

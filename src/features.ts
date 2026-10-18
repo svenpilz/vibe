@@ -215,6 +215,21 @@ export interface KerbWayFeature {
   bbox: [number, number, number, number];
 }
 
+/** standalone stop line: car way without drawn lane markings */
+export interface StopLineFeature {
+  type: "stopline";
+  id: string;
+  layer: number;
+  level?: number;
+  /** position on the way [lonQ, latQ] */
+  atQ: Q[];
+  /** unit direction of the way at the position (screen-space heading) */
+  dir: [number, number];
+  /** half width in meters: the line spans from -width/2 to +width/2 along the normal */
+  widthM: number;
+  bbox: [number, number, number, number];
+}
+
 export type Feature =
   | AreaFeature
   | BuildingFeature
@@ -245,6 +260,7 @@ export interface Dataset {
   parking: ParkingFeature[];
   manholes: ManholeFeature[];
   laneMarkings: LineFeature[];
+  stopLines: StopLineFeature[];
 }
 
 export const SURFACE_COLORS: Record<string, string> = {
