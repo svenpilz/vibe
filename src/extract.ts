@@ -1386,10 +1386,17 @@ export function extractFeatures(
       const hasBorder = fwd > 0 && fwd < p.cl.lanes!;
       const lw = laneWShared(p);
       let laneLeftM: number;
+      let bidirectional = false;
       if (hasBorder) {
         // bidirectional: the anchor is the direction border, forward
-        // lanes extend to its left, backward lanes to its right
+        // lanes extend to its left, backward lanes to its right. The
+        // border is the visually dominant line and MUST keep its shared
+        // offset; the clamp below therefore treats the piece WITHOUT the
+        // parking reservation (parking occupies its unit inside the
+        // measured width — it was part of the even split — and clamping
+        // must never move the border)
         laneLeftM = anchorOf(p) + fwd * lw;
+        bidirectional = true;
       } else if (anchorKind === "left") {
         // lanes added on the right: the LEFT edge is continuous, the
         // block extends rightwards from it
@@ -1412,8 +1419,8 @@ export function extractFeatures(
       // road span: the block's left edge at laneLeftM, the parking strip
       // extends laneW further left; the right edge at laneLeftM-blockW
       // with parking laneW further right
-      const parkLeft = p.cl.parkingLeft ? laneW : 0;
-      const parkRight = p.cl.parkingRight ? laneW : 0;
+      const parkLeft = bidirectional ? 0 : p.cl.parkingLeft ? laneW : 0;
+      const parkRight = bidirectional ? 0 : p.cl.parkingRight ? laneW : 0;
       const minLeft = blockW + parkRight - p.rightM;
       const maxLeft = p.leftM - parkLeft;
       if (laneLeftM < minLeft) laneLeftM = minLeft;
