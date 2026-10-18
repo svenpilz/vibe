@@ -1,6 +1,22 @@
 import { buildIndex, queryIndex, type Indexed } from "./src/loader";
 import type { ExtractResult } from "./src/extract";
-import type { AreaFeature, BuildingFeature, GrassFeature, LineFeature, KerbFeature, KerbWayFeature, BollardFeature, FenceFeature, LanduseFeature, StreetLampFeature, ParkingFeature, ManholeFeature, Dataset, Feature, Q } from "./src/features";
+import type {
+  AreaFeature,
+  BuildingFeature,
+  GrassFeature,
+  LineFeature,
+  KerbFeature,
+  KerbWayFeature,
+  BollardFeature,
+  FenceFeature,
+  LanduseFeature,
+  StreetLampFeature,
+  ParkingFeature,
+  ManholeFeature,
+  Dataset,
+  Feature,
+  Q,
+} from "./src/features";
 import { surfaceColor, normalizeSurface } from "./src/features";
 
 const canvas = document.getElementById("map") as HTMLCanvasElement;
@@ -59,7 +75,7 @@ const layers = {
  * dimensions (a kerb is ~10cm high, markings ~50cm wide, sidewalks ~2m).
  */
 const LOD: Record<keyof typeof layers, number> = {
-  areas: 0,        // always
+  areas: 0, // always
   grass: 20,
   buildings: 20,
   centerlines: 20,
@@ -76,8 +92,14 @@ const LOD: Record<keyof typeof layers, number> = {
 };
 
 const MAJOR_ROADS = new Set([
-  "motorway", "trunk", "primary", "secondary",
-  "motorway_link", "trunk_link", "primary_link", "secondary_link",
+  "motorway",
+  "trunk",
+  "primary",
+  "secondary",
+  "motorway_link",
+  "trunk_link",
+  "primary_link",
+  "secondary_link",
 ]);
 
 function lodVisible(key: keyof typeof layers): boolean {
@@ -115,7 +137,12 @@ let selectedLevel: number | null = null;
 /** whether a feature is drawn at all under the current selection */
 function layerVisible(f: { layer?: number; level?: number }): boolean {
   if (selectedLayer !== null && (f.layer ?? 0) !== selectedLayer) return false;
-  if (selectedLevel !== null && f.level !== undefined && f.level !== selectedLevel) return false;
+  if (
+    selectedLevel !== null &&
+    f.level !== undefined &&
+    f.level !== selectedLevel
+  )
+    return false;
   return true;
 }
 
@@ -132,7 +159,7 @@ function mercY(latDeg: number): number {
   return Math.log(Math.tan(Math.PI / 4 + rad / 2));
 }
 function lonToX(lonDeg: number): number {
-  return ((lonDeg - view.cx) * Math.PI) / 180 * R() + canvas.width / 2;
+  return (((lonDeg - view.cx) * Math.PI) / 180) * R() + canvas.width / 2;
 }
 function latToY(latDeg: number): number {
   return -(mercY(latDeg) - mercY(view.cy)) * R() + canvas.height / 2;
@@ -153,7 +180,8 @@ function pxPerMeter(): number {
 function viewBboxQ(): [number, number, number, number] {
   const degPerPx = 180 / (Math.PI * R());
   const halfW = (canvas.width / 2) * degPerPx;
-  const halfH = (canvas.height / 2) * degPerPx * Math.cos((view.cy * Math.PI) / 180) * 1.1;
+  const halfH =
+    (canvas.height / 2) * degPerPx * Math.cos((view.cy * Math.PI) / 180) * 1.1;
   return [
     Math.round((view.cx - halfW) * Q),
     Math.round((view.cy - halfH) * Q),
@@ -180,11 +208,13 @@ function strokePolyline(coords: Q[][]) {
   for (let i = 1; i < coords.length; i++) {
     const x = lonToX(coords[i][0] / Q);
     const y = latToY(coords[i][1] / Q);
-    const dx = x - lastX, dy = y - lastY;
+    const dx = x - lastX,
+      dy = y - lastY;
     // skip vertices closer than ~2px on screen to the last drawn vertex
     if (dx * dx + dy * dy < 4 && i < coords.length - 1) continue;
     ctx.lineTo(x, y);
-    lastX = x; lastY = y;
+    lastX = x;
+    lastY = y;
   }
 }
 
@@ -207,11 +237,14 @@ function crossingStripeColor(markings?: string): string | null {
 }
 
 /**
-* A feature's paint colour: an explicit surface:colour (or colour) tag wins
-* over the palette derived from the surface type. Invalid CSS colour values
-* fall back to the surface color.
-*/
-function featureColor(surface: string | undefined, colour: string | undefined): string {
+ * A feature's paint colour: an explicit surface:colour (or colour) tag wins
+ * over the palette derived from the surface type. Invalid CSS colour values
+ * fall back to the surface color.
+ */
+function featureColor(
+  surface: string | undefined,
+  colour: string | undefined,
+): string {
   if (colour) {
     ctx.fillStyle = "#000";
     ctx.fillStyle = colour;
@@ -264,12 +297,13 @@ function grassPatternTile(kind: string): CanvasPattern | null {
       const seed = ry * 13 + rx * 7 + 5;
       // vary brightness and hue slightly per patch
       const d = Math.round((rand(seed) - 0.45) * 34);
-      tctx.fillStyle = `rgb(${base[0] + d},${base[1] + d + Math.round((rand(seed+1)-0.5)*10)},${base[2] + d - Math.round((rand(seed+2)-0.5)*14)})`;
+      tctx.fillStyle = `rgb(${base[0] + d},${base[1] + d + Math.round((rand(seed + 1) - 0.5) * 10)},${base[2] + d - Math.round((rand(seed + 2) - 0.5) * 14)})`;
       tctx.fillRect(rx * cell, ry * cell, cell, cell);
       // sprinkle a few smaller darker/lighter blades-patches within
       for (let k = 0; k < 6; k++) {
         const sd = seed * 37 + k;
-        const bx = rand(sd) * cell, by = rand(sd + 11) * cell;
+        const bx = rand(sd) * cell,
+          by = rand(sd + 11) * cell;
         const bw = 2 + rand(sd + 21) * cell * 0.22;
         const bh = 2 + rand(sd + 31) * cell * 0.22;
         const dd = Math.round((rand(sd + 41) - 0.5) * 46);
@@ -299,12 +333,21 @@ function stonePatternTile(surface: string): CanvasPattern | null {
   const base = isSett ? 110 : 128; // greyish tone
   tctx.fillStyle = `rgb(${base - 22},${base - 22},${base - 22})`; // gap/joint color (darker)
   tctx.fillRect(0, 0, tile.width, tile.height);
-  const drawStone = (x: number, y: number, w: number, h: number, seed: number): void => {
+  const drawStone = (
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    seed: number,
+  ): void => {
     // per-stone brightness variation, more irregular for sett
     const jitter = isSett ? 22 : 9;
     const v = base + Math.round((rand(seed) - 0.5) * jitter * 2);
     tctx.fillStyle = `rgb(${v},${v},${v + (isSett ? -4 : 0)})`;
-    let px0 = x, py0 = y, pw = w, ph = h;
+    let px0 = x,
+      py0 = y,
+      pw = w,
+      ph = h;
     if (isSett) {
       // irregular placement/size for sett
       px0 += (rand(seed + 1) - 0.5) * gap * 2;
@@ -312,21 +355,38 @@ function stonePatternTile(surface: string): CanvasPattern | null {
       pw *= 0.86 + rand(seed + 3) * 0.26;
       ph *= 0.86 + rand(seed + 4) * 0.26;
     }
-    tctx.fillRect(Math.round(px0), Math.round(py0), Math.max(2, Math.round(pw)), Math.max(2, Math.round(ph)));
+    tctx.fillRect(
+      Math.round(px0),
+      Math.round(py0),
+      Math.max(2, Math.round(pw)),
+      Math.max(2, Math.round(ph)),
+    );
   };
   if (isSett) {
     // running bond: offset every other row by half a stone
     for (let ry = 0; ry < 2; ry++) {
       for (let rx = -1; rx < 3; rx++) {
         const x = rx * cell + (ry % 2 === 1 ? cell / 2 : 0);
-        drawStone(x + gap / 2, ry * cell + gap / 2, size, size, ry * 31 + rx * 7 + 13);
+        drawStone(
+          x + gap / 2,
+          ry * cell + gap / 2,
+          size,
+          size,
+          ry * 31 + rx * 7 + 13,
+        );
       }
     }
   } else {
     // regular grid of larger stones with slight per-stone variance
     for (let ry = 0; ry < 2; ry++) {
       for (let rx = 0; rx < 2; rx++) {
-        drawStone(rx * cell + gap / 2, ry * cell + gap / 2, size, size, ry * 17 + rx * 5 + 3);
+        drawStone(
+          rx * cell + gap / 2,
+          ry * cell + gap / 2,
+          size,
+          size,
+          ry * 17 + rx * 5 + 3,
+        );
       }
     }
   }
@@ -352,14 +412,19 @@ const PATTERN_AVG: Record<string, string> = {
 };
 
 /** anchor a cached pattern to the map so it pans with the scene */
-function anchorPattern(pat: CanvasPattern | null, tileW: number, tileH: number): CanvasPattern | null {
+function anchorPattern(
+  pat: CanvasPattern | null,
+  tileW: number,
+  tileH: number,
+): CanvasPattern | null {
   if (!pat) return null;
   // anchor to the map: use the screen position of the geographic origin
   // MODULO one tile period. The absolute screen position can be a huge
   // number far from the prime meridian, which overflows/invalidates the
   // pattern transform; the modulo keeps the same registration.
   const m = new DOMMatrix();
-  const ox = lonToX(0), oy = latToY(0);
+  const ox = lonToX(0),
+    oy = latToY(0);
   const tx = tileW > 0 ? ((ox % tileW) + tileW) % tileW : 0;
   const ty = tileH > 0 ? ((oy % tileH) + tileH) % tileH : 0;
   m.translateSelf(tx - tileW, ty - tileH);
@@ -376,7 +441,8 @@ function stonePattern(surface: string | undefined): CanvasPattern | null {
   const key = normalizeSurfaceKey(surface);
   const isSett = key !== "paving_stones";
   const cell = (isSett ? 5 : 8) + 1;
-  if (patternCache.has(key)) return anchorPattern(patternCache.get(key)!, cell * 2, cell * 2);
+  if (patternCache.has(key))
+    return anchorPattern(patternCache.get(key)!, cell * 2, cell * 2);
   const pat = stonePatternTile(surface);
   patternCache.set(key, pat);
   return anchorPattern(pat, cell * 2, cell * 2);
@@ -387,7 +453,8 @@ function grassPattern(kind: string): CanvasPattern | null {
   if (zoomLevel() < PATTERN_ZOOM) return null;
   const key = `green:${kind}`;
   const cell = 6;
-  if (patternCache.has(key)) return anchorPattern(patternCache.get(key)!, cell * 2, cell * 2);
+  if (patternCache.has(key))
+    return anchorPattern(patternCache.get(key)!, cell * 2, cell * 2);
   const pat = grassPatternTile(kind);
   patternCache.set(key, pat);
   return anchorPattern(pat, cell * 2, cell * 2);
@@ -395,7 +462,8 @@ function grassPattern(kind: string): CanvasPattern | null {
 
 function draw() {
   const dpr = window.devicePixelRatio || 1;
-  const w = canvas.clientWidth, h = canvas.clientHeight;
+  const w = canvas.clientWidth,
+    h = canvas.clientHeight;
   canvas.width = w * dpr;
   canvas.height = h * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -414,16 +482,35 @@ function draw() {
   const px = pxPerMeter();
   const visible = viewportValues();
   const layersToDraw: number[] =
-    selectedLayer !== null ? [selectedLayer] : [...visible.layers].sort((a, b) => a - b);
+    selectedLayer !== null
+      ? [selectedLayer]
+      : [...visible.layers].sort((a, b) => a - b);
 
-  const gs = lodVisible("grass") && grassIndex ? queryIndex(grassIndex, bbox) : [];
+  const gs =
+    lodVisible("grass") && grassIndex ? queryIndex(grassIndex, bbox) : [];
   const areas = lodVisible("areas") && areaIndex ? visibleAreas(bbox) : [];
-  const bl = lodVisible("buildings") && buildingIndex ? queryIndex(buildingIndex, bbox) : [];
-  const cls = lodVisible("centerlines") && lineIndexes ? queryIndex(lineIndexes.centerlines, bbox) : [];
-  const lms = lodVisible("laneMarkings") && laneMarkingIndex ? queryIndex(laneMarkingIndex, bbox) : [];
-  const fws = lodVisible("footways") && lineIndexes ? queryIndex(lineIndexes.footways, bbox) : [];
-  const crs = lodVisible("crossings") && lineIndexes ? queryIndex(lineIndexes.crossings, bbox) : [];
-  const kws = lodVisible("kerbs") && kerbWayIndex ? queryIndex(kerbWayIndex, bbox) : [];
+  const bl =
+    lodVisible("buildings") && buildingIndex
+      ? queryIndex(buildingIndex, bbox)
+      : [];
+  const cls =
+    lodVisible("centerlines") && lineIndexes
+      ? queryIndex(lineIndexes.centerlines, bbox)
+      : [];
+  const lms =
+    lodVisible("laneMarkings") && laneMarkingIndex
+      ? queryIndex(laneMarkingIndex, bbox)
+      : [];
+  const fws =
+    lodVisible("footways") && lineIndexes
+      ? queryIndex(lineIndexes.footways, bbox)
+      : [];
+  const crs =
+    lodVisible("crossings") && lineIndexes
+      ? queryIndex(lineIndexes.crossings, bbox)
+      : [];
+  const kws =
+    lodVisible("kerbs") && kerbWayIndex ? queryIndex(kerbWayIndex, bbox) : [];
   const kns = lodVisible("kerbs") && kerbGrid ? kerbsInBbox(bbox) : [];
 
   for (const layer of layersToDraw) {
@@ -456,9 +543,10 @@ function draw() {
       const pks = queryIndex(parkingIndex, bbox);
       for (const pk of pks) {
         if (!onLayer(pk)) continue;
-        const fill = pk.surface || pk.surfaceColour
-          ? featureColor(pk.surface, pk.surfaceColour)
-          : "#4a4a50";
+        const fill =
+          pk.surface || pk.surfaceColour
+            ? featureColor(pk.surface, pk.surfaceColour)
+            : "#4a4a50";
         const pat = !pk.surfaceColour ? stonePattern(pk.surface) : null;
         ctx.fillStyle = pat ?? fill;
         ctx.beginPath();
@@ -492,7 +580,11 @@ function draw() {
     for (const area of areas) {
       if (!onLayer(area) || !areaLodVisible(area)) continue;
       const pat = !area.surfaceColour ? stonePattern(area.surface) : null;
-      ctx.fillStyle = pat ?? (area.surface || area.surfaceColour ? featureColor(area.surface, area.surfaceColour) : "#4a4a50");
+      ctx.fillStyle =
+        pat ??
+        (area.surface || area.surfaceColour
+          ? featureColor(area.surface, area.surfaceColour)
+          : "#4a4a50");
       ctx.beginPath();
       for (const ring of area.outer) drawRing(ring, true);
       if (area.holes.length > 0) {
@@ -552,7 +644,10 @@ function draw() {
     // --- footways ---
     for (const fw of fws) {
       if (!onLayer(fw)) continue;
-      ctx.strokeStyle = fw.surface || fw.surfaceColour ? featureColor(fw.surface, fw.surfaceColour) : "#cfcfd6";
+      ctx.strokeStyle =
+        fw.surface || fw.surfaceColour
+          ? featureColor(fw.surface, fw.surfaceColour)
+          : "#cfcfd6";
       ctx.lineWidth = Math.max(0.8, (fw.width ?? 1.8) * px * 0.3);
       ctx.beginPath();
       strokePolyline(fw.coords);
@@ -630,7 +725,8 @@ function draw() {
         if (!arr) continue;
         for (const sl of arr) {
           if (!onLayer(sl)) continue;
-          const x = lonToX(sl.lon / Q), y = latToY(sl.lat / Q);
+          const x = lonToX(sl.lon / Q),
+            y = latToY(sl.lat / Q);
           if (x < -halo || y < -halo || x > w + halo || y > h + halo) continue;
           const grad = ctx.createRadialGradient(x, y, 0, x, y, halo);
           grad.addColorStop(0, "rgba(255,225,120,0.95)");
@@ -657,7 +753,8 @@ function draw() {
         if (!arr) continue;
         for (const mh of arr) {
           if (!onLayer(mh)) continue;
-          const x = lonToX(mh.lon / Q), y = latToY(mh.lat / Q);
+          const x = lonToX(mh.lon / Q),
+            y = latToY(mh.lat / Q);
           if (x < -10 || y < -10 || x > w + 10 || y > h + 10) continue;
           ctx.beginPath();
           ctx.arc(x, y, mr, 0, Math.PI * 2);
@@ -686,7 +783,8 @@ function draw() {
         if (!arr) continue;
         for (const b of arr) {
           if (!onLayer(b)) continue;
-          const x = lonToX(b.lon / Q), y = latToY(b.lat / Q);
+          const x = lonToX(b.lon / Q),
+            y = latToY(b.lat / Q);
           if (x < -10 || y < -10 || x > w + 10 || y > h + 10) continue;
           ctx.beginPath();
           ctx.arc(x, y, br, 0, Math.PI * 2);
@@ -718,7 +816,7 @@ function kerbClass(kerb: string): "high" | "lowered" | "flush" {
 function drawKerbWays(
   kws: KerbWayFeature[],
   onLayer: (f: { layer?: number; level?: number }) => boolean,
-  px: number
+  px: number,
 ): void {
   const kerbW = Math.max(1.5, 0.18 * px); // ~18 cm kerb width
   const shadowW = kerbW * 0.3;
@@ -731,22 +829,34 @@ function drawKerbWays(
     const base = kerbClass(kw.kerb);
 
     // screen coords + per-vertex normals (right side = road)
-    const pts: [number, number][] = kw.coords.map((c) => [lonToX(c[0] / Q), latToY(c[1] / Q)]);
+    const pts: [number, number][] = kw.coords.map((c) => [
+      lonToX(c[0] / Q),
+      latToY(c[1] / Q),
+    ]);
     if (pts.length < 2) continue;
     const normals: [number, number][] = [];
     for (let i = 0; i < pts.length; i++) {
-      let nx = 0, ny = 0;
+      let nx = 0,
+        ny = 0;
       // right-hand normal in screen coords (y down): direction (dx,dy) ->
       // (-dy,dx). Walking east, the right side is screen-down (south).
       if (i > 0) {
-        const dx = pts[i][0] - pts[i - 1][0], dy = pts[i][1] - pts[i - 1][1];
+        const dx = pts[i][0] - pts[i - 1][0],
+          dy = pts[i][1] - pts[i - 1][1];
         const l = Math.hypot(dx, dy);
-        if (l > 0) { nx += -dy / l; ny += dx / l; }
+        if (l > 0) {
+          nx += -dy / l;
+          ny += dx / l;
+        }
       }
       if (i < pts.length - 1) {
-        const dx = pts[i + 1][0] - pts[i][0], dy = pts[i + 1][1] - pts[i][1];
+        const dx = pts[i + 1][0] - pts[i][0],
+          dy = pts[i + 1][1] - pts[i][1];
         const l = Math.hypot(dx, dy);
-        if (l > 0) { nx += -dy / l; ny += dx / l; }
+        if (l > 0) {
+          nx += -dy / l;
+          ny += dx / l;
+        }
       }
       const l = Math.hypot(nx, ny);
       normals.push(l > 0 ? [nx / l, ny / l] : [0, 0]);
@@ -760,7 +870,8 @@ function drawKerbWays(
       for (const o of kw.overrides) {
         const cls = kerbClass(o.kerb);
         if (o.idx >= pts.length) continue;
-        const ox = pts[o.idx][0], oy = pts[o.idx][1];
+        const ox = pts[o.idx][0],
+          oy = pts[o.idx][1];
         for (let i = 0; i < pts.length; i++) {
           if (Math.hypot(pts[i][0] - ox, pts[i][1] - oy) <= rPx) types[i] = cls;
         }
@@ -773,8 +884,10 @@ function drawKerbWays(
     for (let i = 1; i < pts.length; i++) {
       const t = types[i];
       const tPrev = types[i - 1];
-      const a = pts[i - 1], b = pts[i];
-      const na = normals[i - 1], nb = normals[i];
+      const a = pts[i - 1],
+        b = pts[i];
+      const na = normals[i - 1],
+        nb = normals[i];
       if (t === "flush" && tPrev === "flush") continue;
 
       if (t === "high" || tPrev === "high") {
@@ -789,17 +902,27 @@ function drawKerbWays(
         ctx.strokeStyle = "rgba(0,0,0,0.28)";
         ctx.lineWidth = kerbW;
         ctx.beginPath();
-        ctx.moveTo(a[0] + na[0] * (kerbW + shadowW) / 2, a[1] + na[1] * (kerbW + shadowW) / 2);
-        ctx.lineTo(b[0] + nb[0] * (kerbW + shadowW) / 2, b[1] + nb[1] * (kerbW + shadowW) / 2);
+        ctx.moveTo(
+          a[0] + (na[0] * (kerbW + shadowW)) / 2,
+          a[1] + (na[1] * (kerbW + shadowW)) / 2,
+        );
+        ctx.lineTo(
+          b[0] + (nb[0] * (kerbW + shadowW)) / 2,
+          b[1] + (nb[1] * (kerbW + shadowW)) / 2,
+        );
         ctx.stroke();
       } else if (t === "lowered" || tPrev === "lowered") {
         // gradient across the kerb width: bright (sidewalk, left) fading
         // to dark (road, right) — appears 3D-shaped
-        const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
-        const nmx = (na[0] + nb[0]) / 2, nmy = (na[1] + nb[1]) / 2;
+        const mx = (a[0] + b[0]) / 2,
+          my = (a[1] + b[1]) / 2;
+        const nmx = (na[0] + nb[0]) / 2,
+          nmy = (na[1] + nb[1]) / 2;
         const grad = ctx.createLinearGradient(
-          mx - nmx * kerbW / 2, my - nmy * kerbW / 2,
-          mx + nmx * kerbW / 2, my + nmy * kerbW / 2
+          mx - (nmx * kerbW) / 2,
+          my - (nmy * kerbW) / 2,
+          mx + (nmx * kerbW) / 2,
+          my + (nmy * kerbW) / 2,
         );
         grad.addColorStop(0, bright);
         grad.addColorStop(1, dark);
@@ -842,16 +965,21 @@ function drawZebra(cr: LineFeature, widthM: number, color: string) {
   for (let i = 1; i < cr.coords.length; i++) {
     const [x0, y0] = cr.coords[i - 1];
     const [x1, y1] = cr.coords[i];
-    const X0 = lonToX(x0 / Q), Y0 = latToY(y0 / Q);
-    const X1 = lonToX(x1 / Q), Y1 = latToY(y1 / Q);
+    const X0 = lonToX(x0 / Q),
+      Y0 = latToY(y0 / Q);
+    const X1 = lonToX(x1 / Q),
+      Y1 = latToY(y1 / Q);
     const segLen = Math.hypot(X1 - X0, Y1 - Y0);
     if (segLen === 0) continue;
-    const ux = (X1 - X0) / segLen, uy = (Y1 - Y0) / segLen;
-    const nx = -uy, ny = ux;
+    const ux = (X1 - X0) / segLen,
+      uy = (Y1 - Y0) / segLen;
+    const nx = -uy,
+      ny = ux;
 
-    let t = -((walked % stripeGap));
+    let t = -(walked % stripeGap);
     while (t < segLen) {
-      const cxp = X0 + ux * t, cyp = Y0 + uy * t;
+      const cxp = X0 + ux * t,
+        cyp = Y0 + uy * t;
       ctx.beginPath();
       ctx.moveTo(cxp + nx * halfW, cyp + ny * halfW);
       ctx.lineTo(cxp - nx * halfW, cyp - ny * halfW);
@@ -883,7 +1011,8 @@ function drawBoundaryDashes(cr: LineFeature, widthM: number, color: string) {
   for (let i = 0; i < cr.coords.length; i++) {
     pts.push([lonToX(cr.coords[i][0] / Q), latToY(cr.coords[i][1] / Q)]);
     if (i > 0) {
-      const dx = pts[i][0] - pts[i - 1][0], dy = pts[i][1] - pts[i - 1][1];
+      const dx = pts[i][0] - pts[i - 1][0],
+        dy = pts[i][1] - pts[i - 1][1];
       const len = Math.hypot(dx, dy);
       normals.push(len === 0 ? [0, 0] : [-dy / len, dx / len]);
     }
@@ -898,26 +1027,33 @@ function drawBoundaryDashes(cr: LineFeature, widthM: number, color: string) {
       } else if (i === pts.length - 1) {
         [nx, ny] = normals[normals.length - 1];
       } else {
-        const [nx1, ny1] = normals[i - 1], [nx2, ny2] = normals[i];
+        const [nx1, ny1] = normals[i - 1],
+          [nx2, ny2] = normals[i];
         const bl = Math.hypot(nx1 + nx2, ny1 + ny2);
         [nx, ny] = bl === 0 ? [nx1, ny1] : [(nx1 + nx2) / bl, (ny1 + ny2) / bl];
       }
-      const ox = pts[i][0] + nx * offset * side, oy = pts[i][1] + ny * offset * side;
-      if (i === 0) ctx.moveTo(ox, oy); else ctx.lineTo(ox, oy);
+      const ox = pts[i][0] + nx * offset * side,
+        oy = pts[i][1] + ny * offset * side;
+      if (i === 0) ctx.moveTo(ox, oy);
+      else ctx.lineTo(ox, oy);
     }
     ctx.stroke();
   }
   ctx.setLineDash([]);
 }
 
-function cellsForBbox(bbox: [number, number, number, number], cell: number): number[] {
+function cellsForBbox(
+  bbox: [number, number, number, number],
+  cell: number,
+): number[] {
   const keys: number[] = [];
-  const x0 = Math.floor(bbox[0] / cell), x1 = Math.floor(bbox[2] / cell);
-  const y0 = Math.floor(bbox[1] / cell), y1 = Math.floor(bbox[3] / cell);
+  const x0 = Math.floor(bbox[0] / cell),
+    x1 = Math.floor(bbox[2] / cell);
+  const y0 = Math.floor(bbox[1] / cell),
+    y1 = Math.floor(bbox[3] / cell);
   if ((x1 - x0 + 1) * (y1 - y0 + 1) > 20000) return keys;
   for (let x = x0; x <= x1; x++)
-    for (let y = y0; y <= y1; y++)
-      keys.push(x * 100000 + y);
+    for (let y = y0; y <= y1; y++) keys.push(x * 100000 + y);
   return keys;
 }
 
@@ -933,7 +1069,9 @@ function areaById(id: string): AreaFeature | null {
 /** build a canvas clip path from an area's rings; returns false if not found */
 function clipToAreas(areaIds: string[] | undefined): boolean {
   if (!areaIds || areaIds.length === 0) return false;
-  const found = areaIds.map((id) => areaById(id)).filter((a) => a !== null) as AreaFeature[];
+  const found = areaIds
+    .map((id) => areaById(id))
+    .filter((a) => a !== null) as AreaFeature[];
   if (found.length === 0) return false;
   ctx.save();
   ctx.beginPath();
@@ -962,7 +1100,8 @@ function chaikin(pts: [number, number][], iterations = 2): [number, number][] {
   for (let it = 0; it < iterations; it++) {
     const out: [number, number][] = [cur[0]];
     for (let i = 1; i < cur.length; i++) {
-      const a = cur[i - 1], b = cur[i];
+      const a = cur[i - 1],
+        b = cur[i];
       out.push([a[0] * 0.75 + b[0] * 0.25, a[1] * 0.75 + b[1] * 0.25]);
       out.push([a[0] * 0.25 + b[0] * 0.75, a[1] * 0.25 + b[1] * 0.75]);
     }
@@ -991,22 +1130,34 @@ function drawLaneMarkings(cl: LineFeature) {
   ctx.lineCap = "round";
 
   // centerline in screen coordinates
-  const base: [number, number][] = cl.coords.map((c) => [lonToX(c[0] / Q), latToY(c[1] / Q)]);
+  const base: [number, number][] = cl.coords.map((c) => [
+    lonToX(c[0] / Q),
+    latToY(c[1] / Q),
+  ]);
   if (base.length < 2) return;
 
   // averaged vertex normals for continuous offsets across corners
   const normals: [number, number][] = [];
   for (let i = 0; i < base.length; i++) {
-    let nx = 0, ny = 0;
+    let nx = 0,
+      ny = 0;
     if (i > 0) {
-      const dx = base[i][0] - base[i - 1][0], dy = base[i][1] - base[i - 1][1];
+      const dx = base[i][0] - base[i - 1][0],
+        dy = base[i][1] - base[i - 1][1];
       const l = Math.hypot(dx, dy);
-      if (l > 0) { nx += -dy / l; ny += dx / l; }
+      if (l > 0) {
+        nx += -dy / l;
+        ny += dx / l;
+      }
     }
     if (i < base.length - 1) {
-      const dx = base[i + 1][0] - base[i][0], dy = base[i + 1][1] - base[i][1];
+      const dx = base[i + 1][0] - base[i][0],
+        dy = base[i + 1][1] - base[i][1];
       const l = Math.hypot(dx, dy);
-      if (l > 0) { nx += -dy / l; ny += dx / l; }
+      if (l > 0) {
+        nx += -dy / l;
+        ny += dx / l;
+      }
     }
     const l = Math.hypot(nx, ny);
     normals.push(l > 0 ? [nx / l, ny / l] : [0, 0]);
@@ -1031,7 +1182,8 @@ function drawLaneMarkings(cl: LineFeature) {
     ctx.setLineDash([Math.max(3, 1.2 * px), Math.max(2, 1.0 * px)]);
     ctx.beginPath();
     ctx.moveTo(smooth[0][0], smooth[0][1]);
-    for (let i = 1; i < smooth.length; i++) ctx.lineTo(smooth[i][0], smooth[i][1]);
+    for (let i = 1; i < smooth.length; i++)
+      ctx.lineTo(smooth[i][0], smooth[i][1]);
     ctx.stroke();
     ctx.setLineDash([]);
   }
@@ -1054,7 +1206,8 @@ function drawLaneMarkings(cl: LineFeature) {
     if (!solid) ctx.setLineDash([Math.max(3, 1.2 * px), Math.max(2, 1.0 * px)]);
     ctx.beginPath();
     ctx.moveTo(smooth[0][0], smooth[0][1]);
-    for (let i = 1; i < smooth.length; i++) ctx.lineTo(smooth[i][0], smooth[i][1]);
+    for (let i = 1; i < smooth.length; i++)
+      ctx.lineTo(smooth[i][0], smooth[i][1]);
     ctx.stroke();
     if (!solid) ctx.setLineDash([]);
   }
@@ -1062,20 +1215,24 @@ function drawLaneMarkings(cl: LineFeature) {
 
 // ---------------- interaction ----------------
 let dragging = false;
-let lastX = 0, lastY = 0;
+let lastX = 0,
+  lastY = 0;
 let moved = 0;
 
 canvas.addEventListener("mousedown", (e) => {
   dragging = true;
   moved = 0;
-  lastX = e.clientX; lastY = e.clientY;
+  lastX = e.clientX;
+  lastY = e.clientY;
   canvas.classList.add("dragging");
 });
 window.addEventListener("mousemove", (e) => {
   if (!dragging) return;
-  const dx = e.clientX - lastX, dy = e.clientY - lastY;
+  const dx = e.clientX - lastX,
+    dy = e.clientY - lastY;
   moved += Math.abs(dx) + Math.abs(dy);
-  lastX = e.clientX; lastY = e.clientY;
+  lastX = e.clientX;
+  lastY = e.clientY;
   const r = R();
   view.cx -= (dx / r) * (180 / Math.PI);
   view.cy += (dy / r) * (180 / Math.PI) * Math.cos((view.cy * Math.PI) / 180);
@@ -1086,102 +1243,164 @@ window.addEventListener("mouseup", () => {
   canvas.classList.remove("dragging");
 });
 
-canvas.addEventListener("wheel", (e) => {
-  e.preventDefault();
-  const factor = Math.exp(-e.deltaY * 0.0015);
-  view.scale = Math.max(500, Math.min(3_000_000, view.scale * factor));
-  requestDraw();
-  statusEl.textContent = `zoom ${zoomLevel().toFixed(1)} (scale ${Math.round(view.scale)}) · ${__COMMIT__}`;
-}, { passive: false });
+canvas.addEventListener(
+  "wheel",
+  (e) => {
+    e.preventDefault();
+    const factor = Math.exp(-e.deltaY * 0.0015);
+    view.scale = Math.max(500, Math.min(3_000_000, view.scale * factor));
+    requestDraw();
+    statusEl.textContent = `zoom ${zoomLevel().toFixed(1)} (scale ${Math.round(view.scale)}) · ${__COMMIT__}`;
+  },
+  { passive: false },
+);
 
 // click -> feature inspection
 canvas.addEventListener("click", (e) => {
   if (moved > 6 || !dataset) return;
   const rect = canvas.getBoundingClientRect();
-  const px = e.clientX - rect.left, py = e.clientY - rect.top;
+  const px = e.clientX - rect.left,
+    py = e.clientY - rect.top;
   const bbox = viewBboxQ();
   const feature = pickFeature(px, py, bbox);
   showInfo(feature);
 });
 
-function pickFeature(px: number, py: number, bbox: [number, number, number, number]): (AreaFeature | BuildingFeature | GrassFeature | LineFeature | KerbFeature | KerbWayFeature | BollardFeature | FenceFeature | LanduseFeature | StreetLampFeature | ParkingFeature | ManholeFeature) | null {
+function pickFeature(
+  px: number,
+  py: number,
+  bbox: [number, number, number, number],
+):
+  | (
+      | AreaFeature
+      | BuildingFeature
+      | GrassFeature
+      | LineFeature
+      | KerbFeature
+      | KerbWayFeature
+      | BollardFeature
+      | FenceFeature
+      | LanduseFeature
+      | StreetLampFeature
+      | ParkingFeature
+      | ManholeFeature
+    )
+  | null {
   const tol = 6;
   const lon = view.cx + (((px - canvas.width / 2) / R()) * 180) / Math.PI;
   const mercC = mercY(view.cy) - (py - canvas.height / 2) / R();
-  const lat = (2 * Math.atan(Math.exp(mercC)) - Math.PI / 2) * 180 / Math.PI;
-  const lonQ = Math.round(lon * Q), latQ = Math.round(lat * Q);
+  const lat = ((2 * Math.atan(Math.exp(mercC)) - Math.PI / 2) * 180) / Math.PI;
+  const lonQ = Math.round(lon * Q),
+    latQ = Math.round(lat * Q);
   const tolQ = Math.round((tol / view.scale) * Q);
 
   // areas: point-in-polygon
   if (lodVisible("areas") && areaIndex) {
-    const areaHits = queryIndex(areaIndex, [lonQ, latQ, lonQ, latQ])
-      .filter((a) => areaLodVisible(a) && layerVisible(a));
+    const areaHits = queryIndex(areaIndex, [lonQ, latQ, lonQ, latQ]).filter(
+      (a) => areaLodVisible(a) && layerVisible(a),
+    );
     // bird's eye: prefer the locally highest layer at the click point
     if (selectedLayer === null && areaHits.length > 1) {
       areaHits.sort((a, b) => layerSortKey(b) - layerSortKey(a));
     }
     for (const area of areaHits) {
       let inOuter = false;
-      for (const ring of area.outer) if (pointInRingQ(lonQ, latQ, ring)) { inOuter = true; break; }
+      for (const ring of area.outer)
+        if (pointInRingQ(lonQ, latQ, ring)) {
+          inOuter = true;
+          break;
+        }
       if (!inOuter) continue;
       let inHole = false;
-      for (const hole of area.holes) if (pointInRingQ(lonQ, latQ, hole)) { inHole = true; break; }
+      for (const hole of area.holes)
+        if (pointInRingQ(lonQ, latQ, hole)) {
+          inHole = true;
+          break;
+        }
       if (!inHole) return area;
     }
   }
 
   // grass: point-in-polygon
   if (lodVisible("grass") && grassIndex) {
-    const gHits = queryIndex(grassIndex, [lonQ, latQ, lonQ, latQ])
-      .filter((g) => layerVisible(g));
+    const gHits = queryIndex(grassIndex, [lonQ, latQ, lonQ, latQ]).filter((g) =>
+      layerVisible(g),
+    );
     if (selectedLayer === null && gHits.length > 1) {
       gHits.sort((a, b) => layerSortKey(b) - layerSortKey(a));
     }
     for (const g of gHits) {
       let inOuter = false;
-      for (const ring of g.outer) if (pointInRingQ(lonQ, latQ, ring)) { inOuter = true; break; }
+      for (const ring of g.outer)
+        if (pointInRingQ(lonQ, latQ, ring)) {
+          inOuter = true;
+          break;
+        }
       if (!inOuter) continue;
       let inHole = false;
-      for (const hole of g.holes) if (pointInRingQ(lonQ, latQ, hole)) { inHole = true; break; }
+      for (const hole of g.holes)
+        if (pointInRingQ(lonQ, latQ, hole)) {
+          inHole = true;
+          break;
+        }
       if (!inHole) return g;
     }
   }
   // parking areas: point-in-polygon
   if (lodVisible("parking") && parkingIndex) {
-    const pkHits = queryIndex(parkingIndex, [lonQ, latQ, lonQ, latQ])
-      .filter((pk) => layerVisible(pk));
+    const pkHits = queryIndex(parkingIndex, [lonQ, latQ, lonQ, latQ]).filter(
+      (pk) => layerVisible(pk),
+    );
     if (selectedLayer === null && pkHits.length > 1) {
       pkHits.sort((a, b) => layerSortKey(b) - layerSortKey(a));
     }
     for (const pk of pkHits) {
       let inOuter = false;
-      for (const ring of pk.outer) if (pointInRingQ(lonQ, latQ, ring)) { inOuter = true; break; }
+      for (const ring of pk.outer)
+        if (pointInRingQ(lonQ, latQ, ring)) {
+          inOuter = true;
+          break;
+        }
       if (!inOuter) continue;
       let inHole = false;
-      for (const hole of pk.holes) if (pointInRingQ(lonQ, latQ, hole)) { inHole = true; break; }
+      for (const hole of pk.holes)
+        if (pointInRingQ(lonQ, latQ, hole)) {
+          inHole = true;
+          break;
+        }
       if (!inHole) return pk;
     }
   }
   // landuse areas: point-in-polygon
   if (lodVisible("landuse") && landuseIndex) {
-    const luHits = queryIndex(landuseIndex, [lonQ, latQ, lonQ, latQ])
-      .filter((lu) => layerVisible(lu));
+    const luHits = queryIndex(landuseIndex, [lonQ, latQ, lonQ, latQ]).filter(
+      (lu) => layerVisible(lu),
+    );
     if (selectedLayer === null && luHits.length > 1) {
       luHits.sort((a, b) => layerSortKey(b) - layerSortKey(a));
     }
     for (const lu of luHits) {
       let inOuter = false;
-      for (const ring of lu.outer) if (pointInRingQ(lonQ, latQ, ring)) { inOuter = true; break; }
+      for (const ring of lu.outer)
+        if (pointInRingQ(lonQ, latQ, ring)) {
+          inOuter = true;
+          break;
+        }
       if (!inOuter) continue;
       let inHole = false;
-      for (const hole of lu.holes) if (pointInRingQ(lonQ, latQ, hole)) { inHole = true; break; }
+      for (const hole of lu.holes)
+        if (pointInRingQ(lonQ, latQ, hole)) {
+          inHole = true;
+          break;
+        }
       if (!inHole) return lu;
     }
   }
   // buildings: outline hit (point-in-polygon)
   if (lodVisible("buildings") && buildingIndex) {
-    const bHits = queryIndex(buildingIndex, [lonQ, latQ, lonQ, latQ])
-      .filter((b) => layerVisible(b));
+    const bHits = queryIndex(buildingIndex, [lonQ, latQ, lonQ, latQ]).filter(
+      (b) => layerVisible(b),
+    );
     if (selectedLayer === null && bHits.length > 1) {
       bHits.sort((a, b) => layerSortKey(b) - layerSortKey(a));
     }
@@ -1193,22 +1412,37 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
   }
   // fences: nearest segment within tolerance
   if (lodVisible("fences") && fenceIndex) {
-    let best: { d: number; f: FenceFeature | null } = { d: tolQ * tolQ * 4, f: null };
-    const fHits = queryIndex(fenceIndex, [lonQ - tolQ * 6, latQ - tolQ * 6, lonQ + tolQ * 6, latQ + tolQ * 6])
-      .filter((f) => layerVisible(f));
+    let best: { d: number; f: FenceFeature | null } = {
+      d: tolQ * tolQ * 4,
+      f: null,
+    };
+    const fHits = queryIndex(fenceIndex, [
+      lonQ - tolQ * 6,
+      latQ - tolQ * 6,
+      lonQ + tolQ * 6,
+      latQ + tolQ * 6,
+    ]).filter((f) => layerVisible(f));
     for (const f of fHits) {
       for (let i = 1; i < f.coords.length; i++) {
         const d = distToSegQ(lonQ, latQ, f.coords[i - 1], f.coords[i]);
-        if (d < best.d) { best.d = d; best.f = f; }
+        if (d < best.d) {
+          best.d = d;
+          best.f = f;
+        }
       }
     }
     if (best.f) return best.f;
   }
   // street lamps (points, closest)
   if (lodVisible("streetLamps") && streetLampGrid) {
-    let best: { d: number; sl: StreetLampFeature | null } = { d: tolQ * tolQ * 4, sl: null };
-    const cx0 = Math.floor((lonQ - tolQ * 4) / 50000), cx1 = Math.floor((lonQ + tolQ * 4) / 50000);
-    const cy0 = Math.floor((latQ - tolQ * 4) / 50000), cy1 = Math.floor((latQ + tolQ * 4) / 50000);
+    let best: { d: number; sl: StreetLampFeature | null } = {
+      d: tolQ * tolQ * 4,
+      sl: null,
+    };
+    const cx0 = Math.floor((lonQ - tolQ * 4) / 50000),
+      cx1 = Math.floor((lonQ + tolQ * 4) / 50000);
+    const cy0 = Math.floor((latQ - tolQ * 4) / 50000),
+      cy1 = Math.floor((latQ + tolQ * 4) / 50000);
     for (let x = cx0; x <= cx1; x++) {
       for (let y = cy0; y <= cy1; y++) {
         const arr = streetLampGrid.get(x * 100000 + y);
@@ -1216,7 +1450,10 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
         for (const sl of arr) {
           if (!layerVisible(sl)) continue;
           const d = (sl.lon - lonQ) ** 2 + (sl.lat - latQ) ** 2;
-          if (d < best.d) { best.d = d; best.sl = sl; }
+          if (d < best.d) {
+            best.d = d;
+            best.sl = sl;
+          }
         }
       }
     }
@@ -1224,9 +1461,14 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
   }
   // manholes (points, closest)
   if (lodVisible("manholes") && manholeGrid) {
-    let best: { d: number; mh: ManholeFeature | null } = { d: tolQ * tolQ * 4, mh: null };
-    const cx0 = Math.floor((lonQ - tolQ * 4) / 50000), cx1 = Math.floor((lonQ + tolQ * 4) / 50000);
-    const cy0 = Math.floor((latQ - tolQ * 4) / 50000), cy1 = Math.floor((latQ + tolQ * 4) / 50000);
+    let best: { d: number; mh: ManholeFeature | null } = {
+      d: tolQ * tolQ * 4,
+      mh: null,
+    };
+    const cx0 = Math.floor((lonQ - tolQ * 4) / 50000),
+      cx1 = Math.floor((lonQ + tolQ * 4) / 50000);
+    const cy0 = Math.floor((latQ - tolQ * 4) / 50000),
+      cy1 = Math.floor((latQ + tolQ * 4) / 50000);
     for (let x = cx0; x <= cx1; x++) {
       for (let y = cy0; y <= cy1; y++) {
         const arr = manholeGrid.get(x * 100000 + y);
@@ -1234,7 +1476,10 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
         for (const mh of arr) {
           if (!layerVisible(mh)) continue;
           const d = (mh.lon - lonQ) ** 2 + (mh.lat - latQ) ** 2;
-          if (d < best.d) { best.d = d; best.mh = mh; }
+          if (d < best.d) {
+            best.d = d;
+            best.mh = mh;
+          }
         }
       }
     }
@@ -1242,9 +1487,14 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
   }
   // bollards (points, closest)
   if (lodVisible("bollards") && bollardGrid) {
-    let best: { d: number; b: BollardFeature | null } = { d: tolQ * tolQ * 4, b: null };
-    const cx0 = Math.floor((lonQ - tolQ * 4) / 50000), cx1 = Math.floor((lonQ + tolQ * 4) / 50000);
-    const cy0 = Math.floor((latQ - tolQ * 4) / 50000), cy1 = Math.floor((latQ + tolQ * 4) / 50000);
+    let best: { d: number; b: BollardFeature | null } = {
+      d: tolQ * tolQ * 4,
+      b: null,
+    };
+    const cx0 = Math.floor((lonQ - tolQ * 4) / 50000),
+      cx1 = Math.floor((lonQ + tolQ * 4) / 50000);
+    const cy0 = Math.floor((latQ - tolQ * 4) / 50000),
+      cy1 = Math.floor((latQ + tolQ * 4) / 50000);
     for (let x = cx0; x <= cx1; x++) {
       for (let y = cy0; y <= cy1; y++) {
         const arr = bollardGrid.get(x * 100000 + y);
@@ -1252,7 +1502,10 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
         for (const b of arr) {
           if (!layerVisible(b)) continue;
           const d = (b.lon - lonQ) ** 2 + (b.lat - latQ) ** 2;
-          if (d < best.d) { best.d = d; best.b = b; }
+          if (d < best.d) {
+            best.d = d;
+            best.b = b;
+          }
         }
       }
     }
@@ -1262,8 +1515,10 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
   if (lodVisible("kerbs") && kerbGrid) {
     let best: KerbFeature | null = null;
     let bestD = tolQ * tolQ * 4;
-    const cx0 = Math.floor((lonQ - tolQ * 4) / 50000), cx1 = Math.floor((lonQ + tolQ * 4) / 50000);
-    const cy0 = Math.floor((latQ - tolQ * 4) / 50000), cy1 = Math.floor((latQ + tolQ * 4) / 50000);
+    const cx0 = Math.floor((lonQ - tolQ * 4) / 50000),
+      cx1 = Math.floor((lonQ + tolQ * 4) / 50000);
+    const cy0 = Math.floor((latQ - tolQ * 4) / 50000),
+      cy1 = Math.floor((latQ + tolQ * 4) / 50000);
     for (let x = cx0; x <= cx1; x++) {
       for (let y = cy0; y <= cy1; y++) {
         const arr = kerbGrid.get(x * 100000 + y);
@@ -1271,7 +1526,10 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
         for (const k of arr) {
           if (!layerVisible(k)) continue;
           const d = (k.lon - lonQ) ** 2 + (k.lat - latQ) ** 2;
-          if (d < bestD) { bestD = d; best = k; }
+          if (d < bestD) {
+            bestD = d;
+            best = k;
+          }
         }
       }
     }
@@ -1280,14 +1538,25 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
 
   // kerb ways: nearest segment within tolerance
   if (lodVisible("kerbs") && kerbWayIndex) {
-    let best: { d: number; f: KerbWayFeature | null } = { d: tolQ * tolQ * 4, f: null };
-    const kwHits = queryIndex(kerbWayIndex, [lonQ - tolQ * 6, latQ - tolQ * 6, lonQ + tolQ * 6, latQ + tolQ * 6])
-      .filter((kw) => layerVisible(kw));
-    if (selectedLayer === null && kwHits.length > 1) kwHits.sort((a, b) => layerSortKey(b) - layerSortKey(a));
+    let best: { d: number; f: KerbWayFeature | null } = {
+      d: tolQ * tolQ * 4,
+      f: null,
+    };
+    const kwHits = queryIndex(kerbWayIndex, [
+      lonQ - tolQ * 6,
+      latQ - tolQ * 6,
+      lonQ + tolQ * 6,
+      latQ + tolQ * 6,
+    ]).filter((kw) => layerVisible(kw));
+    if (selectedLayer === null && kwHits.length > 1)
+      kwHits.sort((a, b) => layerSortKey(b) - layerSortKey(a));
     for (const kw of kwHits) {
       for (let i = 1; i < kw.coords.length; i++) {
         const d = distToSegQ(lonQ, latQ, kw.coords[i - 1], kw.coords[i]);
-        if (d < best.d) { best.d = d; best.f = kw; }
+        if (d < best.d) {
+          best.d = d;
+          best.f = kw;
+        }
       }
     }
     if (best.f) return best.f;
@@ -1295,22 +1564,42 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
 
   // lines: nearest segment within tolerance
   if (lineIndexes) {
-    const check = (feat: LineFeature, bestD: { d: number; f: LineFeature | null }) => {
+    const check = (
+      feat: LineFeature,
+      bestD: { d: number; f: LineFeature | null },
+    ) => {
       for (let i = 1; i < feat.coords.length; i++) {
         const d = distToSegQ(lonQ, latQ, feat.coords[i - 1], feat.coords[i]);
-        if (d < bestD.d) { bestD.d = d; bestD.f = feat; }
+        if (d < bestD.d) {
+          bestD.d = d;
+          bestD.f = feat;
+        }
       }
     };
-    let best: { d: number; f: LineFeature | null } = { d: tolQ * tolQ * 4, f: null };
-    const order: ("crossings" | "footways" | "centerlines")[] = ["crossings", "footways", "centerlines"];
+    let best: { d: number; f: LineFeature | null } = {
+      d: tolQ * tolQ * 4,
+      f: null,
+    };
+    const order: ("crossings" | "footways" | "centerlines")[] = [
+      "crossings",
+      "footways",
+      "centerlines",
+    ];
     for (const kind of order) {
       if (!lodVisible(kind)) continue;
-      const hits = queryIndex(lineIndexes[kind], [lonQ - tolQ * 6, latQ - tolQ * 6, lonQ + tolQ * 6, latQ + tolQ * 6])
-        .filter((f) => layerVisible(f));
-      if (selectedLayer === null) hits.sort((a, b) => layerSortKey(b) - layerSortKey(a));
+      const hits = queryIndex(lineIndexes[kind], [
+        lonQ - tolQ * 6,
+        latQ - tolQ * 6,
+        lonQ + tolQ * 6,
+        latQ + tolQ * 6,
+      ]).filter((f) => layerVisible(f));
+      if (selectedLayer === null)
+        hits.sort((a, b) => layerSortKey(b) - layerSortKey(a));
       for (const f of hits) {
-        if (f.bbox[0] > lonQ + tolQ * 6 || f.bbox[2] < lonQ - tolQ * 6) continue;
-        if (f.bbox[1] > latQ + tolQ * 6 || f.bbox[3] < latQ - tolQ * 6) continue;
+        if (f.bbox[0] > lonQ + tolQ * 6 || f.bbox[2] < lonQ - tolQ * 6)
+          continue;
+        if (f.bbox[1] > latQ + tolQ * 6 || f.bbox[3] < latQ - tolQ * 6)
+          continue;
         check(f, best);
       }
     }
@@ -1323,15 +1612,19 @@ function pickFeature(px: number, py: number, bbox: [number, number, number, numb
 function pointInRingQ(x: number, y: number, ring: Q[][]): boolean {
   let inside = false;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-    const xi = ring[i][0], yi = ring[i][1];
-    const xj = ring[j][0], yj = ring[j][1];
-    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+    const xi = ring[i][0],
+      yi = ring[i][1];
+    const xj = ring[j][0],
+      yj = ring[j][1];
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi)
+      inside = !inside;
   }
   return inside;
 }
 
 function distToSegQ(px: number, py: number, a: Q[], b: Q[]): number {
-  const dx = b[0] - a[0], dy = b[1] - a[1];
+  const dx = b[0] - a[0],
+    dy = b[1] - a[1];
   const len2 = dx * dx + dy * dy;
   let t = len2 === 0 ? 0 : ((px - a[0]) * dx + (py - a[1]) * dy) / len2;
   t = Math.max(0, Math.min(1, t));
@@ -1339,13 +1632,34 @@ function distToSegQ(px: number, py: number, a: Q[], b: Q[]): number {
 }
 
 // ---------------- info panel ----------------
-function showInfo(f: AreaFeature | BuildingFeature | GrassFeature | LineFeature | KerbFeature | KerbWayFeature | BollardFeature | FenceFeature | LanduseFeature | StreetLampFeature | ParkingFeature | ManholeFeature | null) {
-  if (!f) { infoEl.style.display = "none"; return; }
+function showInfo(
+  f:
+    | AreaFeature
+    | BuildingFeature
+    | GrassFeature
+    | LineFeature
+    | KerbFeature
+    | KerbWayFeature
+    | BollardFeature
+    | FenceFeature
+    | LanduseFeature
+    | StreetLampFeature
+    | ParkingFeature
+    | ManholeFeature
+    | null,
+) {
+  if (!f) {
+    infoEl.style.display = "none";
+    return;
+  }
   const rows: [string, string][] = [];
   const push = (k: string, v?: string | number) => {
     if (v !== undefined && v !== "") rows.push([k, String(v)]);
   };
   const feature = f as Feature;
+  // captured before the per-type branches narrow f's type
+  const ftype = feature.type;
+  const fbbox = (feature as { bbox?: [number, number, number, number] }).bbox;
 
   push("layer", feature.layer);
   push("level", feature.level);
@@ -1424,9 +1738,60 @@ function showInfo(f: AreaFeature | BuildingFeature | GrassFeature | LineFeature 
   };
 
   const link = osmLink(f.id);
-  infoEl.innerHTML = `<span class="close" onclick="this.parentElement.style.display='none'">✕</span>` +
-    rows.map(([k, v]) => `<div class="tag"><span class="k">${k}</span><span class="v">${escapeHtml(v)}</span></div>`).join("") +
-    (link ? `<div class="tag"><span class="k">osm</span><span class="v"><a href="${link}" target="_blank" rel="noopener">${link}</a></span></div>` : "");
+  // Overpass query fetching everything relevant in/around the feature, so a
+  // bug report can include all the data the extractor sees: polygon
+  // features (areas, buildings, grass, parking, landuse) query their bbox
+  // for ways/nodes the extractor consumes; anything else queries a small
+  // radius around its own bbox
+  const overpassLink = (): string | null => {
+    const b = fbbox;
+    if (!b) return null;
+    const minLat = b[1] / 1e7,
+      minLon = b[0] / 1e7,
+      maxLat = b[3] / 1e7,
+      maxLon = b[2] / 1e7;
+    const isPolygon =
+      ftype === "area" ||
+      ftype === "parking" ||
+      ftype === "building" ||
+      ftype === "grass" ||
+      ftype === "landuse";
+    const bboxQ = `(${minLat},${minLon},${maxLat},${maxLon})`;
+    let query: string;
+    if (isPolygon) {
+      query =
+        "[out:json][timeout:60];(" +
+        `way["highway"]${bboxQ};` +
+        `way["area:highway"]${bboxQ};` +
+        `way["barrier"="kerb"]${bboxQ};` +
+        `way["amenity"="parking"]${bboxQ};` +
+        `node["barrier"="kerb"]${bboxQ};` +
+        `node["barrier"="bollard"]${bboxQ};` +
+        ");out geom tags;";
+    } else {
+      query =
+        "[out:json][timeout:60];(" +
+        `way(around:15,${minLat},${minLon})["highway"];` +
+        `way(around:15,${minLat},${minLon})["area:highway"];` +
+        ");out geom tags;";
+    }
+    return "https://overpass-turbo.eu/?Q=" + encodeURIComponent(query) + "&R";
+  };
+  const oplink = overpassLink();
+  infoEl.innerHTML =
+    `<span class="close" onclick="this.parentElement.style.display='none'">✕</span>` +
+    rows
+      .map(
+        ([k, v]) =>
+          `<div class="tag"><span class="k">${k}</span><span class="v">${escapeHtml(v)}</span></div>`,
+      )
+      .join("") +
+    (link
+      ? `<div class="tag"><span class="k">osm</span><span class="v"><a href="${link}" target="_blank" rel="noopener">${link}</a></span></div>`
+      : "");
+  +(oplink
+    ? `<div class="tag"><span class="k">overpass</span><span class="v"><a href="${oplink}" target="_blank" rel="noopener">fetch relevant elements</a></span></div>`
+    : "");
   infoEl.style.display = "block";
 }
 
@@ -1464,7 +1829,8 @@ function viewportValues(): { layers: Set<number>; levels: Set<number> } {
       for (const f of queryIndex(lineIndexes.footways, bbox)) add(f);
       for (const c of queryIndex(lineIndexes.crossings, bbox)) add(c);
     }
-    if (laneMarkingIndex) for (const lm of queryIndex(laneMarkingIndex, bbox)) add(lm);
+    if (laneMarkingIndex)
+      for (const lm of queryIndex(laneMarkingIndex, bbox)) add(lm);
     if (kerbWayIndex) for (const k of queryIndex(kerbWayIndex, bbox)) add(k);
     if (fenceIndex) for (const f of queryIndex(fenceIndex, bbox)) add(f);
     if (landuseIndex) for (const lu of queryIndex(landuseIndex, bbox)) add(lu);
@@ -1577,7 +1943,11 @@ function buildLayerPanel() {
   const defs: { key: keyof typeof layers; label: string; swatch: string }[] = [
     { key: "areas", label: "highway areas (surface fill)", swatch: "#6d6055" },
     { key: "buildings", label: "buildings", swatch: "#f0b98a" },
-    { key: "landuse", label: "landuse res./comm.", swatch: PATTERN_AVG.paving_stones },
+    {
+      key: "landuse",
+      label: "landuse res./comm.",
+      swatch: PATTERN_AVG.paving_stones,
+    },
     { key: "parking", label: "parking", swatch: "#4a4a50" },
     { key: "grass", label: "grass / garden / scrub", swatch: "#5d7a44" },
     { key: "centerlines", label: "centerlines (surface)", swatch: "#7a6a52" },
@@ -1593,20 +1963,33 @@ function buildLayerPanel() {
   for (const d of defs) {
     const row = document.createElement("div");
     row.className = "layer";
-    row.innerHTML = `<div class="swatch" style="background:${d.swatch}"></div>` +
+    row.innerHTML =
+      `<div class="swatch" style="background:${d.swatch}"></div>` +
       `<label><input type="checkbox" ${layers[d.key] ? "checked" : ""}/> ${d.label}</label>` +
       `<span class="count">${countFor(d.key)}</span>`;
-    (row.querySelector("input") as HTMLInputElement).addEventListener("change", (e) => {
-      layers[d.key] = (e.target as HTMLInputElement).checked;
-      requestDraw();
-    });
+    (row.querySelector("input") as HTMLInputElement).addEventListener(
+      "change",
+      (e) => {
+        layers[d.key] = (e.target as HTMLInputElement).checked;
+        requestDraw();
+      },
+    );
     wrap.appendChild(row);
   }
 
   // legend
   const legend = document.getElementById("legendSurfaces")!;
   legend.innerHTML = "";
-  const surfaces = ["asphalt", "concrete", "sett", "paving_stones", "cobblestone", "gravel", "grass", "compacted"];
+  const surfaces = [
+    "asphalt",
+    "concrete",
+    "sett",
+    "paving_stones",
+    "cobblestone",
+    "gravel",
+    "grass",
+    "compacted",
+  ];
   for (const s of surfaces) {
     const row = document.createElement("div");
     row.className = "row";
@@ -1617,7 +2000,12 @@ function buildLayerPanel() {
   kerbLegend.style.cssText = "color:#888;margin-top:6px;margin-bottom:4px";
   kerbLegend.textContent = "kerbs";
   legend.appendChild(kerbLegend);
-  for (const [label, color] of [["raised", "#e86e6e"], ["lowered", "#4ac8e8"], ["flush", "#9a6ee8"], ["tactile", "#e8c04a"]] as [string, string][]) {
+  for (const [label, color] of [
+    ["raised", "#e86e6e"],
+    ["lowered", "#4ac8e8"],
+    ["flush", "#9a6ee8"],
+    ["tactile", "#e8c04a"],
+  ] as [string, string][]) {
     const row = document.createElement("div");
     row.className = "row";
     row.innerHTML = `<div class="sw" style="background:${color};border-radius:50%;width:10px"></div>${label}`;
@@ -1628,21 +2016,36 @@ function buildLayerPanel() {
 function countFor(key: keyof typeof layers): string {
   if (!dataset) return "";
   switch (key) {
-    case "areas": return dataset.areas.length.toLocaleString();
-    case "buildings": return dataset.buildings.length.toLocaleString();
-    case "landuse": return dataset.landuse.length.toLocaleString();
-    case "parking": return dataset.parking.length.toLocaleString();
-    case "manholes": return dataset.manholes.length.toLocaleString();
-    case "grass": return dataset.grass.length.toLocaleString();
-    case "centerlines": return dataset.centerlines.length.toLocaleString();
-    case "laneMarkings": return dataset.laneMarkings.length.toLocaleString();
-    case "footways": return dataset.footways.length.toLocaleString();
-    case "crossings": return dataset.crossings.length.toLocaleString();
-    case "kerbs": return (dataset.kerbs.length + dataset.kerbWays.length).toLocaleString();
-    case "bollards": return dataset.bollards.length.toLocaleString();
-    case "streetLamps": return dataset.streetLamps.length.toLocaleString();
-    case "fences": return dataset.fences.length.toLocaleString();
-    default: return "";
+    case "areas":
+      return dataset.areas.length.toLocaleString();
+    case "buildings":
+      return dataset.buildings.length.toLocaleString();
+    case "landuse":
+      return dataset.landuse.length.toLocaleString();
+    case "parking":
+      return dataset.parking.length.toLocaleString();
+    case "manholes":
+      return dataset.manholes.length.toLocaleString();
+    case "grass":
+      return dataset.grass.length.toLocaleString();
+    case "centerlines":
+      return dataset.centerlines.length.toLocaleString();
+    case "laneMarkings":
+      return dataset.laneMarkings.length.toLocaleString();
+    case "footways":
+      return dataset.footways.length.toLocaleString();
+    case "crossings":
+      return dataset.crossings.length.toLocaleString();
+    case "kerbs":
+      return (dataset.kerbs.length + dataset.kerbWays.length).toLocaleString();
+    case "bollards":
+      return dataset.bollards.length.toLocaleString();
+    case "streetLamps":
+      return dataset.streetLamps.length.toLocaleString();
+    case "fences":
+      return dataset.fences.length.toLocaleString();
+    default:
+      return "";
   }
 }
 
@@ -1680,7 +2083,8 @@ function viewFromUrl(): boolean {
   const z = parseFloat(m[1]);
   const lat = parseFloat(m[2]);
   const lon = parseFloat(m[3]);
-  if (!Number.isFinite(z) || !Number.isFinite(lat) || !Number.isFinite(lon)) return false;
+  if (!Number.isFinite(z) || !Number.isFinite(lat) || !Number.isFinite(lon))
+    return false;
   if (lat < -85 || lat > 85 || lon < -180 || lon > 180) return false;
   // the app clamps scale to [500, 3_000_000] ~ zoom [2.1, 33.6]
   if (z < 2 || z > 34) return false;
@@ -1697,8 +2101,10 @@ function fitToBounds(bounds: [number, number, number, number]) {
   const cy = (minY + maxY) / 2 / Q;
   const w = canvas.clientWidth || window.innerWidth;
   const h = canvas.clientHeight || window.innerHeight;
-  const fitW = w * 0.9 / Math.max((maxX - minX) / Q, 1e-9);
-  const fitH = h * 0.9 / Math.max(((maxY - minY) / Q) * Math.cos((cy * Math.PI) / 180), 1e-9);
+  const fitW = (w * 0.9) / Math.max((maxX - minX) / Q, 1e-9);
+  const fitH =
+    (h * 0.9) /
+    Math.max(((maxY - minY) / Q) * Math.cos((cy * Math.PI) / 180), 1e-9);
   view = {
     cx,
     cy,
@@ -1712,7 +2118,9 @@ let currentWorker: Worker | null = null;
 
 function loadPbfFile(file: File) {
   if (currentWorker) currentWorker.terminate();
-  const worker = new Worker(new URL("./src/worker.ts", import.meta.url), { type: "module" });
+  const worker = new Worker(new URL("./src/worker.ts", import.meta.url), {
+    type: "module",
+  });
   currentWorker = worker;
 
   const dropzone = document.getElementById("dropzone")!;
@@ -1791,14 +2199,16 @@ function ingestResult(result: ExtractResult, name: string) {
   parkingIndex = buildIndex(result.parking);
   manholeGrid = new Map();
   for (const mh of result.manholes) {
-    const key = Math.floor(mh.lon / 50000) * 100000 + Math.floor(mh.lat / 50000);
+    const key =
+      Math.floor(mh.lon / 50000) * 100000 + Math.floor(mh.lat / 50000);
     let arr = manholeGrid.get(key);
     if (!arr) manholeGrid.set(key, (arr = []));
     arr.push(mh);
   }
   streetLampGrid = new Map();
   for (const sl of dataset.streetLamps) {
-    const key = Math.floor(sl.lon / 50000) * 100000 + Math.floor(sl.lat / 50000);
+    const key =
+      Math.floor(sl.lon / 50000) * 100000 + Math.floor(sl.lat / 50000);
     let arr = streetLampGrid.get(key);
     if (!arr) streetLampGrid.set(key, (arr = []));
     arr.push(sl);
@@ -1818,8 +2228,21 @@ function ingestResult(result: ExtractResult, name: string) {
     if (!arr) kerbGrid.set(key, (arr = []));
     arr.push(k);
   }
-  const total = dataset.areas.length + dataset.buildings.length + dataset.grass.length + dataset.centerlines.length + dataset.footways.length +
-    dataset.crossings.length + dataset.kerbs.length + dataset.kerbWays.length + dataset.bollards.length + dataset.fences.length + dataset.landuse.length + dataset.streetLamps.length + dataset.parking.length + dataset.manholes.length;
+  const total =
+    dataset.areas.length +
+    dataset.buildings.length +
+    dataset.grass.length +
+    dataset.centerlines.length +
+    dataset.footways.length +
+    dataset.crossings.length +
+    dataset.kerbs.length +
+    dataset.kerbWays.length +
+    dataset.bollards.length +
+    dataset.fences.length +
+    dataset.landuse.length +
+    dataset.streetLamps.length +
+    dataset.parking.length +
+    dataset.manholes.length;
   if (total === 0) {
     statusEl.textContent = `no micromapping features found in ${name} (try a region with area:highway mapping)`;
     return;
@@ -1862,7 +2285,8 @@ window.addEventListener("drop", (e) => {
   view = { cx, cy, scale };
   requestDraw();
 };
-(window as any).__pick = (px: number, py: number) => pickFeature(px, py, viewBboxQ());
+(window as any).__pick = (px: number, py: number) =>
+  pickFeature(px, py, viewBboxQ());
 (window as any).__state = () => ({
   hasDataset: dataset !== null,
   areas: dataset?.areas.length ?? 0,
