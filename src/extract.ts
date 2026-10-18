@@ -257,6 +257,9 @@ export function extractFeatures(
   const landuse: LanduseFeature[] = [];
   const streetLamps: StreetLampFeature[] = [];
   const parking: ParkingFeature[] = [];
+  // amenity=parking + parking=lane polygons on a road's carriageway:
+  // a parking lane of that road, not a separate parking ground
+  const parkingLanesOnCarriageway: { id: string; layer: number; outer: Q[][][]; holes: Q[][][]; bbox: [number, number, number, number] }[] = [];
   const manholes: ManholeFeature[] = [];
 
   const wayCoords = (way: OSMWay): [number, number][] | null => {
@@ -288,6 +291,21 @@ export function extractFeatures(
 
     if (tags["amenity"] === "parking" && isClosed(way)) {
       const coords = wayCoords(way);
+      // parking=lane ON the carriageway, drawn inside the same highway
+      // area (e.g. way 1442125974 on the Rheinstraße/Hauptstraße
+      // carriageway): a parking LANE of the road, not a separate parking
+      // ground — recorded for the lane marking pass below
+      if (tags["parking"] === "lane") {
+        const qc2 = q(coords!);
+        parkingLanesOnCarriageway.push({
+          id: `w${way.id}`,
+          layer: parseLayer(tags["layer"]),
+          outer: [qc2],
+          holes: [],
+          bbox: bboxOfQ(qc2),
+        });
+        continue;
+      }
       if (coords) {
         const qc = q(coords);
         parking.push({
@@ -745,6 +763,42 @@ export function extractFeatures(
   const laneCandidates: LineFeature[] = [];
   for (const cl of centerlines) {
     if (cl.lanes !== undefined && cl.lanes >= 2 && !cl.noLaneMarkings) laneCandidates.push(cl);
+  }
+  // on-carriageway parking strips (amenity=parking + parking=lane): the
+  // nearest lane-bearing centerline on the same layer gains a parking
+  // lane on the side the strip occupies — cross product of the
+  // centerline direction at the nearest segment with the vector to the
+  // strip's centroid; positive = left of the way
+  {
+    for (const st of parkingLanesOnCarriageway) {
+      let sx = 0, sy = 0, cnt = 0;
+      for (const ring of st.outer) for (const pt of ring) { sx += pt[0]; sy += pt[1]; cnt++; }
+      if (cnt === 0) continue;
+      const mid: [number, number] = [sx / cnt, sy / cnt];
+      let best: LineFeature | null = null;
+      let bestD = Infinity;
+      let bestSeg = 1;
+      for (const cl of laneCandidates) {
+        if (cl.layer !== st.layer) continue;
+        if (!bboxOverlap(cl.bbox, st.bbox)) continue;
+        for (let i = 1; i < cl.coords.length; i++) {
+          const a = cl.coords[i - 1], b = cl.coords[i];
+          const dx = b[0] - a[0], dy = b[1] - a[1];
+          const len2 = dx * dx + dy * dy;
+          if (len2 === 0) continue;
+          let t = ((mid[0] - a[0]) * dx + (mid[1] - a[1]) * dy) / len2;
+          t = Math.max(0, Math.min(1, t));
+          const px = a[0] + t * dx, py = a[1] + t * dy;
+          const d = (mid[0] - px) ** 2 + (mid[1] - py) ** 2;
+          if (d < bestD) { bestD = d; best = cl; bestSeg = i; }
+        }
+      }
+      if (!best) continue;
+      const a = best.coords[bestSeg - 1], b = best.coords[bestSeg];
+      const cross = (b[0] - a[0]) * (mid[1] - a[1]) - (b[1] - a[1]) * (mid[0] - a[0]);
+      if (cross > 0) best.parkingLeft = true;
+      else if (cross < 0) best.parkingRight = true;
+    }
   }
   const areaGridL = buildAreaIndex(areas);
   // ---------------------------------------------------------------------

@@ -51,6 +51,16 @@ area([[52.4722605,13.3361249],[52.4722352,13.3361817],[52.4722113,13.3362353],
       [52.4720776,13.3359183],[52.4721517,13.3359996],[52.4722047,13.3360600]],
   { "area:highway": "tertiary" });
 
+// way 1442125974: amenity=parking + parking=lane strip ON the carriageway,
+// inside the same highway area (parallel parking on the west side)
+data.ways.set(nextWay, {
+  id: nextWay,
+  refs: [[52.4717225,13.3355406],[52.4716772,13.3356540],[52.4717622,13.3357446],[52.4718557,13.3358440],[52.4717225,13.3355406]]
+    .map(([lat, lon]) => node(lat, lon)),
+  tags: { amenity: "parking", parking: "lane", orientation: "parallel", surface: "asphalt" },
+});
+nextWay++;
+
 const result = extractFeatures(data);
 const lm = result.laneMarkings;
 console.log(`${lm.length} marking pieces\n`);
@@ -61,6 +71,10 @@ for (const p of lm) {
     `${(p.name ?? "?").padEnd(13)} ${String(p.lanes).padEnd(5)}  ${p.laneW!.toFixed(3)}   ` +
     `${p.laneLeftM!.toFixed(3)}      ${span.toFixed(3)}`);
 }
+console.log("separate parking features (ground only):", result.parking.length,
+  result.parking.map((p) => p.id).join(","));
+const rhein = lm.find((m) => m.name === "Rheinstraße");
+console.log("Rheinstraße parking from strip: L", rhein?.parkingLeft, "R", rhein?.parkingRight);
 if (lm.length !== 2) {
   console.log(`\nPROBLEM: expected 2 pieces, got ${lm.length}`);
 } else if (lm[0].laneW !== lm[1].laneW) {

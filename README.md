@@ -92,7 +92,13 @@ For a centerline with `lanes ≥ 2` that runs inside a non-junction highway area
    (coarse scan, then binary refinement). Each ray length is converted to meters
    (§1); the road width is `leftM + rightM`. This works even when the centerline is not
    the geometric center of the road.
-2. **Parking lanes** (`parking:lane:left/right/both`, any value except `no`/`none`)
+2. **Parking lanes**: tagged either as `parking:lane:left/right/both` (any value except
+   `no`/`none`) or via the new `parking:left/right/both=lane` scheme — or as a closed
+   `amenity=parking` + `parking=lane` way lying on the carriageway inside the same
+   highway area (a mapped on-street parking strip, e.g. way 1442125974): the strip is
+   then a parking lane of the nearest lane-bearing centerline on its side (cross
+   product of centerline direction and the vector to the strip centroid), NOT a
+   separate parking ground. Parking lanes
    consume space on the road but do not count as regular lanes: the total width is
    split into **equal units shared by traffic and parking lanes** — two lanes plus one
    parking lane give three equal units, the parking unit occupying the outer strip on
