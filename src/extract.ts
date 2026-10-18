@@ -1353,12 +1353,12 @@ export function extractFeatures(
         borderPieces.map((p) => trafficLeftM(p) - fwdOf(p.cl) * laneWOf(p)),
       );
       anchorOf = () => anchorM;
-      // share the through-lane width across the group (minimum of the
-      // pieces' traffic-lane widths, parking absorbing the remainder):
-      // with only the border anchored, per-piece lane widths would
-      // scatter the boundaries inside each direction at the seams
-      const w = Math.min(...borderPieces.map(trafficLaneWOf));
-      laneWShared = () => w;
+      // per-piece even split: each piece divides its OWN measured width
+      // evenly over its units, filling its road exactly; the shared
+      // border anchor keeps the solid direction line continuous, and the
+      // inner boundaries connect within centimetres (neighbouring
+      // pieces' lane widths differ only by the local road width change)
+      laneWShared = laneWOf;
     } else {
       // which side does the road GROW on along the group? Compare the
       // pieces' measured edges: when the lane count rises from one piece
@@ -1402,8 +1402,13 @@ export function extractFeatures(
         anchorKind = "center";
         anchorOf = () => 0;
       }
-      const w = Math.min(...pieces.map(trafficLaneWOf));
-      laneWShared = () => w;
+      // per-piece even split: every piece divides its OWN measured width
+      // evenly over its units, so each piece fills its road exactly (the
+      // road width changes along the way). Continuity comes from the
+      // growth-side anchor: boundaries sit at k*laneW from the anchor
+      // edge, and neighbouring pieces' widths differ only by the road's
+      // local width change - connected within centimetres, not perfectly
+      laneWShared = laneWOf;
     }
     for (const p of pieces) {
       const fwd = fwdOf(p.cl);

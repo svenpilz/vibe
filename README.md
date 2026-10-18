@@ -150,18 +150,19 @@ markings form one continuous layout:
 - Junction areas do **not** break the group; geometry alone decides continuity.
   `placement=*` tags are ignored — only measured geometry is used.
 
-**Per-piece layout.** Within one piece all units are equal:
-`laneW = (leftM + rightM) / (lanes + parkingLanes)`. Across the pieces of a road
-group, continuity is kept by anchoring:
+**Per-piece layout.** Each piece splits its OWN measured width evenly over its units:
+`laneW = (leftM + rightM) / (lanes + parkingLanes)` — every piece fills its road
+exactly, following the local width. Across the pieces of a road group, continuity is
+kept by anchoring:
 
 - **Bidirectional roads** share one **border anchor**: the direction border (the solid
   line between forward and backward lanes) sits at the same offset on every piece —
   the median of the pieces' natural border positions. Adding forward lanes extends
   the layout to the left of the anchor, adding backward lanes to the right, so a
-  2 → 3 lane change keeps the existing boundaries and adds one outside. The
-  through-lane width is shared across the group (minimum of the pieces' traffic-lane
-  widths, parking strips absorbing the remainder), so **every** boundary — not just
-  the border — is continuous at the seams.
+  2 → 3 lane change keeps the existing boundaries and adds one outside. Inner
+  boundaries connect approximately at the seams: neighbouring pieces' lane widths
+  differ only by the local road-width change — connected within centimetres, not
+  perfectly, like real roads where the width varies along the way.
 - **One-way roads** have no border. Where the road **grows** along the group decides
   the anchor — the measured left/right edges of the pieces reveal which side gained
   the extra lanes:
@@ -172,10 +173,9 @@ group, continuity is kept by anchoring:
     lanes continue;
   - lanes added on **both sides** (centerline constant): the block centers on the
     centerline, continuous outwards from it.
-  The through-lane width is shared across the group as the **minimum** of the pieces'
-  traffic-lane widths (parking strips absorb the remaining width rather than narrowing
-  the through lanes), so the lanes fit the narrowest piece and the shared boundaries
-  run at the same distance from the anchor edge on every piece.
+  Each piece splits its own width evenly (filling its road exactly); the boundaries
+  sit at k·laneW from the anchor edge, so they connect approximately across seams —
+  the difference between neighbouring pieces is only the local width change.
 
 Each piece's lane block is finally **clamped** into its own measured road span, so
 markings never extend past the road edge even where the centerline wanders off-center.
