@@ -1108,12 +1108,16 @@ export function extractFeatures(
       // the layout to the left, adding backward lanes to the right — the
       // border fraction keeps existing boundaries aligned across pieces
       // place the border at the anchor offset, then lay the forward lanes
-      // to its left and the rest to its right. A purely one-way piece has
-      // no border: its anchor is the LEFT edge of its leftmost lane, the
-      // block extends to the right of it. The clamp below keeps the block
-      // inside the road
+      // to its left and the rest to its right. A purely one-way road has
+      // no border: each piece lays its block from its OWN measured left
+      // edge — the centerline placement can differ between the ways of a
+      // dual carriageway (placement=*), and the measured edges follow the
+      // actual road outline, which is continuous where the ways meet. The
+      // clamp below keeps the block inside the road
       const hasBorder = fwd > 0 && fwd < p.cl.lanes!;
-      let laneLeftM = hasBorder ? anchorM + fwd * laneW : anchorM;
+      let laneLeftM = hasBorder
+        ? anchorM + fwd * laneW
+        : (anchorBorder ? anchorM : trafficLeftM(p));
       // clamp into this piece's measured span so markings never extend
       // past the road edge even where the centerline wanders off-center
       const blockW = p.cl.lanes! * laneW;
