@@ -1069,37 +1069,51 @@ export function extractFeatures(
     }
   }
 
-  // parking without surface: assume the surface of the LARGEST adjacent
-  // highway area (by bbox area of the touching/overlapping polygon)
+  // a feature without surface takes the surface of the LARGEST adjacent
+  // highway area (by bbox area of the touching/overlapping polygon);
+  // adjacent means the rings share at least one vertex
   const areaGridP = buildAreaIndex(areas);
-  for (const pk of parking) {
-    if (pk.surface) continue;
-    const candidates = queryAreas(areaGridP, pk.bbox);
-    let best: AreaFeature | null = null;
-    let bestArea = -1;
-    for (const area of candidates) {
-      if (!area.surface) continue;
-      if (!bboxOverlap(area.bbox, pk.bbox)) continue;
-      // adjacent: rings touch or overlap; a shared point is enough
-      let touches = false;
-      outer: for (const pkRing of pk.outer) {
-        for (const aRing of area.outer) {
-          for (const p1 of pkRing) {
-            for (const p2 of aRing) {
-              if (p1[0] === p2[0] && p1[1] === p2[1]) { touches = true; break outer; }
+  const inheritFromAdjacent = (
+    feats: { surface?: string; surfaceColour?: string; outer: Q[][][]; bbox: [number, number, number, number] }[],
+  ): void => {
+    for (const f of feats) {
+      if (f.surface) continue;
+      const candidates = queryAreas(areaGridP, f.bbox);
+      let best: AreaFeature | null = null;
+      let bestArea = -1;
+      for (const area of candidates) {
+        if (!area.surface) continue;
+        if (!bboxOverlap(area.bbox, f.bbox)) continue;
+        // adjacent: rings touch or overlap; a shared point is enough
+        let touches = false;
+        outer: for (const fRing of f.outer) {
+          for (const aRing of area.outer) {
+            for (const p1 of fRing) {
+              for (const p2 of aRing) {
+                if (p1[0] === p2[0] && p1[1] === p2[1]) { touches = true; break outer; }
+              }
             }
           }
         }
+        if (!touches) continue;
+        const a = (area.bbox[2] - area.bbox[0]) * (area.bbox[3] - area.bbox[1]);
+        if (a > bestArea) { bestArea = a; best = area; }
       }
-      if (!touches) continue;
-      const a = (area.bbox[2] - area.bbox[0]) * (area.bbox[3] - area.bbox[1]);
-      if (a > bestArea) { bestArea = a; best = area; }
+      if (best) {
+        f.surface = best.surface;
+        f.surfaceColour = f.surfaceColour ?? best.surfaceColour;
+      }
     }
-    if (best) {
-      pk.surface = best.surface;
-      pk.surfaceColour = pk.surfaceColour ?? best.surfaceColour;
-    }
-  }
+  };
+  // parking without surface: assume the surface of the largest adjacent
+  // highway area
+  inheritFromAdjacent(parking);
+  // service highway areas without surface: the same rule — a parking lot or
+  // driveway mapped as area:highway=service takes the surface of the road
+  // area it is adjacent to (the centerline donation below only fires for a
+  // centerline running entirely INSIDE the area, which service areas
+  // rarely have)
+  inheritFromAdjacent(areas.filter((a) => a.highway === "service"));
 
   // collect all layer values
   const layerSet = new Set<number>();

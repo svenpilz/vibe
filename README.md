@@ -63,6 +63,10 @@ centerline that (a) has a compatible highway type — equal, or the footway/side
 (b) lies **entirely** inside the area (every vertex, holes respected), and (c) is on the
 same layer. A way that merely clips a polygon corner does not donate its surface.
 
+**Adjacency inheritance.** `amenity=parking` areas and `area:highway=service` areas
+without `surface=*` take the surface of the **largest adjacent highway area** (rings
+sharing at least one vertex); the surface of the biggest touching area wins.
+
 **Centerline suppression.** A centerline is not drawn when a same-type, same-layer highway
 area covers its midpoint: the area fill replaces the line.
 
