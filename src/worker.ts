@@ -38,6 +38,7 @@ self.onmessage = async (e: MessageEvent<WorkerIn>) => {
         tags["kerb"] !== undefined ||
         tags["barrier"] === "bollard" ||
         tags["highway"] === "street_lamp" ||
+        tags["highway"] === "traffic_signals" ||
         tags["man_made"] === "manhole" ||
         tags["traffic_calming"] !== undefined,
       (pct, stats) =>
