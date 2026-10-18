@@ -1353,12 +1353,31 @@ export function extractFeatures(
         borderPieces.map((p) => trafficLeftM(p) - fwdOf(p.cl) * laneWOf(p)),
       );
       anchorOf = () => anchorM;
-      // per-piece even split: each piece divides its OWN measured width
-      // evenly over its units, filling its road exactly; the shared
-      // border anchor keeps the solid direction line continuous, and the
-      // inner boundaries connect within centimetres (neighbouring
-      // pieces' lane widths differ only by the local road width change)
-      laneWShared = laneWOf;
+      // same-shape pieces share one unit width (median of their even
+      // splits): their measured differences are sampling noise on the
+      // same road, so sharing removes boundary steps at their seams.
+      // Different-shaped pieces keep their own even split, filling their
+      // road exactly; the border anchor keeps the direction line
+      // continuous across all pieces
+      {
+        const shapeKeyB = (q: MarkingSample & { cl: LineFeature }): string =>
+          `${q.cl.lanes!}|${q.cl.parkingLeft ? 1 : 0}|${q.cl.parkingRight ? 1 : 0}`;
+        const byShapeB = new Map<
+          string,
+          (MarkingSample & { cl: LineFeature })[]
+        >();
+        for (const q of pieces) {
+          const k = shapeKeyB(q);
+          const arr = byShapeB.get(k);
+          if (arr) arr.push(q);
+          else byShapeB.set(k, [q]);
+        }
+        const shapeWidthB = new Map<string, number>();
+        for (const [k, arr] of byShapeB) {
+          shapeWidthB.set(k, median(arr.map(laneWOf)));
+        }
+        laneWShared = (q) => shapeWidthB.get(shapeKeyB(q)) ?? laneWOf(q);
+      }
     } else {
       // which side does the road GROW on along the group? Compare the
       // pieces' measured edges: when the lane count rises from one piece
@@ -1402,13 +1421,32 @@ export function extractFeatures(
         anchorKind = "center";
         anchorOf = () => 0;
       }
-      // per-piece even split: every piece divides its OWN measured width
-      // evenly over its units, so each piece fills its road exactly (the
-      // road width changes along the way). Continuity comes from the
-      // growth-side anchor: boundaries sit at k*laneW from the anchor
-      // edge, and neighbouring pieces' widths differ only by the road's
-      // local width change - connected within centimetres, not perfectly
-      laneWShared = laneWOf;
+      // same-shape pieces share one unit width (median of their even
+      // splits): their measured differences are sampling noise on the
+      // same road, so sharing removes boundary steps at their seams.
+      // Pieces with a DIFFERENT shape (extra/removed lanes or parking)
+      // keep their own even split, filling their road exactly - the road
+      // genuinely widens/narrows there. Continuity comes from the
+      // growth-side anchor across shape changes
+      {
+        const shapeKey = (q: MarkingSample & { cl: LineFeature }): string =>
+          `${q.cl.lanes!}|${q.cl.parkingLeft ? 1 : 0}|${q.cl.parkingRight ? 1 : 0}`;
+        const byShape = new Map<
+          string,
+          (MarkingSample & { cl: LineFeature })[]
+        >();
+        for (const q of pieces) {
+          const k = shapeKey(q);
+          const arr = byShape.get(k);
+          if (arr) arr.push(q);
+          else byShape.set(k, [q]);
+        }
+        const shapeWidth = new Map<string, number>();
+        for (const [k, arr] of byShape) {
+          shapeWidth.set(k, median(arr.map(laneWOf)));
+        }
+        laneWShared = (q) => shapeWidth.get(shapeKey(q)) ?? laneWOf(q);
+      }
     }
     for (const p of pieces) {
       const fwd = fwdOf(p.cl);
