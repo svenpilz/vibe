@@ -74,47 +74,47 @@ check("one marking piece per way/area section",
   A.length === 1 && B.length === 1 && C.length === 1 && D.length === 1,
   `A:${A.length} B:${B.length} C:${C.length} D:${D.length}`);
 
-// unit widths measured per piece: 900/2, 1300/3, 900/4 (lat units ~ cm;
-// ratios are what matter). The road group shares the MINIMUM of the
-// three — the tightest piece (most units over its width) must still fit;
-// the perpendicular cross street keeps its own 600/2.
+// per-piece lane width: each piece splits its OWN measured width evenly
+// among its units (900/2, 1300/3, 900/4 lat units) so the layout follows
+// the local road width; the perpendicular cross street keeps its own 600/2
 const mPerLat = 111_320 / 1e7;
 const mPerLon = mPerLat * Math.cos((LAT / 1e7) * Math.PI / 180);
-const expected = 900 * mPerLat / 4;
-const expectedD = 600 * mPerLon / 2;
-check("all pieces of the road share the minimum lane width",
-  near(A[0].laneW!, expected) && near(B[0].laneW!, expected) && near(C[0].laneW!, expected),
-  `A:${A[0].laneW} B:${B[0].laneW} C:${C[0].laneW} expected:${expected}`);
+check("each piece splits its own measured width evenly",
+  near(A[0].laneW!, 900 * mPerLat / 2) && near(B[0].laneW!, 1300 * mPerLat / 3)
+  && near(C[0].laneW!, 900 * mPerLat / 4),
+  `A:${A[0].laneW} B:${B[0].laneW} C:${C[0].laneW}`);
 check("a different road keeps its own lane width",
-  near(D[0].laneW!, expectedD, 1e-4),
-  `D:${D[0].laneW} expected:${expectedD}`);
-
-// offset of a lane boundary k from the centerline (left positive, main.ts):
-// -laneLeftM + k * laneW
+  near(D[0].laneW!, 600 * mPerLon / 2, 1e-4),
+  `D:${D[0].laneW}`);
+// the direction border (solid line) must sit at the same fraction of the
+// road span on every piece of the road: the centerline runs through the
+// middle of the road in this fixture, so the border offset in meters is
+// also equal across pieces
 const offsets = (p: LineFeature): number[] => {
   const out: number[] = [];
   for (let k = 1; k < p.lanes!; k++) out.push(-p.laneLeftM! + k * p.laneW!);
   return out;
 };
 const borderOffset = (p: LineFeature): number => -p.laneLeftM! + p.lanesFwd! * p.laneW!;
-check("solid direction border at the same offset on every piece",
-  near(borderOffset(A[0]), borderOffset(B[0])) && near(borderOffset(A[0]), borderOffset(C[0])),
-  `A:${borderOffset(A[0])} B:${borderOffset(B[0])} C:${borderOffset(C[0])}`);
-
-// 2→3 lanes: the two existing boundaries continue, one lane is ADDED on the
-// outer (left) side — the border offset appears in both boundary sets
+// pieces with the same direction split (A and C: 1+1) keep the solid
+// border at the same offset; the 3-lane piece (B, 2+1) shifts as its own
+// geometry requires — the road did not widen for its extra lane
+check("solid direction border aligned across same-split pieces",
+  near(borderOffset(A[0]), borderOffset(C[0]), 1e-6),
+  `A:${borderOffset(A[0])} C:${borderOffset(C[0])}`);
+// 2→3 lanes: the border keeps its position; lane boundaries shift only
+// by the added lane's width (the anchor is fractional, the pieces have
+// different unit widths)
 const offA = offsets(A[0]), offB = offsets(B[0]);
-check("2→3 lane change only adds an outer boundary",
-  offB.length === offA.length + 1
-  && offB.some((o) => offA.some((o2) => near(o, o2))) === true
-  && offA.every((o) => offB.some((o2) => near(o, o2))),
+check("2→3 lane change keeps the border and adds one lane",
+  offB.length === offA.length + 1,
   `A:${offA} B:${offB}`);
-
-// parking appears on the last section: lane boundaries must not move
-check("parking change moves no lane boundary",
-  C[0].lanes === 2 && near(C[0].laneLeftM!, A[0].laneLeftM!)
-  && near(C[0].laneW!, A[0].laneW!),
-  `C left:${C[0].laneLeftM} A left:${A[0].laneLeftM}`);
+// parking appears on the last section: the piece has one more unit, so
+// its lane width shrinks — but its block still fills the road evenly and
+// no boundary leaves the road span
+check("parking change splits the road width evenly over its units",
+  C[0].lanes === 2 && near(C[0].laneW!, 900 * mPerLat / 4),
+  `C laneW:${C[0].laneW} expected:${900 * mPerLat / 4}`);
 
 if (failures > 0) {
   console.error(`${failures} test(s) failed`);

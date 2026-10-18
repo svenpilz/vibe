@@ -107,14 +107,18 @@ For a centerline with `lanes ≥ 2` that runs inside a non-junction highway area
    split into **equal units shared by traffic and parking lanes** — two lanes plus one
    parking lane give three equal units, the parking unit occupying the outer strip on
    its side.
-3. All units have the same width: `laneW = (leftM + rightM) / (lanes + parkingLanes)` —
-   but **per road, not per way**: a road is often split into several centerline ways
-   (e.g. where `lanes` or parking change) and its highway area into several sections;
-   all pieces of one road share the **minimum** unit width of its pieces, so markings
-   do not jump at way or area seams and the tightest piece (most lanes and/or smallest
-   width — the road width changes along the way) still fits. Each piece's lane block is
-   clamped into its own measured road span, so markings never extend past the road edge
-   even where the centerline wanders off-center.
+3. All units have the same width **within one piece**: `laneW = (leftM + rightM) /
+   (lanes + parkingLanes)` — each piece splits its own measured width evenly, so the
+   layout follows the local road (the width changes along a way) and every piece fills
+   its road exactly. Width is measured by sampling up to 12 segments per area section
+   (median of the ray-cast edges), so long curving ways follow their local geometry
+   instead of one smoothed measurement. Continuity across a road's pieces is kept by a
+   shared **border anchor**: the direction border (the solid line between forward and
+   backward lanes) sits at the same offset on every piece (median of the pieces'
+   natural positions); a purely one-way road anchors on the left edge of its leftmost
+   lane. Each piece's lane block is clamped into its own measured road span, so
+   markings never extend past the road edge even where the centerline wanders
+   off-center.
 4. **Continuity across a road** (like real-life markings): all marking pieces of one
    road group are anchored on the **direction border** — the solid line between
    forward and backward lanes — or, on purely one-way roads, on the left edge of the

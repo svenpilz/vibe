@@ -893,60 +893,71 @@ export function extractFeatures(
       if (sameLayer.length > 0) matching.length = 0, matching.push(...sameLayer);
     }
     for (const area of matching) {
-      // sample segment per area: the LONGEST segment whose midpoint lies
-      // inside this area. The middle segment of a bent way can be a short
-      // corner-cut whose direction matches the road axis nowhere; the
-      // longest straight run represents the road's local direction.
-      let bi = -1, bLen = 0;
-      let biTol = -1, bLenTol = 0;
+      // sample MULTIPLE segments per area (median of the ray-cast edges),
+      // so a long curving way follows its local road width instead of one
+      // smoothed measurement at its longest segment; at most 12 samples,
+      // evenly spaced among the segments whose midpoint lies inside the
+      // area. The middle segment of a bent way can be a short corner-cut
+      // whose direction matches the road axis nowhere — segments strictly
+      // inside are preferred over ones only touching the boundary (a
+      // segment spanning two area sections has its midpoint on the shared
+      // edge, where rays toward the other section would measure zero width)
+      const insideSegs: number[] = [];
+      const tolSegs: number[] = [];
       for (let si = 1; si < cl.coords.length; si++) {
         const a = cl.coords[si - 1], b = cl.coords[si];
-        const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
-        if (len === 0) continue;
+        if (a[0] === b[0] && a[1] === b[1]) continue;
         const m = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-        if (pointInAreaQ(m, area)) {
-          if (len > bLen) { bLen = len; bi = si; }
-        } else if (pointInAreaTolQ2(m, area)) {
-          // strictly-inside segments are preferred: a segment spanning two
-          // area sections has its midpoint on the shared edge, where rays
-          // toward the other section would measure zero width
-          if (len > bLenTol) { bLenTol = len; biTol = si; }
-        }
+        if (pointInAreaQ(m, area)) insideSegs.push(si);
+        else if (pointInAreaTolQ2(m, area)) tolSegs.push(si);
       }
-      if (bi < 0) { bi = biTol; bLen = bLenTol; }
-      if (bi < 0) continue;
-      const dxs = cl.coords[bi][0] - cl.coords[bi - 1][0];
-      const dys = cl.coords[bi][1] - cl.coords[bi - 1][1];
-      // sample: the segment midpoint, or — when it lies on the boundary
-      // (the segment spans two area sections) — the midpoint of the part
-      // of the segment strictly inside this area
-      let sample: number[] | null = null;
-      const a0 = cl.coords[bi - 1], a1 = cl.coords[bi];
-      for (let t = 0.5; t >= 0.05; t -= 0.05) {
-        for (const u of [t, 1 - t]) {
-          const p = [a0[0] + (a1[0] - a0[0]) * u, a0[1] + (a1[1] - a0[1]) * u];
-          if (pointInAreaQ(p, area)) { sample = p; break; }
+      const segs = insideSegs.length > 0 ? insideSegs : tolSegs;
+      if (segs.length === 0) continue;
+      const sampled = segs.length <= 12
+        ? segs
+        : [...Array(12).keys()].map((k) => segs[Math.min(segs.length - 1, Math.round((k * (segs.length - 1)) / 11))]);
+      const lefts: number[] = [];
+      const rights: number[] = [];
+      for (const bi of sampled) {
+        const dxs = cl.coords[bi][0] - cl.coords[bi - 1][0];
+        const dys = cl.coords[bi][1] - cl.coords[bi - 1][1];
+        const segLen = Math.hypot(dxs, dys);
+        // sample: the segment midpoint, or — when it lies on the boundary —
+        // a point of the segment strictly inside this area
+        let sample: number[] | null = null;
+        const a0 = cl.coords[bi - 1], a1 = cl.coords[bi];
+        for (let t = 0.5; t >= 0.05; t -= 0.05) {
+          for (const u of [t, 1 - t]) {
+            const p = [a0[0] + (a1[0] - a0[0]) * u, a0[1] + (a1[1] - a0[1]) * u];
+            if (pointInAreaQ(p, area)) { sample = p; break; }
+          }
+          if (sample) break;
         }
-        if (sample) break;
+        if (!sample) continue;
+        const nx = -dys / segLen, ny = dxs / segLen;
+        const [minX, minY, maxX, maxY] = area.bbox;
+        const maxRay = Math.hypot(maxX - minX, maxY - minY) + 1000;
+        const left = rayExitInArea(sample, [nx, ny], area, maxRay);
+        const right = rayExitInArea(sample, [-nx, -ny], area, maxRay);
+        if (left === null || right === null) continue;
+        // convert each ray to meters: lon units scale with cos(latitude),
+        // lat units are constant; the ray travels in mixed units
+        const mPerLon = (111_320 * Math.cos((sample[1] / 1e7) * Math.PI / 180)) / 1e7;
+        const mPerLat = 111_320 / 1e7;
+        const rayM = (t: number, dx2: number, dy2: number): number =>
+          Math.hypot(dx2 * t * mPerLon, dy2 * t * mPerLat);
+        lefts.push(rayM(left, nx, ny));
+        rights.push(rayM(right, -nx, -ny));
       }
-      if (!sample) continue;
-      const nx = -dys / bLen, ny = dxs / bLen;
-      const [minX, minY, maxX, maxY] = area.bbox;
-      const maxRay = Math.hypot(maxX - minX, maxY - minY) + 1000;
-      const left = rayExitInArea(sample, [nx, ny], area, maxRay);
-      const right = rayExitInArea(sample, [-nx, -ny], area, maxRay);
-      if (left === null || right === null) continue;
-      // convert each ray to meters: lon units scale with cos(latitude),
-      // lat units are constant; the ray travels in mixed units
-      const mPerLon = (111_320 * Math.cos((sample[1] / 1e7) * Math.PI / 180)) / 1e7;
-      const mPerLat = 111_320 / 1e7;
-      const rayM = (t: number, dx2: number, dy2: number): number =>
-        Math.hypot(dx2 * t * mPerLon, dy2 * t * mPerLat);
-      const leftM = rayM(left, nx, ny);
-      const rightM = rayM(right, -nx, -ny);
+      if (lefts.length === 0) continue;
+      const median = (xs: number[]): number => {
+        const s2 = [...xs].sort((a, b) => a - b);
+        const m = s2.length >> 1;
+        return s2.length % 2 ? s2[m] : (s2[m - 1] + s2[m]) / 2;
+      };
       let arr = samplesOf.get(cl);
       if (!arr) { arr = []; samplesOf.set(cl, arr); }
-      arr.push({ area, leftM, rightM });
+      arr.push({ area, leftM: median(lefts), rightM: median(rights) });
     }
   }
   // group the lane-bearing ways into roads: centerlines that touch
@@ -1064,44 +1075,48 @@ export function extractFeatures(
     const pieces: (MarkingSample & { cl: LineFeature })[] = [];
     for (const w of ways) for (const s of samplesOf.get(w) ?? []) pieces.push({ cl: w, ...s });
     if (pieces.length === 0) continue;
-    // shared lane width: the MINIMUM of the pieces' measured unit widths
-    // (the total width splits equally among traffic + parking lanes). The
-    // road narrows and widens along its way, so a median or mean would
-    // overflow the tightest piece — the section with the most lanes or the
-    // smallest measured width must still fit: the tightest piece dictates
-    // the width all pieces share
-    const laneW = Math.min(...pieces.map((p) =>
+    // PER-PIECE lane width: each piece splits its OWN measured width
+    // evenly among its units (traffic + parking lanes), so the layout
+    // follows the local road width and every piece fills its road exactly
+    // (a 12 m piece with 4 units gets 3 m lanes, the neighbouring 12 m
+    // piece with 3 units gets 4 m lanes)
+    const laneWOf = (p: MarkingSample & { cl: LineFeature }): number =>
       (p.leftM + p.rightM) /
-      (p.cl.lanes! + (p.cl.parkingLeft ? 1 : 0) + (p.cl.parkingRight ? 1 : 0))));
+      (p.cl.lanes! + (p.cl.parkingLeft ? 1 : 0) + (p.cl.parkingRight ? 1 : 0));
     // left traffic edge of a piece (its parking lane virtually removed)
     const trafficLeftM = (p: MarkingSample & { cl: LineFeature }): number =>
-      p.leftM - (p.cl.parkingLeft ? laneW : 0);
-    // anchor = position of the direction border: only pieces with lanes in
-    // both directions have one; on purely one-way roads the anchor is the
-    // left edge of the leftmost lane
+      p.leftM - (p.cl.parkingLeft ? laneWOf(p) : 0);
+    // continuity anchor in METERS: the position of the direction border
+    // (solid line between forward and backward lanes), or — on purely
+    // one-way roads — the left edge of the leftmost lane. The solid border
+    // is the visually dominant line: keeping it at the same offset across
+    // pieces (median of the pieces' natural positions) is what makes the
+    // markings read as continuous; lane widths themselves are per piece
     const borderPieces = pieces.filter((p) => {
       const f = fwdOf(p.cl);
       return f > 0 && f < p.cl.lanes!;
     });
     const anchorBorder = borderPieces.length > 0;
     const anchorM = median((anchorBorder ? borderPieces : pieces).map((p) =>
-      anchorBorder ? trafficLeftM(p) - fwdOf(p.cl) * laneW : trafficLeftM(p)));
+      anchorBorder
+        ? trafficLeftM(p) - fwdOf(p.cl) * laneWOf(p)
+        : trafficLeftM(p)));
     for (const p of pieces) {
       const fwd = fwdOf(p.cl);
+      const laneW = laneWOf(p);
+      // anchored on the direction border: adding forward lanes extends
+      // the layout to the left, adding backward lanes to the right — the
+      // border fraction keeps existing boundaries aligned across pieces
+      // place the border at the anchor offset, then lay the forward lanes
+      // to its left and the rest to its right. A purely one-way piece has
+      // no border: its anchor is the LEFT edge of its leftmost lane, the
+      // block extends to the right of it. The clamp below keeps the block
+      // inside the road
       const hasBorder = fwd > 0 && fwd < p.cl.lanes!;
-      // anchored on the direction border: adding forward lanes extends the
-      // layout to the left, adding backward lanes to the right — existing
-      // boundaries keep their offsets and markings stay continuous
-      let laneLeftM = anchorBorder
-        ? (hasBorder ? anchorM + fwd * laneW : anchorM)
-        : anchorM;
-      // the road width changes along the way: clamp the shared layout into
-      // this piece's measured span (leftM .. -rightM, negative = left of
-      // the centerline) so markings never extend past the road edge even
-      // where the centerline wanders off-center
+      let laneLeftM = hasBorder ? anchorM + fwd * laneW : anchorM;
+      // clamp into this piece's measured span so markings never extend
+      // past the road edge even where the centerline wanders off-center
       const blockW = p.cl.lanes! * laneW;
-      // block fits when laneLeftM <= leftM (left edge inside) and
-      // laneLeftM - blockW >= -rightM (right edge inside)
       const minLeft = blockW - p.rightM;
       const maxLeft = p.leftM;
       if (laneLeftM < minLeft) laneLeftM = minLeft;
