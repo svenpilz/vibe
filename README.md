@@ -110,8 +110,11 @@ For a centerline with `lanes ≥ 2` that runs inside a non-junction highway area
 3. All units have the same width: `laneW = (leftM + rightM) / (lanes + parkingLanes)` —
    but **per road, not per way**: a road is often split into several centerline ways
    (e.g. where `lanes` or parking change) and its highway area into several sections;
-   all pieces of one road share the **median** unit width of its pieces, so the
-   markings do not jump at way or area seams.
+   all pieces of one road share the **minimum** unit width of its pieces, so markings
+   do not jump at way or area seams and the tightest piece (most lanes and/or smallest
+   width — the road width changes along the way) still fits. Each piece's lane block is
+   clamped into its own measured road span, so markings never extend past the road edge
+   even where the centerline wanders off-center.
 4. **Continuity across a road** (like real-life markings): all marking pieces of one
    road group are anchored on the **direction border** — the solid line between
    forward and backward lanes — or, on purely one-way roads, on the left edge of the

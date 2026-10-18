@@ -75,13 +75,14 @@ check("one marking piece per way/area section",
   `A:${A.length} B:${B.length} C:${C.length} D:${D.length}`);
 
 // unit widths measured per piece: 900/2, 1300/3, 900/4 (lat units ~ cm;
-// ratios are what matter). The road group shares the MEDIAN of the three;
+// ratios are what matter). The road group shares the MINIMUM of the
+// three — the tightest piece (most units over its width) must still fit;
 // the perpendicular cross street keeps its own 600/2.
 const mPerLat = 111_320 / 1e7;
 const mPerLon = mPerLat * Math.cos((LAT / 1e7) * Math.PI / 180);
-const expected = 1300 * mPerLat / 3;
+const expected = 900 * mPerLat / 4;
 const expectedD = 600 * mPerLon / 2;
-check("all pieces of the road share the median lane width",
+check("all pieces of the road share the minimum lane width",
   near(A[0].laneW!, expected) && near(B[0].laneW!, expected) && near(C[0].laneW!, expected),
   `A:${A[0].laneW} B:${B[0].laneW} C:${C[0].laneW} expected:${expected}`);
 check("a different road keeps its own lane width",

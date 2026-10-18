@@ -1064,9 +1064,13 @@ export function extractFeatures(
     const pieces: (MarkingSample & { cl: LineFeature })[] = [];
     for (const w of ways) for (const s of samplesOf.get(w) ?? []) pieces.push({ cl: w, ...s });
     if (pieces.length === 0) continue;
-    // shared lane width: median of the pieces' measured unit widths (the
-    // total width splits equally among traffic + parking lanes)
-    const laneW = median(pieces.map((p) =>
+    // shared lane width: the MINIMUM of the pieces' measured unit widths
+    // (the total width splits equally among traffic + parking lanes). The
+    // road narrows and widens along its way, so a median or mean would
+    // overflow the tightest piece — the section with the most lanes or the
+    // smallest measured width must still fit: the tightest piece dictates
+    // the width all pieces share
+    const laneW = Math.min(...pieces.map((p) =>
       (p.leftM + p.rightM) /
       (p.cl.lanes! + (p.cl.parkingLeft ? 1 : 0) + (p.cl.parkingRight ? 1 : 0))));
     // left traffic edge of a piece (its parking lane virtually removed)
@@ -1088,9 +1092,20 @@ export function extractFeatures(
       // anchored on the direction border: adding forward lanes extends the
       // layout to the left, adding backward lanes to the right — existing
       // boundaries keep their offsets and markings stay continuous
-      const laneLeftM = anchorBorder
+      let laneLeftM = anchorBorder
         ? (hasBorder ? anchorM + fwd * laneW : anchorM)
         : anchorM;
+      // the road width changes along the way: clamp the shared layout into
+      // this piece's measured span (leftM .. -rightM, negative = left of
+      // the centerline) so markings never extend past the road edge even
+      // where the centerline wanders off-center
+      const blockW = p.cl.lanes! * laneW;
+      // block fits when laneLeftM <= leftM (left edge inside) and
+      // laneLeftM - blockW >= -rightM (right edge inside)
+      const minLeft = blockW - p.rightM;
+      const maxLeft = p.leftM;
+      if (laneLeftM < minLeft) laneLeftM = minLeft;
+      if (laneLeftM > maxLeft) laneLeftM = maxLeft;
       laneMarkings.push({
         ...p.cl,
         // the marking lives on the area's layer (bird's-eye stacking, selector
