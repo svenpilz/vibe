@@ -1020,14 +1020,77 @@ export function extractFeatures(
     for (let ri = 0; ri < way.refs.length; ri++) {
       const nt = data.nodeTags.get(way.refs[ri]);
       if (!nt || nt["highway"] !== "traffic_signals") continue;
+      // END is checked first: a 2-node way's last node is both near the
+      // start and at the end - it is the END (traffic runs into the
+      // signal there), never the start
       const side: "start" | "mid" | "end" =
-        ri <= 1 ? "start" : ri >= n - 2 ? "end" : "mid";
+        ri >= n - 2 ? "end" : ri <= 1 ? "start" : "mid";
       let arr = stopLineAt.get(cl);
       if (!arr) {
         arr = [];
         stopLineAt.set(cl, arr);
       }
       arr.push({ idx: ri, side });
+    }
+  }
+  // resolve each signal to its stop position: walk from the signal node
+  // along the way towards the stopping traffic (backwards for an END
+  // signal, forwards for a START signal) to the first vertex that lies
+  // inside/on one of the way's OWN road areas (non-junction areas the way
+  // corresponds to). Signals stand AT the stop line, so the mouth of the
+  // entering road section is a couple of vertices away; bounding the walk
+  // to a few segments prevents reaching across a junction onto an
+  // unrelated far piece. Keyed by the AREA that received the stop line -
+  // the piece of that area carries it
+  const areasOfWay = new Map<LineFeature, AreaFeature[]>();
+  const slAreaGrid = buildAreaIndex(areas);
+  for (const cl of laneCandidates) {
+    const found: AreaFeature[] = [];
+    for (const area of queryAreas(slAreaGrid, cl.bbox)) {
+      if (area.junction) continue;
+      if (!highwayTypesCompatible(cl.highway, area.highway)) continue;
+      if (!bboxOverlap(area.bbox, cl.bbox)) continue;
+      for (let i = 1; i < cl.coords.length; i++) {
+        const a = cl.coords[i - 1],
+          b = cl.coords[i];
+        const m = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+        if (pointInAreaQ(m, area)) {
+          found.push(area);
+          break;
+        }
+      }
+    }
+    areasOfWay.set(cl, found);
+  }
+  const stopLineResolved = new Map<
+    LineFeature,
+    { idx: number; side: "start" | "mid" | "end"; area: AreaFeature }[]
+  >();
+  for (const [cl, sigs] of stopLineAt) {
+    const myAreas = areasOfWay.get(cl) ?? [];
+    for (const sl of sigs) {
+      const step = sl.side === "end" ? -1 : 1;
+      let steps = 0;
+      for (
+        let i = sl.idx;
+        i >= 0 && i < cl.coords.length && steps <= 3;
+        i += step
+      ) {
+        const nq = cl.coords[i];
+        const hit = myAreas.find(
+          (a) => pointInAreaQ(nq, a) || pointOnAreaBoundaryQ(nq, a, 10),
+        );
+        if (hit) {
+          let arr = stopLineResolved.get(cl);
+          if (!arr) {
+            arr = [];
+            stopLineResolved.set(cl, arr);
+          }
+          arr.push({ idx: i, side: sl.side, area: hit });
+          break;
+        }
+        steps++;
+      }
     }
   }
   // ---------------------------------------------------------------------
@@ -1428,18 +1491,11 @@ export function extractFeatures(
       // (an END signal: walk backwards; a START signal: forwards) until a
       // vertex of THIS piece's area is reached - the stop line goes there,
       // at the mouth of the junction on the entering carriageway
-      const stopLines: { idx: number; side: "start" | "mid" | "end" }[] = [];
-      for (const sl of stopLineAt.get(p.cl) ?? []) {
-        const step = sl.side === "end" ? -1 : 1;
-        for (let i = sl.idx; i >= 0 && i < p.cl.coords.length; i += step) {
-          const nq = p.cl.coords[i];
-          if (pointInAreaQ(nq, p.area)) {
-            stopLines.push({ idx: i, side: sl.side });
-            break;
-          }
-        }
-      }
-      const stopLine = stopLines[0];
+      // signals resolved to this piece's area section carry their stop
+      // line here; other areas' stop lines belong to their own pieces
+      const stopLine = (stopLineResolved.get(p.cl) ?? []).find(
+        (sl) => sl.area === p.area,
+      );
       let laneLeftM: number;
       let bidirectional = false;
       if (fwd > 0 && fwd < p.cl.lanes!) {
