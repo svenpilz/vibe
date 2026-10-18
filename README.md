@@ -118,10 +118,11 @@ For a centerline with `lanes ≥ 2` that runs inside a non-junction highway area
    instead of one smoothed measurement. Continuity across a road's pieces is kept by a
    shared **border anchor**: the direction border (the solid line between forward and
    backward lanes) sits at the same offset on every piece (median of the pieces'
-   natural positions); a purely one-way road has no border — each of its pieces lays
-   its block from its **own measured left edge**, so boundaries follow the road outline
-   (which is continuous where the ways meet) even when the centerline placement differs
-   between ways (`placement=*`). Each piece's lane block is clamped into its own measured road span, so
+   natural positions); a purely one-way road has no border — its pieces are clustered by
+   measured left edge (agreement within 0.75 m): a cluster shares the median left edge,
+   median road span and — per unit count — the median lane width, so same-shaped pieces
+   line up exactly at the seams; pieces whose measured edges genuinely differ (e.g.
+   `placement=*` offsets on a dual carriageway) anchor on their own measured edge. Each piece's lane block is clamped into its own measured road span, so
    markings never extend past the road edge even where the centerline wanders
    off-center.
 4. **Continuity across a road** (like real-life markings): all marking pieces of one

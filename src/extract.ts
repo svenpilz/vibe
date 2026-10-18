@@ -1123,13 +1123,70 @@ export function extractFeatures(
       return f > 0 && f < p.cl.lanes!;
     });
     const anchorBorder = borderPieces.length > 0;
-    const anchorM = median((anchorBorder ? borderPieces : pieces).map((p) =>
-      anchorBorder
-        ? trafficLeftM(p) - fwdOf(p.cl) * laneWOf(p)
-        : trafficLeftM(p)));
+    // bidirectional roads: one shared border anchor (median). One-way
+    // roads: the anchor is the left road edge, but measured edges differ
+    // between pieces for two different reasons — genuine centerline
+    // placement differences (placement=*, e.g. right_of:3) which must
+    // anchor per piece, and measurement variation along a curved road,
+    // which must NOT create a jump. Pieces whose measured left edges agree
+    // within 0.75 m therefore share the median anchor of their cluster;
+    // pieces that differ keep their own measured edge
+    let anchorOf: (p: MarkingSample & { cl: LineFeature }) => number;
+    let laneWShared: (p: MarkingSample & { cl: LineFeature }) => number = laneWOf;
+    const leftMByPiece = new Map<MarkingSample & { cl: LineFeature }, number>();
+    const rightMByPiece = new Map<MarkingSample & { cl: LineFeature }, number>();
+    if (anchorBorder) {
+      const anchorM = median(borderPieces.map((p) =>
+        trafficLeftM(p) - fwdOf(p.cl) * laneWOf(p)));
+      anchorOf = () => anchorM;
+    } else {
+      // cluster by measured left edge; within a cluster, pieces with the
+      // SAME unit count also SHARE the median lane width, so their lane
+      // boundaries line up exactly at the seams (pieces with different
+      // unit counts keep per-piece widths — the road widens for the
+      // extra units, e.g. turn lanes or parking)
+      const sorted = [...pieces].sort((a, b) => trafficLeftM(a) - trafficLeftM(b));
+      const anchorByPiece = new Map<MarkingSample & { cl: LineFeature }, number>();
+      const laneWByPiece = new Map<MarkingSample & { cl: LineFeature }, number>();
+      let cluster: (MarkingSample & { cl: LineFeature })[] = [];
+      const unitsOf = (p: MarkingSample & { cl: LineFeature }): number =>
+        p.cl.lanes! + (p.cl.parkingLeft ? 1 : 0) + (p.cl.parkingRight ? 1 : 0);
+      const flush = () => {
+        // one shared measured span per cluster: median left and right
+        // edge. Individual samples vary along a curved road; the cluster
+        // agrees within tolerance, so the shared span removes the
+        // measurement noise that would otherwise step the layout at the
+        // seams (the clamp then never diverges between clustered pieces)
+        const m = median(cluster.map((p) => trafficLeftM(p)));
+        for (const c of cluster) anchorByPiece.set(c, m);
+        const rM = median(cluster.map((p) => p.rightM));
+        for (const c of cluster) rightMByPiece.set(c, rM);
+        const lM = median(cluster.map((p) => p.leftM));
+        for (const c of cluster) leftMByPiece.set(c, lM);
+        const byUnits = new Map<number, (MarkingSample & { cl: LineFeature })[]>();
+        for (const c of cluster) {
+          const u = unitsOf(c);
+          const arr = byUnits.get(u);
+          if (arr) arr.push(c); else byUnits.set(u, [c]);
+        }
+        for (const arr of byUnits.values()) {
+          const w = median(arr.map(laneWOf));
+          for (const c of arr) laneWByPiece.set(c, w);
+        }
+        cluster = [];
+      };
+      for (const p of sorted) {
+        if (cluster.length > 0
+          && Math.abs(trafficLeftM(p) - trafficLeftM(cluster[cluster.length - 1])) > 0.75) flush();
+        cluster.push(p);
+      }
+      if (cluster.length > 0) flush();
+      anchorOf = (p) => anchorByPiece.get(p) ?? trafficLeftM(p);
+      laneWShared = (p) => laneWByPiece.get(p) ?? laneWOf(p);
+    }
     for (const p of pieces) {
       const fwd = fwdOf(p.cl);
-      const laneW = laneWOf(p);
+      const laneW = laneWShared(p);
       // anchored on the direction border: adding forward lanes extends
       // the layout to the left, adding backward lanes to the right — the
       // border fraction keeps existing boundaries aligned across pieces
@@ -1141,14 +1198,16 @@ export function extractFeatures(
       // actual road outline, which is continuous where the ways meet. The
       // clamp below keeps the block inside the road
       const hasBorder = fwd > 0 && fwd < p.cl.lanes!;
+      const lw = laneWShared(p);
       let laneLeftM = hasBorder
-        ? anchorM + fwd * laneW
-        : (anchorBorder ? anchorM : trafficLeftM(p));
-      // clamp into this piece's measured span so markings never extend
-      // past the road edge even where the centerline wanders off-center
+        ? anchorOf(p) + fwd * lw
+        : anchorOf(p);
+      // clamp into this piece's (cluster-shared) measured span so markings
+      // never extend past the road edge even where the centerline wanders
+      // off-center
       const blockW = p.cl.lanes! * laneW;
-      const minLeft = blockW - p.rightM;
-      const maxLeft = p.leftM;
+      const minLeft = blockW - (rightMByPiece.get(p) ?? p.rightM);
+      const maxLeft = leftMByPiece.get(p) ?? p.leftM;
       if (laneLeftM < minLeft) laneLeftM = minLeft;
       if (laneLeftM > maxLeft) laneLeftM = maxLeft;
       laneMarkings.push({
