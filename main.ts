@@ -1218,43 +1218,29 @@ function drawLaneMarkings(cl: LineFeature) {
     cl.stopLineFromM !== undefined &&
     cl.stopLineToM !== undefined
   ) {
-    // position on the centerline and its local direction
-    const sq: [number, number] = [cl.stopLineAtQ[0] / Q, cl.stopLineAtQ[1] / Q];
-    let dir: [number, number] = [1, 0];
-    for (let i = 1; i < base.length; i++) {
-      const a = base[i - 1],
-        b = base[i];
-      const minX = Math.min(a[0], b[0]),
-        maxX = Math.max(a[0], b[0]);
-      const minY = Math.min(a[1], b[1]),
-        maxY = Math.max(a[1], b[1]);
-      if (sq[0] >= minX && sq[0] <= maxX && sq[1] >= minY && sq[1] <= maxY) {
-        const dx = b[0] - a[0],
-          dy = b[1] - a[1];
-        const l = Math.hypot(dx, dy);
-        if (l > 0) dir = [dx / l, dy / l];
-        break;
-      }
+    // exact centerline vertex of the signal node
+    const si = base.findIndex(
+      (_, i) =>
+        cl.coords[i][0] === cl.stopLineAtQ![0] &&
+        cl.coords[i][1] === cl.stopLineAtQ![1],
+    );
+    if (si >= 0) {
+      // offsets follow the boundary convention: screen position =
+      // vertex + rightNormal * offset * px, offset = -(meters left)
+      const n = normals[si];
+      const x1 = base[si][0] + n[0] * cl.stopLineFromM * px;
+      const y1 = base[si][1] + n[1] * cl.stopLineFromM * px;
+      const x2 = base[si][0] + n[0] * cl.stopLineToM * px;
+      const y2 = base[si][1] + n[1] * cl.stopLineToM * px;
+      ctx.strokeStyle = "#e8e8e8";
+      ctx.setLineDash([]);
+      ctx.lineWidth = Math.max(2, 0.4 * px);
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+      ctx.lineWidth = lineW;
     }
-    const px = pxPerMeter();
-    const sx = lonToX(sq[0]),
-      sy = latToY(sq[1]);
-    // offsets from the centerline (meters-left-positive, converted to the
-    // screen normal): fromM..toM span the stopping lanes
-    const nx = -dir[1],
-      ny = dir[0];
-    const x1 = sx + nx * cl.stopLineFromM * px;
-    const y1 = sy + ny * cl.stopLineFromM * px;
-    const x2 = sx + nx * cl.stopLineToM * px;
-    const y2 = sy + ny * cl.stopLineToM * px;
-    ctx.strokeStyle = "#e8e8e8";
-    ctx.setLineDash([]);
-    ctx.lineWidth = Math.max(2, 0.4 * px);
-    ctx.beginPath();
-    ctx.moveTo(x1, y1);
-    ctx.lineTo(x2, y2);
-    ctx.stroke();
-    ctx.lineWidth = lineW;
   }
 }
 
