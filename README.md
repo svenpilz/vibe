@@ -194,8 +194,11 @@ lanes it covers depends on where the node sits on the way:
   stop there;
 - **mid-way**: both directions stop, full width.
 
-The stop line is a solid white bar perpendicular to the centerline, drawn on the
-piece whose area section contains the signal node, and clipped to that area like the
+The stop line is a solid white bar perpendicular to the centerline. The signal node
+often sits inside the junction area, which produces no markings — the position is
+therefore **walked** from the signal node along the way (towards the stopping traffic)
+to the first vertex inside the entering road's area section: the stop line lands at
+the junction mouth on the entering carriageway and is clipped to that area like the
 other markings.
 
 **Drawing.** Lane boundaries are continuous offset curves of the centerline using

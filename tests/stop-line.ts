@@ -129,4 +129,45 @@ if (failures > 0) {
   console.error(`${failures} test(s) failed`);
   process.exit(1);
 }
+
+// signal inside a junction area: the stop line must land at the piece
+// vertex where the way ENTERS the road area (the junction's mouth), not
+// at the node (which the junction would clip away)
+{
+  const sj = node(80000, 0, { highway: "traffic_signals" });
+  way([node(70000, 0), node(74000, 0), node(76000, 0), sj], {
+    highway: "tertiary",
+    surface: "asphalt",
+    lanes: "2",
+    name: "E-Straße",
+    oneway: "yes",
+  });
+  const ja = node(79000, -600),
+    jb = node(81000, -600),
+    jc = node(81000, 600),
+    jd = node(79000, 600);
+  way([ja, jb, jc, jd, ja], { "area:highway": "tertiary", junction: "yes" });
+  const ra = node(69550, -450),
+    rb = node(76200, -450),
+    rc = node(76200, 450),
+    rd = node(69550, 450);
+  way([ra, rb, rc, rd, ra], { "area:highway": "tertiary", surface: "asphalt" });
+  const e2 = extractFeatures(data).laneMarkings.find(
+    (m) => m.name === "E-Straße",
+  );
+  check(
+    "signal inside junction: stop line present on the entering piece",
+    e2 !== undefined && e2.stopLineAtQ !== undefined,
+  );
+  if (e2?.stopLineAtQ) {
+    // coords are raw units in this harness: the mouth vertex is at 76000,
+    // the signal node at 80000 - the stop line must sit at the mouth
+    check(
+      "signal inside junction: stop line at the junction mouth, not the node",
+      e2.stopLineAtQ[0] === 76000,
+      `atQ lon=${e2.stopLineAtQ[0]}`,
+    );
+  }
+}
+
 console.log("all stop line tests passed");

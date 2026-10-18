@@ -1453,19 +1453,23 @@ export function extractFeatures(
       const laneW = laneWShared(p);
       // the stop line belongs to the piece whose area section contains
       // the signal node (within ~3 m tolerance)
-      const stopLines = (stopLineAt.get(p.cl) ?? []).filter((sl) => {
-        const nq = p.cl.coords[sl.idx];
-        if (!nq) return false;
-        const mPerLon =
-          (111_320 * Math.cos(((nq[1] / 1e7) * Math.PI) / 180)) / 1e7;
-        const tol = Math.round(3 / mPerLon);
-        return (
-          nq[0] >= p.area.bbox[0] - tol &&
-          nq[0] <= p.area.bbox[2] + tol &&
-          nq[1] >= p.area.bbox[1] - tol &&
-          nq[1] <= p.area.bbox[3] + tol
-        );
-      });
+      // the signal node itself often sits inside the JUNCTION area, which
+      // never produces marking pieces and would clip the line away. Walk
+      // from the signal node along the way towards the traffic that stops
+      // (an END signal: walk backwards; a START signal: forwards) until a
+      // vertex of THIS piece's area is reached - the stop line goes there,
+      // at the mouth of the junction on the entering carriageway
+      const stopLines: { idx: number; side: "start" | "mid" | "end" }[] = [];
+      for (const sl of stopLineAt.get(p.cl) ?? []) {
+        const step = sl.side === "end" ? -1 : 1;
+        for (let i = sl.idx; i >= 0 && i < p.cl.coords.length; i += step) {
+          const nq = p.cl.coords[i];
+          if (pointInAreaQ(nq, p.area)) {
+            stopLines.push({ idx: i, side: sl.side });
+            break;
+          }
+        }
+      }
       const stopLine = stopLines[0];
       let laneLeftM: number;
       let bidirectional = false;
