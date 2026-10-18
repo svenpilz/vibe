@@ -40,6 +40,12 @@ centerline([[52.4720048,13.3359245],[52.4720941,13.3360203],[52.4721194,13.33604
             [52.4721673,13.3361018],[52.4722352,13.3361817],[52.4722431,13.3361914]],
   { highway: "tertiary", lanes: "2", name: "Hauptstraße", oneway: "yes", "parking:left": "no" });
 
+// the OTHER carriageway of Hauptstraße (oneway the other way) branching at
+// the same fork point: gives the Rheinstraße end a SECOND collinear
+// candidate, so the continuation is ambiguous and the group breaks
+centerline([[52.4722431,13.3361914],[52.4722352,13.3361817],[52.4721673,13.3361018],
+            [52.4721194,13.3360485],[52.4720941,13.3360203],[52.4720048,13.3359245]],
+  { highway: "tertiary", lanes: "2", name: "Hauptstraße", oneway: "yes", "parking:right": "no" });
 // the fork area (NOT junction=yes): one polygon covering both carriageways
 area([[52.4722605,13.3361249],[52.4722352,13.3361817],[52.4722113,13.3362353],
       [52.4722075,13.3362308],[52.4722023,13.3362246],[52.4721421,13.3361535],
@@ -75,10 +81,14 @@ console.log("separate parking features (ground only):", result.parking.length,
   result.parking.map((p) => p.id).join(","));
 const rhein = lm.find((m) => m.name === "Rheinstraße");
 console.log("Rheinstraße parking from strip: L", rhein?.parkingLeft, "R", rhein?.parkingRight);
-if (lm.length !== 2) {
-  console.log(`\nPROBLEM: expected 2 pieces, got ${lm.length}`);
-} else if (lm[0].laneW !== lm[1].laneW) {
+const rhein2 = lm.find((m) => m.name === "Rheinstraße");
+const haupt = lm.filter((m) => m.name === "Hauptstraße");
+if (!rhein || haupt.length !== 2) {
+  console.log(`\nPROBLEM: expected 1 Rheinstraße + 2 Hauptstraße pieces, got ${lm.length}`);
+} else if (rhein2.laneW !== haupt[0].laneW || haupt[0].laneW === haupt[1].laneW === undefined) {
   console.log("\nOK: fork legs separate, each width split evenly");
+} else if (haupt[0].laneW !== haupt[1].laneW) {
+  console.log(`\nOK: fork legs separate (Hauptstraße carriageways ${haupt[0].laneW.toFixed(2)} / ${haupt[1].laneW.toFixed(2)}), Rheinstraße ${rhein2.laneW.toFixed(2)}`);
 } else {
   console.log("\nPROBLEM: fork legs share one lane width");
 }

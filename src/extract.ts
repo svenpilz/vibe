@@ -987,14 +987,14 @@ export function extractFeatures(
     }
   }
   // group the lane-bearing ways into roads: centerlines that touch
-  // end-to-end and continue in the same direction. A fork (y-junction)
-  // breaks the group — either when a way end has SEVERAL collinear
-  // candidates (the continuation is ambiguous), or when the collinear
-  // continuation carries a DIFFERENT name (a road changing name at a fork
-  // is a different road). Names never join non-touching ways: the two
-  // carriageways of a dual carriageway share a name but must never share
-  // a layout. Junction areas do NOT break the group (ignored for now):
-  // geometry alone decides.
+  // end-to-end and continue in the same direction, with the SAME highway
+  // type, layer and oneway status. A road changing name mid-block still
+  // joins; a different highway type never joins (the Rheinstraße→
+  // Hauptstraße fork — wait, that one keeps the type; the type rule
+  // catches e.g. residential→service transitions). Same-type forks are
+  // assumed to sit at junctions/y-junctions, where the ambiguity check
+  // (several collinear candidates) breaks the group. Junction areas do
+  // not break the group: geometry alone decides.
   const parent = laneCandidates.map((_, i) => i);
   const find = (i: number): number => {
     while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; }
@@ -1040,9 +1040,15 @@ export function extractFeatures(
         if (find(ends[a].i) === find(ends[b].i)) continue;
         const A = laneCandidates[ends[a].i];
         if (A.layer !== B.layer || A.oneway !== B.oneway) continue;
-        // a collinear continuation under a different name is a different
-        // road (the Rheinstraße→Hauptstraße fork): never join
-        if (A.name && B.name && A.name !== B.name) continue;
+        // a collinear continuation of a DIFFERENT highway type is a
+        // different road (the Rheinstraße→Hauptstraße fork changes
+        // tertiary type? no — it keeps the type; but a service driveway
+        // continuing a residential road is different): never join.
+        // Same-type collinear continuations join even under a different
+        // name — a road changing name mid-block is still one street
+        // area; same-type forks are assumed to sit at junctions, where
+        // the ambiguity check breaks the group anyway
+        if (A.highway !== B.highway) continue;
         const dB = endDir(B, ends[b].atStart);
         const dot = dA[0] * dB[0] + dA[1] * dB[1];
         if (dot <= -0.7 && dot > bestDot) {
@@ -1061,8 +1067,7 @@ export function extractFeatures(
         const C = laneCandidates[ends[c].i];
         if (laneCandidates[ends[bestB].i].layer !== C.layer) continue;
         if (laneCandidates[ends[bestB].i].oneway !== C.oneway) continue;
-        const nB = laneCandidates[ends[bestB].i].name, nC = C.name;
-        if (nB && nC && nB !== nC) continue;
+        if (laneCandidates[ends[bestB].i].highway !== C.highway) continue;
         const dC = endDir(C, ends[c].atStart);
         const dot = dB[0] * dC[0] + dB[1] * dC[1];
         if (dot <= -0.7 && dot > mutDot) { mutDot = dot; mutBest = c; }

@@ -138,10 +138,12 @@ For a centerline with `lanes ≥ 2` that runs inside a non-junction highway area
    continuation); continuity is kept **between junctions only** — a shared end node
    inside a junction area breaks the group, and so does a fork (y-junction): when a
    way end has several near-collinear candidates, the continuation is ambiguous and
-   both legs start their own group — as does a collinear continuation under a
-   **different name** (a road changing name at a fork is a different road, e.g.
-   Rheinstraße → Hauptstraße). `name=*` never joins non-touching ways (the two
-   carriageways of a dual carriageway share a name but must not share a layout).
+   both legs start their own group. A collinear continuation joins only when the
+   **highway type** matches (a residential road continuing as a service driveway never
+   joins; a road changing name mid-block does — names no longer affect grouping).
+   Same-type forks are assumed to occur only at junctions/y-junctions, where the
+   ambiguity check breaks the group. The two carriageways of a dual carriageway share
+   a name and type but run parallel, never touching end-to-end, so they never join.
    Junction areas do not break the group: geometry alone decides continuity.
 5. Lane boundaries are drawn as continuous offset curves of the centerline, using
    averaged vertex normals and **Chaikin corner-cutting** (two iterations), so the
