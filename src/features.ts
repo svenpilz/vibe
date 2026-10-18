@@ -57,6 +57,19 @@ export interface LineFeature {
   roadLeftM?: number;
   /** measured distance in meters from centerline to the RIGHT road edge of the piece (markings only) */
   roadRightM?: number;
+  /**
+   * Stop line (markings only): the centerline flows from a non-junction
+   * highway area into a junction area through a highway=traffic_signals
+   * node. stopLineAtQ is the quantized position ON the centerline
+   * [lonQ, latQ] of the traffic_signals node; stopLineFromM/stopLineToM
+   * span the lanes flowing into it: all of them on a one-way road, only
+   * the forward lanes on a bidirectional road.
+   */
+  stopLineAtQ?: Q[];
+  /** stop line edge offset in meters (negative = left of the centerline) */
+  stopLineFromM?: number;
+  /** stop line other edge offset in meters (negative = left) */
+  stopLineToM?: number;
   /** number of lanes forward (same direction of travel, centerlines only) */
   lanesFwd?: number;
   /** oneway=yes / -1 / roundabout: all lanes travel in one direction */
@@ -202,7 +215,19 @@ export interface KerbWayFeature {
   bbox: [number, number, number, number];
 }
 
-export type Feature = AreaFeature | BuildingFeature | GrassFeature | LineFeature | KerbFeature | KerbWayFeature | BollardFeature | FenceFeature | LanduseFeature | StreetLampFeature | ParkingFeature | ManholeFeature;
+export type Feature =
+  | AreaFeature
+  | BuildingFeature
+  | GrassFeature
+  | LineFeature
+  | KerbFeature
+  | KerbWayFeature
+  | BollardFeature
+  | FenceFeature
+  | LanduseFeature
+  | StreetLampFeature
+  | ParkingFeature
+  | ManholeFeature;
 
 export interface Dataset {
   areas: AreaFeature[];

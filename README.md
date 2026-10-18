@@ -180,6 +180,22 @@ group, continuity is kept by anchoring:
 Each piece's lane block is finally **clamped** into its own measured road span, so
 markings never extend past the road edge even where the centerline wanders off-center.
 
+**Stop lines.** A lane-bearing way carrying a `highway=traffic_signals` node gets a
+solid stop line across the road at that node (signals stand at the stop line). Which
+lanes it covers depends on where the node sits on the way:
+
+- at the way's **end** (traffic runs into the signal): the stop line spans the
+  **full width** on a one-way road, and only the **forward lanes** on a
+  bidirectional road;
+- at the way's **start** (one-way traffic flows away): **no stop line** — it belongs
+  to the opposite carriageway; on a bidirectional road only the **backward lanes**
+  stop there;
+- **mid-way**: both directions stop, full width.
+
+The stop line is a solid white bar perpendicular to the centerline, drawn on the
+piece whose area section contains the signal node, and clipped to that area like the
+other markings.
+
 **Drawing.** Lane boundaries are continuous offset curves of the centerline using
 averaged vertex normals and **Chaikin corner-cutting** (two iterations), laid out from
 the anchored left traffic edge (lane 1) to the right edge (lane n). Line style:

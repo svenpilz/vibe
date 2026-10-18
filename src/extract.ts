@@ -1002,6 +1002,35 @@ export function extractFeatures(
   }
   const areaGridL = buildAreaIndex(areas);
   // ---------------------------------------------------------------------
+  // STOP LINES: a lane-bearing way carrying a highway=traffic_signals node
+  // gets a stop line at that node - traffic signals stand at the stop
+  // line. Which lanes the stop line covers depends on where the node sits
+  // on the way: at the END, traffic flowing forward (the way direction)
+  // runs into the signalized crossing; at the START, traffic flows away
+  // (one-way roads get no stop line there - it belongs to the opposite
+  // carriageway); mid-way on a bidirectional road, both directions stop.
+  const stopLineAt = new Map<
+    LineFeature,
+    { idx: number; side: "start" | "mid" | "end" }[]
+  >();
+  for (const cl of laneCandidates) {
+    const way = data.ways.get(parseInt(cl.id.slice(1), 10));
+    if (!way) continue;
+    const n = cl.coords.length;
+    for (let ri = 0; ri < way.refs.length; ri++) {
+      const nt = data.nodeTags.get(way.refs[ri]);
+      if (!nt || nt["highway"] !== "traffic_signals") continue;
+      const side: "start" | "mid" | "end" =
+        ri <= 1 ? "start" : ri >= n - 2 ? "end" : "mid";
+      let arr = stopLineAt.get(cl);
+      if (!arr) {
+        arr = [];
+        stopLineAt.set(cl, arr);
+      }
+      arr.push({ idx: ri, side });
+    }
+  }
+  // ---------------------------------------------------------------------
   // CONTINUOUS LANE MARKINGS
   // ---------------------------------------------------------------------
   // One road is often mapped as SEVERAL centerline ways (split where lanes
@@ -1379,29 +1408,33 @@ export function extractFeatures(
     for (const p of pieces) {
       const fwd = fwdOf(p.cl);
       const laneW = laneWShared(p);
-      // anchored on the direction border: adding forward lanes extends
-      // the layout to the left, adding backward lanes to the right — the
-      // border fraction keeps existing boundaries aligned across pieces
-      // place the border at the anchor offset, then lay the forward lanes
-      // to its left and the rest to its right. A purely one-way road has
-      // no border: each piece lays its block from its OWN measured left
-      // edge — the centerline placement can differ between the ways of a
-      // dual carriageway (placement=*), and the measured edges follow the
-      // actual road outline, which is continuous where the ways meet. The
-      // clamp below keeps the block inside the road
-      const hasBorder = fwd > 0 && fwd < p.cl.lanes!;
-      const lw = laneWShared(p);
+      // the stop line belongs to the piece whose area section contains
+      // the signal node (within ~3 m tolerance)
+      const stopLines = (stopLineAt.get(p.cl) ?? []).filter((sl) => {
+        const nq = p.cl.coords[sl.idx];
+        if (!nq) return false;
+        const mPerLon =
+          (111_320 * Math.cos(((nq[1] / 1e7) * Math.PI) / 180)) / 1e7;
+        const tol = Math.round(3 / mPerLon);
+        return (
+          nq[0] >= p.area.bbox[0] - tol &&
+          nq[0] <= p.area.bbox[2] + tol &&
+          nq[1] >= p.area.bbox[1] - tol &&
+          nq[1] <= p.area.bbox[3] + tol
+        );
+      });
+      const stopLine = stopLines[0];
       let laneLeftM: number;
       let bidirectional = false;
-      if (hasBorder) {
+      if (fwd > 0 && fwd < p.cl.lanes!) {
         // bidirectional: the anchor is the direction border, forward
         // lanes extend to its left, backward lanes to its right. The
         // border is the visually dominant line and MUST keep its shared
         // offset; the clamp below therefore treats the piece WITHOUT the
         // parking reservation (parking occupies its unit inside the
-        // measured width — it was part of the even split — and clamping
+        // measured width - it was part of the even split - and clamping
         // must never move the border)
-        laneLeftM = anchorOf(p) + fwd * lw;
+        laneLeftM = anchorOf(p) + fwd * laneW;
         bidirectional = true;
       } else if (anchorKind === "left") {
         // lanes added on the right: the LEFT edge is continuous, the
@@ -1410,29 +1443,50 @@ export function extractFeatures(
       } else if (anchorKind === "right") {
         // lanes added on the left: the RIGHT edge is continuous, the
         // block extends leftwards from the right traffic edge
-        laneLeftM = anchorOf(p) - p.cl.lanes! * lw;
+        laneLeftM = anchorOf(p) - p.cl.lanes! * laneW;
       } else {
         // both sides expanded: the centerline stays, lanes run
         // continuously outwards from it
-        laneLeftM = anchorOf(p) - (p.cl.lanes! * lw) / 2;
+        laneLeftM = anchorOf(p) - (p.cl.lanes! * laneW) / 2;
       }
-      // clamp into this piece's (cluster-shared) measured span so markings
-      // never extend past the road edge even where the centerline wanders
-      // off-center
+      // clamp into this piece's measured span so markings never extend
+      // past the road edge even where the centerline wanders off-center;
+      // one-way pieces reserve the parking strips outside the block
       const blockW = p.cl.lanes! * laneW;
-      // the traffic block plus the parking strips (one laneW each,
-      // outside the block on their sides) must fit inside the measured
-      // road span: the block's left edge at laneLeftM, the parking strip
-      // extends laneW further left; the right edge at laneLeftM-blockW
-      // with parking laneW further right
       const parkLeft = bidirectional ? 0 : p.cl.parkingLeft ? laneW : 0;
       const parkRight = bidirectional ? 0 : p.cl.parkingRight ? laneW : 0;
       const minLeft = blockW + parkRight - p.rightM;
       const maxLeft = p.leftM - parkLeft;
       if (laneLeftM < minLeft) laneLeftM = minLeft;
       if (laneLeftM > maxLeft) laneLeftM = maxLeft;
-      if (laneLeftM < minLeft) laneLeftM = minLeft;
-      if (laneLeftM > maxLeft) laneLeftM = maxLeft;
+      // stop line: the lanes flowing INTO the signalized node, as
+      // offsets from the centerline (left positive). Forward lanes run in
+      // the way direction and stop at an END signal; backward lanes
+      // (numbered from the right) stop at a START signal; both at a MID
+      // signal. A one-way road at its START flows away: no stop line.
+      const laneBlockLeft = laneLeftM;
+      const laneBlockRight = laneLeftM - p.cl.lanes! * laneW;
+      let stopFrom = 0,
+        stopTo = 0;
+      if (stopLine) {
+        if (stopLine.side === "end") {
+          // forward lanes: from the left edge down to the direction
+          // border (all lanes on a one-way road)
+          stopFrom = laneBlockLeft;
+          stopTo = bidirectional
+            ? laneBlockRight + (p.cl.lanes! - fwd) * laneW
+            : laneBlockRight;
+        } else if (stopLine.side === "start") {
+          if (bidirectional) {
+            // the backward lanes stop here
+            stopFrom = laneBlockRight + (p.cl.lanes! - fwd) * laneW;
+            stopTo = laneBlockRight;
+          }
+        } else {
+          stopFrom = laneBlockLeft;
+          stopTo = laneBlockRight;
+        }
+      }
       laneMarkings.push({
         ...p.cl,
         // the marking lives on the area's layer (bird's-eye stacking, selector
@@ -1445,6 +1499,15 @@ export function extractFeatures(
         roadRightM: p.rightM,
         lanesFwd: fwd,
         areaIds: [p.area.id],
+        ...(stopLine && Math.abs(stopFrom - stopTo) > 0.01
+          ? {
+              stopLineAtQ: p.cl.coords[stopLine.idx] as unknown as Q[],
+              // offset convention: negative = left of the centerline
+              // (main.ts); stopFrom/stopTo span the stopping lanes
+              stopLineFromM: -stopFrom,
+              stopLineToM: -stopTo,
+            }
+          : {}),
       });
     }
   }
