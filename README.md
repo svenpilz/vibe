@@ -157,9 +157,10 @@ markings are fully continuous along the road — even where parking sides change
 parking strips absorb each piece's remaining width. Continuity across pieces is kept
 by anchoring:
 
-- **Bidirectional roads** share one **border anchor**: the direction border (the solid
-  line between forward and backward lanes) sits at the same offset on every piece —
-  the median of the pieces' natural border positions. Adding forward lanes extends
+- **Bidirectional roads** (right-hand traffic: forward traffic keeps right) share one
+  **border anchor**: the direction border (the solid line between forward and backward
+  lanes) sits at the same offset on every piece — `fwd` lanes from the right road edge
+  (parking strips don't shift it), the median of the pieces' natural positions. Adding forward lanes extends
   the layout to the left of the anchor, adding backward lanes to the right, so a
   2 → 3 lane change keeps the existing boundaries and adds one outside; the
   group-wide lane width keeps every boundary aligned.

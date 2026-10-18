@@ -1513,8 +1513,16 @@ export function extractFeatures(
     let laneWShared: (p: MarkingSample & { cl: LineFeature }) => number =
       laneWOf;
     if (anchorBorder) {
+      // right-hand traffic: traffic in the way's (forward) direction
+      // keeps RIGHT of the direction border, oncoming traffic LEFT. The
+      // border sits fwd lanes from the RIGHT ROAD edge - not the traffic
+      // edge, so parking strips on the right do not shift the border;
+      // pieces whose right parking differs still align
       const anchorM = median(
-        borderPieces.map((p) => trafficLeftM(p) - fwdOf(p.cl) * laneWOf(p)),
+        borderPieces.map((p) => {
+          const park = p.cl.parkingRight ? laneWOf(p) : 0;
+          return p.rightM - park - fwdOf(p.cl) * laneWOf(p);
+        }),
       );
       anchorOf = () => anchorM;
       // ONE through-lane width across the whole group: the minimum of
@@ -1600,14 +1608,15 @@ export function extractFeatures(
       let laneLeftM: number;
       let bidirectional = false;
       if (fwd > 0 && fwd < p.cl.lanes!) {
-        // bidirectional: the anchor is the direction border, forward
-        // lanes extend to its left, backward lanes to its right. The
-        // border is the visually dominant line and MUST keep its shared
-        // offset; the clamp below therefore treats the piece WITHOUT the
-        // parking reservation (parking occupies its unit inside the
-        // measured width - it was part of the even split - and clamping
-        // must never move the border)
-        laneLeftM = anchorOf(p) + fwd * laneW;
+        // bidirectional, right-hand traffic: the anchor is the direction
+        // border (fwd lanes from the right traffic edge); forward lanes
+        // occupy the right half (from the border to the right edge),
+        // backward lanes the left half. laneLeftM is the block's LEFT
+        // edge = border + fwd*laneW (meters-LEFT-positive: the border is
+        // anchorM meters right of the centerline, so its left-positive
+        // value is -anchorM). The border keeps its shared offset; the
+        // clamp below treats the piece WITHOUT the parking reservation
+        laneLeftM = -anchorOf(p) + fwd * laneW;
         bidirectional = true;
       } else if (anchorKind === "left") {
         // lanes added on the right: the LEFT edge is continuous, the
@@ -1655,23 +1664,28 @@ export function extractFeatures(
         }
         // "both" keeps the node-position side (mid stays full width)
       }
+      // forward lanes occupy the block's RIGHT half (from the right edge
+      // up to the direction border), backward lanes its LEFT half -
+      // right-hand traffic keeps right of the border
+      const fwdEdge = laneBlockRight + fwd * laneW;
       if (stopLine && effectiveSide) {
         if (effectiveSide === "end") {
-          // forward lanes: from the left edge down to the direction
-          // border (all lanes on a one-way road)
-          // forward side: extend through the LEFT parking strip to the
-          // road edge (the stopping direction's parking lanes stop too)
-          stopFrom = p.cl.parkingLeft ? p.leftM : laneBlockLeft;
-          stopTo = bidirectional
-            ? laneBlockRight + (p.cl.lanes! - fwd) * laneW
-            : p.cl.parkingRight
-              ? -p.rightM
-              : laneBlockRight;
+          // forward lanes: from the border down to the RIGHT edge,
+          // extended through the RIGHT parking strip (the stopping
+          // direction's parking lanes stop too); a one-way road stops
+          // with ALL its lanes - full width including both strips
+          stopFrom = bidirectional
+            ? fwdEdge
+            : p.cl.parkingLeft
+              ? p.leftM
+              : laneBlockLeft;
+          stopTo = p.cl.parkingRight ? -p.rightM : laneBlockRight;
         } else if (effectiveSide === "start") {
           if (bidirectional) {
-            // backward side: extend through the RIGHT parking strip
-            stopFrom = laneBlockRight + (p.cl.lanes! - fwd) * laneW;
-            stopTo = p.cl.parkingRight ? -p.rightM : laneBlockRight;
+            // backward lanes: from the LEFT edge down to the border,
+            // extended through the LEFT parking strip
+            stopFrom = p.cl.parkingLeft ? p.leftM : laneBlockLeft;
+            stopTo = fwdEdge;
           }
         } else {
           stopFrom = p.cl.parkingLeft ? p.leftM : laneBlockLeft;
