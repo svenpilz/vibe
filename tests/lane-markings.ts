@@ -134,9 +134,9 @@ check(
 const mPerLat = 111_320 / 1e7;
 const mPerLon = mPerLat * Math.cos(((LAT / 1e7) * Math.PI) / 180);
 check(
-  "each piece splits its own measured width evenly",
-  near(A[0].laneW!, (900 * mPerLat) / 2) &&
-    near(B[0].laneW!, (1300 * mPerLat) / 3) &&
+  "one group-wide lane width (minimum of traffic widths)",
+  near(A[0].laneW!, (900 * mPerLat) / 4) &&
+    near(B[0].laneW!, (900 * mPerLat) / 4) &&
     near(C[0].laneW!, (900 * mPerLat) / 4),
   `A:${A[0].laneW} B:${B[0].laneW} C:${C[0].laneW}`,
 );

@@ -170,4 +170,40 @@ if (failures > 0) {
   }
 }
 
+// stop line covers parking lanes too: a one-way road with parking:both
+// stopping at an END signal spans the full road INCLUDING both parking
+// strips
+{
+  const ps = node(95000, 0, { highway: "traffic_signals" });
+  way([node(85000, 0), node(90000, 0), ps], {
+    highway: "tertiary",
+    surface: "asphalt",
+    lanes: "2",
+    name: "F-Stra\u00dfe",
+    oneway: "yes",
+    "parking:both": "lane",
+  });
+  const pa = node(84550, -450),
+    pb = node(95300, -450),
+    pc = node(95300, 450),
+    pd = node(84550, 450);
+  way([pa, pb, pc, pd, pa], { "area:highway": "tertiary", surface: "asphalt" });
+  const f = extractFeatures(data).laneMarkings.find(
+    (m) => m.name === "F-Stra\u00dfe",
+  );
+  check(
+    "parking: stop line present",
+    f !== undefined && f.stopLineAtQ !== undefined,
+  );
+  if (f?.stopLineFromM !== undefined && f?.stopLineToM !== undefined) {
+    const span = Math.abs(f.stopLineFromM - f.stopLineToM);
+    const full = f.roadLeftM! + f.roadRightM!;
+    check(
+      "parking: stop line spans parking lanes (full road width)",
+      Math.abs(span - full) < 0.3,
+      `span=${span.toFixed(2)} road=${full.toFixed(2)}`,
+    );
+  }
+}
+
 console.log("all stop line tests passed");

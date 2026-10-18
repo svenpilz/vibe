@@ -150,21 +150,19 @@ markings form one continuous layout:
 - Junction areas do **not** break the group; geometry alone decides continuity.
   `placement=*` tags are ignored — only measured geometry is used.
 
-**Unit width.** Pieces with the **same shape** (same lane count and the same parking
-sides) share the **median** of their even splits `laneW = (leftM + rightM) /
-(lanes + parkingLanes)` — their measured differences are sampling noise on one road,
-and sharing removes boundary steps at their seams. Pieces with a **different shape**
-keep their own even split, filling their road exactly (the road genuinely widens or
-narrows where lanes or parking change). Across the pieces of a road group, continuity
-is kept by anchoring:
+**Unit width.** The whole road group shares **one through-lane width**: the minimum
+of the pieces' traffic-lane widths (each piece's measured road width minus its
+parking units, split over its lanes). Every boundary sits at `anchor + k·laneW`, so
+markings are fully continuous along the road — even where parking sides change; the
+parking strips absorb each piece's remaining width. Continuity across pieces is kept
+by anchoring:
 
 - **Bidirectional roads** share one **border anchor**: the direction border (the solid
   line between forward and backward lanes) sits at the same offset on every piece —
   the median of the pieces' natural border positions. Adding forward lanes extends
   the layout to the left of the anchor, adding backward lanes to the right, so a
-  2 → 3 lane change keeps the existing boundaries and adds one outside. Same-shape
-  neighbours additionally share one unit width, so their inner boundaries align
-  exactly.
+  2 → 3 lane change keeps the existing boundaries and adds one outside; the
+  group-wide lane width keeps every boundary aligned.
 - **One-way roads** have no border. Where the road **grows** along the group decides
   the anchor — the measured left/right edges of the pieces reveal which side gained
   the extra lanes:
@@ -175,9 +173,7 @@ is kept by anchoring:
     lanes continue;
   - lanes added on **both sides** (centerline constant): the block centers on the
     centerline, continuous outwards from it.
-  Same-shape neighbours share one unit width (median of their even splits), so
-  their boundaries align exactly; shape changes keep their own even split with the
-  anchor carrying continuity.
+  The group-wide lane width keeps the boundaries aligned along the whole road.
 
 Each piece's lane block is finally **clamped** into its own measured road span, so
 markings never extend past the road edge even where the centerline wanders off-center.
@@ -187,8 +183,8 @@ solid stop line across the road at that node (signals stand at the stop line). W
 lanes it covers depends on where the node sits on the way:
 
 - at the way's **end** (traffic runs into the signal): the stop line spans the
-  **full width** on a one-way road, and only the **forward lanes** on a
-  bidirectional road;
+  **full width** on a one-way road — including its parking lanes — and only the
+  **forward lanes** (plus their adjacent parking strip) on a bidirectional road;
 - at the way's **start** (one-way traffic flows away): **no stop line** — it belongs
   to the opposite carriageway; on a bidirectional road only the **backward lanes**
   stop there;

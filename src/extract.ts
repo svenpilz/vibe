@@ -1353,30 +1353,15 @@ export function extractFeatures(
         borderPieces.map((p) => trafficLeftM(p) - fwdOf(p.cl) * laneWOf(p)),
       );
       anchorOf = () => anchorM;
-      // same-shape pieces share one unit width (median of their even
-      // splits): their measured differences are sampling noise on the
-      // same road, so sharing removes boundary steps at their seams.
-      // Different-shaped pieces keep their own even split, filling their
-      // road exactly; the border anchor keeps the direction line
-      // continuous across all pieces
+      // ONE through-lane width across the whole group: the minimum of
+      // the pieces' traffic-lane widths (each piece's road width minus
+      // its parking units, split over its lanes). Every lane boundary
+      // then sits at border + k*laneW - identical on all pieces, so the
+      // markings are fully continuous even where parking changes; the
+      // parking strips absorb each piece's remaining width
       {
-        const shapeKeyB = (q: MarkingSample & { cl: LineFeature }): string =>
-          `${q.cl.lanes!}|${q.cl.parkingLeft ? 1 : 0}|${q.cl.parkingRight ? 1 : 0}`;
-        const byShapeB = new Map<
-          string,
-          (MarkingSample & { cl: LineFeature })[]
-        >();
-        for (const q of pieces) {
-          const k = shapeKeyB(q);
-          const arr = byShapeB.get(k);
-          if (arr) arr.push(q);
-          else byShapeB.set(k, [q]);
-        }
-        const shapeWidthB = new Map<string, number>();
-        for (const [k, arr] of byShapeB) {
-          shapeWidthB.set(k, median(arr.map(laneWOf)));
-        }
-        laneWShared = (q) => shapeWidthB.get(shapeKeyB(q)) ?? laneWOf(q);
+        const w = Math.min(...pieces.map(trafficLaneWOf));
+        laneWShared = () => w;
       }
     } else {
       // which side does the road GROW on along the group? Compare the
@@ -1421,31 +1406,15 @@ export function extractFeatures(
         anchorKind = "center";
         anchorOf = () => 0;
       }
-      // same-shape pieces share one unit width (median of their even
-      // splits): their measured differences are sampling noise on the
-      // same road, so sharing removes boundary steps at their seams.
-      // Pieces with a DIFFERENT shape (extra/removed lanes or parking)
-      // keep their own even split, filling their road exactly - the road
-      // genuinely widens/narrows there. Continuity comes from the
-      // growth-side anchor across shape changes
+      // ONE through-lane width across the whole group: the minimum of
+      // the pieces' traffic-lane widths (each piece's road width minus
+      // its parking units, split over its lanes). The lanes fit the
+      // narrowest piece; wider pieces leave their extra width to the
+      // parking strips / unpainted. Boundaries sit at k*laneW from the
+      // growth-side anchor, continuous across the whole group
       {
-        const shapeKey = (q: MarkingSample & { cl: LineFeature }): string =>
-          `${q.cl.lanes!}|${q.cl.parkingLeft ? 1 : 0}|${q.cl.parkingRight ? 1 : 0}`;
-        const byShape = new Map<
-          string,
-          (MarkingSample & { cl: LineFeature })[]
-        >();
-        for (const q of pieces) {
-          const k = shapeKey(q);
-          const arr = byShape.get(k);
-          if (arr) arr.push(q);
-          else byShape.set(k, [q]);
-        }
-        const shapeWidth = new Map<string, number>();
-        for (const [k, arr] of byShape) {
-          shapeWidth.set(k, median(arr.map(laneWOf)));
-        }
-        laneWShared = (q) => shapeWidth.get(shapeKey(q)) ?? laneWOf(q);
+        const w = Math.min(...pieces.map(trafficLaneWOf));
+        laneWShared = () => w;
       }
     }
     for (const p of pieces) {
@@ -1519,19 +1488,23 @@ export function extractFeatures(
         if (stopLine.side === "end") {
           // forward lanes: from the left edge down to the direction
           // border (all lanes on a one-way road)
-          stopFrom = laneBlockLeft;
+          // forward side: extend through the LEFT parking strip to the
+          // road edge (the stopping direction's parking lanes stop too)
+          stopFrom = p.cl.parkingLeft ? p.leftM : laneBlockLeft;
           stopTo = bidirectional
             ? laneBlockRight + (p.cl.lanes! - fwd) * laneW
-            : laneBlockRight;
+            : p.cl.parkingRight
+              ? -p.rightM
+              : laneBlockRight;
         } else if (stopLine.side === "start") {
           if (bidirectional) {
-            // the backward lanes stop here
+            // backward side: extend through the RIGHT parking strip
             stopFrom = laneBlockRight + (p.cl.lanes! - fwd) * laneW;
-            stopTo = laneBlockRight;
+            stopTo = p.cl.parkingRight ? -p.rightM : laneBlockRight;
           }
         } else {
-          stopFrom = laneBlockLeft;
-          stopTo = laneBlockRight;
+          stopFrom = p.cl.parkingLeft ? p.leftM : laneBlockLeft;
+          stopTo = p.cl.parkingRight ? -p.rightM : laneBlockRight;
         }
       }
       laneMarkings.push({
