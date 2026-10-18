@@ -856,11 +856,22 @@ export function extractFeatures(
       arr.push({ area, leftM, rightM });
     }
   }
-  // group the lane-bearing ways into roads: same name (a road is split into
-  // several ways wherever lanes or parking change, all carrying the road's
-  // name), or — for unnamed roads — centerlines that touch end-to-end and
-  // continue in the same direction (a cross street ending at the same node
-  // is perpendicular and never joins)
+  // group the lane-bearing ways into roads: centerlines that touch
+  // end-to-end and continue in the same direction (a cross street ending
+  // at the same node is perpendicular and never joins). Continuity is only
+  // kept BETWEEN junctions: a shared end node inside a junction area
+  // breaks the group, and so does a fork (y-junction) — when a way end has
+  // SEVERAL collinear candidates, the continuation is ambiguous and the
+  // group ends there. Names do NOT join anything: the two carriageways of
+  // a dual carriageway share a name but must never share a layout.
+  const junctionAreas = areas.filter((a) => a.junction);
+  const inJunction = (p: number[]): boolean => {
+    for (const ja of junctionAreas) {
+      if (!bboxOverlap([p[0], p[1], p[0], p[1]], ja.bbox)) continue;
+      if (pointInAreaTolQ2(p, ja)) return true;
+    }
+    return false;
+  };
   const parent = laneCandidates.map((_, i) => i);
   const find = (i: number): number => {
     while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; }
@@ -870,20 +881,10 @@ export function extractFeatures(
     a = find(a); b = find(b);
     if (a !== b) parent[b] = a;
   };
-  const byName = new Map<string, number>();
-  laneCandidates.forEach((cl, i) => {
-    if (!cl.name) return;
-    const prev = byName.get(cl.name);
-    if (prev !== undefined) union(prev, i);
-    else byName.set(cl.name, i);
-  });
-  // unnamed ways: shared end node + collinear continuation + same layer and
-  // oneway status (a dual carriageway's one-way ways never merge with the
-  // two-way road they branch from)
+  // all way ends by coordinate (named and unnamed alike)
   const byEnd = new Map<string, { i: number; atStart: boolean }[]>();
   const endKey = (p: Q[]): string => `${p[0]},${p[1]}`;
   laneCandidates.forEach((cl, i) => {
-    if (cl.name) return;
     const first = cl.coords[0], last = cl.coords[cl.coords.length - 1];
     for (const [end, atStart] of [[first, true], [last, false]] as [Q[], boolean][]) {
       const k = endKey(end);
@@ -901,15 +902,48 @@ export function extractFeatures(
     return l > 0 ? [dx / l, dy / l] : [0, 0];
   };
   for (const ends of byEnd.values()) {
+    if (ends.length < 2) continue;
+    // continuity ends at junction areas: a shared node inside one means
+    // the ways meet at an intersection, not along a through road
+    const e0 = laneCandidates[ends[0].i];
+    if (inJunction(e0.coords[ends[0].atStart ? 0 : e0.coords.length - 1])) continue;
+    // join two way ends when they are each other's UNIQUE collinear
+    // continuation: mutual best match, clearly ahead of any competitor
+    // (a fork gives the incoming way two collinear branches — ambiguous,
+    // so nothing joins and both fork legs start their own group)
     for (let a = 0; a < ends.length; a++) {
-      for (let b = a + 1; b < ends.length; b++) {
-        const A = laneCandidates[ends[a].i], B = laneCandidates[ends[b].i];
+      const dA = endDir(laneCandidates[ends[a].i], ends[a].atStart);
+      if (dA[0] === 0 && dA[1] === 0) continue;
+      let bestB = -1, bestDot = -2, secondDot = -2;
+      for (let b = 0; b < ends.length; b++) {
+        if (b === a) continue;
+        const B = laneCandidates[ends[b].i];
         if (find(ends[a].i) === find(ends[b].i)) continue;
+        const A = laneCandidates[ends[a].i];
         if (A.layer !== B.layer || A.oneway !== B.oneway) continue;
-        const dA = endDir(A, ends[a].atStart), dB = endDir(B, ends[b].atStart);
-        if (dA[0] * dB[0] + dA[1] * dB[1] > -0.7) continue;
-        union(ends[a].i, ends[b].i);
+        const dB = endDir(B, ends[b].atStart);
+        const dot = dA[0] * dB[0] + dA[1] * dB[1];
+        if (dot <= -0.7 && dot > bestDot) {
+          secondDot = bestDot; bestDot = dot; bestB = b;
+        } else if (dot > secondDot) secondDot = dot;
       }
+      if (bestB < 0) continue;
+      // ambiguous fork: another candidate is nearly as collinear
+      if (secondDot > bestDot - 0.15) continue;
+      // mutuality: the partner must also pick this end as its best
+      const dB = endDir(laneCandidates[ends[bestB].i], ends[bestB].atStart);
+      let mutBest = -1, mutDot = -2;
+      for (let c = 0; c < ends.length; c++) {
+        if (c === bestB) continue;
+        if (find(ends[bestB].i) === find(ends[c].i)) continue;
+        const C = laneCandidates[ends[c].i];
+        if (laneCandidates[ends[bestB].i].layer !== C.layer) continue;
+        if (laneCandidates[ends[bestB].i].oneway !== C.oneway) continue;
+        const dC = endDir(C, ends[c].atStart);
+        const dot = dB[0] * dC[0] + dB[1] * dC[1];
+        if (dot <= -0.7 && dot > mutDot) { mutDot = dot; mutBest = c; }
+      }
+      if (mutBest === a) union(ends[a].i, ends[bestB].i);
     }
   }
   const groups = new Map<number, LineFeature[]>();

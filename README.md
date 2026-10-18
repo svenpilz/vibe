@@ -101,11 +101,16 @@ For a centerline with `lanes ≥ 2` that runs inside a non-junction highway area
 4. **Continuity across a road** (like real-life markings): all marking pieces of one
    road group are anchored on the **direction border** — the solid line between
    forward and backward lanes — or, on purely one-way roads, on the left edge of the
-   leftmost lane. Ways join a road group when they share `name=*` or when their
-   centerlines touch end-to-end and continue in the same direction. Lane changes then
-   only **add or remove lanes on the outer side**: switching 2 → 3 lanes keeps the two
-   existing boundaries and adds one outside, and parking lanes appearing or
-   disappearing move only the dashed parking boundary, never a lane boundary.
+   leftmost lane. Lane changes then only **add or remove lanes on the outer side**:
+   switching 2 → 3 lanes keeps the two existing boundaries and adds one outside, and
+   parking lanes appearing or disappearing move only the dashed parking boundary,
+   never a lane boundary. Ways join a road group only when their centerlines touch
+   end-to-end and continue in the same direction (mutual unique collinear
+   continuation); continuity is kept **between junctions only** — a shared end node
+   inside a junction area breaks the group, and so does a fork (y-junction): when a
+   way end has several near-collinear candidates, the continuation is ambiguous and
+   both legs start their own group. `name=*` never joins anything (the two
+   carriageways of a dual carriageway share a name but must not share a layout).
 5. Lane boundaries are drawn as continuous offset curves of the centerline, using
    averaged vertex normals and **Chaikin corner-cutting** (two iterations), so the
    markings flow smoothly around corners instead of breaking at each vertex. They are

@@ -53,11 +53,17 @@ const rect = (x0: number, x1: number, halfWidth: number): number[] => {
 way(rect(0, 10000, 450), { "area:highway": "residential", area: "yes", surface: "asphalt" });
 way(rect(10000, 20000, 650), { "area:highway": "residential", area: "yes", surface: "asphalt" });
 way(rect(20000, 30000, 450), { "area:highway": "residential", area: "yes", surface: "asphalt" });
-// a DIFFERENT road (other name) touching the first one end-to-end: must not
-// join the group and must keep its own measured lane width
-const n4 = node(30000, 0), n5 = node(40000, 0);
+// a DIFFERENT road (other name) ending at the same node but running off
+// PERPENDICULAR (a cross street, not a continuation): must not join the
+// group and must keep its own measured lane width
+const n4 = node(30000, 0), n5 = node(30000, 9000);
 const wayD = way([n4, n5], { highway: "residential", surface: "asphalt", lanes: "2", name: "Andere Straße" });
-way(rect(30000, 40000, 300), { "area:highway": "residential", area: "yes", surface: "asphalt" });
+const rectV = (y0: number, y1: number, halfWidth: number): number[] => {
+  const a = node(30000 - halfWidth, y0), b = node(30000 + halfWidth, y0),
+        c = node(30000 + halfWidth, y1), d = node(30000 - halfWidth, y1);
+  return [a, b, c, d, a];
+};
+way(rectV(0, 9000, 300), { "area:highway": "residential", area: "yes", surface: "asphalt" });
 
 const result = extractFeatures(data);
 const lm = result.laneMarkings;
@@ -68,17 +74,19 @@ check("one marking piece per way/area section",
   A.length === 1 && B.length === 1 && C.length === 1 && D.length === 1,
   `A:${A.length} B:${B.length} C:${C.length} D:${D.length}`);
 
-// unit widths measured per piece: 900/2, 1300/3, 900/4, 600/2 (lat units ~ cm;
-// ratios are what matter). The road group shares the MEDIAN of the first
-// three (the fourth is a different road).
+// unit widths measured per piece: 900/2, 1300/3, 900/4 (lat units ~ cm;
+// ratios are what matter). The road group shares the MEDIAN of the three;
+// the perpendicular cross street keeps its own 600/2.
 const mPerLat = 111_320 / 1e7;
+const mPerLon = mPerLat * Math.cos((LAT / 1e7) * Math.PI / 180);
 const expected = 1300 * mPerLat / 3;
+const expectedD = 600 * mPerLon / 2;
 check("all pieces of the road share the median lane width",
   near(A[0].laneW!, expected) && near(B[0].laneW!, expected) && near(C[0].laneW!, expected),
   `A:${A[0].laneW} B:${B[0].laneW} C:${C[0].laneW} expected:${expected}`);
 check("a different road keeps its own lane width",
-  near(D[0].laneW!, 600 * mPerLat / 2),
-  `D:${D[0].laneW}`);
+  near(D[0].laneW!, expectedD, 1e-4),
+  `D:${D[0].laneW} expected:${expectedD}`);
 
 // offset of a lane boundary k from the centerline (left positive, main.ts):
 // -laneLeftM + k * laneW
