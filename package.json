@@ -9,7 +9,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "make-fixture": "tsx tests/make-fixture.ts",
-    "test": "tsx tests/run.ts"
+    "test": "tsx tests/run.ts && tsx tests/lane-markings.ts"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

@@ -93,20 +93,32 @@ For a centerline with `lanes ≥ 2` that runs inside a non-junction highway area
    split into **equal units shared by traffic and parking lanes** — two lanes plus one
    parking lane give three equal units, the parking unit occupying the outer strip on
    its side.
-3. All units have the same width: `laneW = (leftM + rightM) / (lanes + parkingLanes)`.
-4. Lane boundaries are drawn as continuous offset curves of the centerline, using
+3. All units have the same width: `laneW = (leftM + rightM) / (lanes + parkingLanes)` —
+   but **per road, not per way**: a road is often split into several centerline ways
+   (e.g. where `lanes` or parking change) and its highway area into several sections;
+   all pieces of one road share the **median** unit width of its pieces, so the
+   markings do not jump at way or area seams.
+4. **Continuity across a road** (like real-life markings): all marking pieces of one
+   road group are anchored on the **direction border** — the solid line between
+   forward and backward lanes — or, on purely one-way roads, on the left edge of the
+   leftmost lane. Ways join a road group when they share `name=*` or when their
+   centerlines touch end-to-end and continue in the same direction. Lane changes then
+   only **add or remove lanes on the outer side**: switching 2 → 3 lanes keeps the two
+   existing boundaries and adds one outside, and parking lanes appearing or
+   disappearing move only the dashed parking boundary, never a lane boundary.
+5. Lane boundaries are drawn as continuous offset curves of the centerline, using
    averaged vertex normals and **Chaikin corner-cutting** (two iterations), so the
    markings flow smoothly around corners instead of breaking at each vertex. They are
-   laid out from the measured left traffic edge (lane 1) to the right edge (lane n),
+   laid out from the anchored left traffic edge (lane 1) to the right edge (lane n),
    so markings stay inside the street polygon even for off-center centerlines.
-5. Line style:
+6. Line style:
    - **Solid** only between opposite directions — the boundary between forward and
      backward lanes. Forward lanes = `lanes:forward` if tagged, else `lanes − lanes:backward`,
      else `ceil(lanes/2)` for bidirectional roads.
    - **Dashed** between lanes of the same direction.
    - **No solid line** on one-way roads (`oneway=yes`/`-1`, `junction=roundabout`/`circular`):
      all lanes run forward, so all boundaries are dashed.
-6. Markings are clipped to the containing highway area and are skipped for junction
+7. Markings are clipped to the containing highway area and are skipped for junction
    areas. Markings adopt the area's layer (bird's-eye stacking, selector filtering).
 
 ### 6. Crossing markings

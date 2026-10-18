@@ -746,8 +746,31 @@ export function extractFeatures(
   for (const cl of centerlines) {
     if (cl.lanes !== undefined && cl.lanes >= 2 && !cl.noLaneMarkings) laneCandidates.push(cl);
   }
-
   const areaGridL = buildAreaIndex(areas);
+  // ---------------------------------------------------------------------
+  // CONTINUOUS LANE MARKINGS
+  // ---------------------------------------------------------------------
+  // One road is often mapped as SEVERAL centerline ways (split where lanes
+  // or parking change) running through SEVERAL highway areas (a road polygon
+  // split into sections) — but it is still ONE road, and its painted
+  // markings do not jump: existing lane boundaries continue, lane changes
+  // only add or remove lanes on the outer side(s), and parking changes only
+  // move the dashed parking boundary. All marking pieces of one road
+  // therefore share
+  //   * one lane width (median of the road's measured unit widths) and
+  //   * one anchor: the position of the direction border (the solid line
+  //     between forward and backward lanes), or — on one-way roads — the
+  //     left edge of the leftmost lane.
+  // A piece's left traffic edge follows from the anchor and its own forward
+  // lane count, so boundaries keep their offsets across pieces: a 2→3 lane
+  // change keeps the two existing lanes and adds one on the outside, and a
+  // parking lane appearing or disappearing shifts no lane boundary at all.
+  interface MarkingSample {
+    area: AreaFeature;
+    leftM: number;
+    rightM: number;
+  }
+  const samplesOf = new Map<LineFeature, MarkingSample[]>();
   for (const cl of laneCandidates) {
     const candidates = queryAreas(areaGridL, cl.bbox);
     // a centerline may correspond to MULTIPLE areas (a road polygon split
@@ -828,30 +851,125 @@ export function extractFeatures(
         Math.hypot(dx2 * t * mPerLon, dy2 * t * mPerLat);
       const leftM = rayM(left, nx, ny);
       const rightM = rayM(right, -nx, -ny);
-      // parking lanes don't count as regular lanes but consume space on the
-      // road: the total width is split equally among traffic + parking lanes
-      // (two lanes + one parking lane = three equal units), parking occupying
-      // the outer units on their sides
-      const nPark = (cl.parkingLeft ? 1 : 0) + (cl.parkingRight ? 1 : 0);
-      const laneW = (leftM + rightM) / (cl.lanes! + nPark);
-      const driveLeftM = leftM - (cl.parkingLeft ? laneW : 0);
-      // lanes in the forward direction: explicit lanes:forward wins, else
-      // oneway roads carry all lanes in one direction (no solid separator)
-      const fwd = cl.lanesFwd ?? (cl.oneway ? cl.lanes! : Math.ceil(cl.lanes! / 2));
+      let arr = samplesOf.get(cl);
+      if (!arr) { arr = []; samplesOf.set(cl, arr); }
+      arr.push({ area, leftM, rightM });
+    }
+  }
+  // group the lane-bearing ways into roads: same name (a road is split into
+  // several ways wherever lanes or parking change, all carrying the road's
+  // name), or — for unnamed roads — centerlines that touch end-to-end and
+  // continue in the same direction (a cross street ending at the same node
+  // is perpendicular and never joins)
+  const parent = laneCandidates.map((_, i) => i);
+  const find = (i: number): number => {
+    while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; }
+    return i;
+  };
+  const union = (a: number, b: number): void => {
+    a = find(a); b = find(b);
+    if (a !== b) parent[b] = a;
+  };
+  const byName = new Map<string, number>();
+  laneCandidates.forEach((cl, i) => {
+    if (!cl.name) return;
+    const prev = byName.get(cl.name);
+    if (prev !== undefined) union(prev, i);
+    else byName.set(cl.name, i);
+  });
+  // unnamed ways: shared end node + collinear continuation + same layer and
+  // oneway status (a dual carriageway's one-way ways never merge with the
+  // two-way road they branch from)
+  const byEnd = new Map<string, { i: number; atStart: boolean }[]>();
+  const endKey = (p: Q[]): string => `${p[0]},${p[1]}`;
+  laneCandidates.forEach((cl, i) => {
+    if (cl.name) return;
+    const first = cl.coords[0], last = cl.coords[cl.coords.length - 1];
+    for (const [end, atStart] of [[first, true], [last, false]] as [Q[], boolean][]) {
+      const k = endKey(end);
+      const arr = byEnd.get(k);
+      const e = { i, atStart };
+      if (arr) arr.push(e); else byEnd.set(k, [e]);
+    }
+  });
+  // unit direction pointing OUT of the way at the given end
+  const endDir = (cl: LineFeature, atStart: boolean): [number, number] => {
+    const a = atStart ? cl.coords[1] : cl.coords[cl.coords.length - 2];
+    const b = atStart ? cl.coords[0] : cl.coords[cl.coords.length - 1];
+    const dx = b[0] - a[0], dy = b[1] - a[1];
+    const l = Math.hypot(dx, dy);
+    return l > 0 ? [dx / l, dy / l] : [0, 0];
+  };
+  for (const ends of byEnd.values()) {
+    for (let a = 0; a < ends.length; a++) {
+      for (let b = a + 1; b < ends.length; b++) {
+        const A = laneCandidates[ends[a].i], B = laneCandidates[ends[b].i];
+        if (find(ends[a].i) === find(ends[b].i)) continue;
+        if (A.layer !== B.layer || A.oneway !== B.oneway) continue;
+        const dA = endDir(A, ends[a].atStart), dB = endDir(B, ends[b].atStart);
+        if (dA[0] * dB[0] + dA[1] * dB[1] > -0.7) continue;
+        union(ends[a].i, ends[b].i);
+      }
+    }
+  }
+  const groups = new Map<number, LineFeature[]>();
+  laneCandidates.forEach((cl, i) => {
+    const r = find(i);
+    const arr = groups.get(r);
+    if (arr) arr.push(cl); else groups.set(r, [cl]);
+  });
+  const median = (xs: number[]): number => {
+    const s = [...xs].sort((a, b) => a - b);
+    const m = s.length >> 1;
+    return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+  };
+  const fwdOf = (cl: LineFeature): number =>
+    cl.lanesFwd ?? (cl.oneway ? cl.lanes! : Math.ceil(cl.lanes! / 2));
+  for (const ways of groups.values()) {
+    // one marking piece per (way, area section) of the road
+    const pieces: (MarkingSample & { cl: LineFeature })[] = [];
+    for (const w of ways) for (const s of samplesOf.get(w) ?? []) pieces.push({ cl: w, ...s });
+    if (pieces.length === 0) continue;
+    // shared lane width: median of the pieces' measured unit widths (the
+    // total width splits equally among traffic + parking lanes)
+    const laneW = median(pieces.map((p) =>
+      (p.leftM + p.rightM) /
+      (p.cl.lanes! + (p.cl.parkingLeft ? 1 : 0) + (p.cl.parkingRight ? 1 : 0))));
+    // left traffic edge of a piece (its parking lane virtually removed)
+    const trafficLeftM = (p: MarkingSample & { cl: LineFeature }): number =>
+      p.leftM - (p.cl.parkingLeft ? laneW : 0);
+    // anchor = position of the direction border: only pieces with lanes in
+    // both directions have one; on purely one-way roads the anchor is the
+    // left edge of the leftmost lane
+    const borderPieces = pieces.filter((p) => {
+      const f = fwdOf(p.cl);
+      return f > 0 && f < p.cl.lanes!;
+    });
+    const anchorBorder = borderPieces.length > 0;
+    const anchorM = median((anchorBorder ? borderPieces : pieces).map((p) =>
+      anchorBorder ? trafficLeftM(p) - fwdOf(p.cl) * laneW : trafficLeftM(p)));
+    for (const p of pieces) {
+      const fwd = fwdOf(p.cl);
+      const hasBorder = fwd > 0 && fwd < p.cl.lanes!;
+      // anchored on the direction border: adding forward lanes extends the
+      // layout to the left, adding backward lanes to the right — existing
+      // boundaries keep their offsets and markings stay continuous
+      const laneLeftM = anchorBorder
+        ? (hasBorder ? anchorM + fwd * laneW : anchorM)
+        : anchorM;
       laneMarkings.push({
-        ...cl,
+        ...p.cl,
         // the marking lives on the area's layer (bird's-eye stacking, selector
         // filtering); fall back to the centerline's layer when equal
-        layer: area.layer,
+        layer: p.area.layer,
         laneW,
-        laneLeftM: driveLeftM,
-        laneRightM: driveLeftM + cl.lanes! * laneW,
+        laneLeftM,
+        laneRightM: laneLeftM + p.cl.lanes! * laneW,
         lanesFwd: fwd,
-        areaIds: [area.id],
+        areaIds: [p.area.id],
       });
     }
   }
-
   // drop centerlines that are already represented by a corresponding area
   // (same highway type, same layer): the area fill replaces the line.
   onProgress?.(85, "filtering centerlines covered by areas…");
