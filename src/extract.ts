@@ -163,6 +163,11 @@ function centerlineInAreaTolQ(cl: LineFeature, area: AreaFeature, tolQ: number):
     // area, which shares this boundary
     if (pointOnAreaBoundaryQ(pt, area, tolQ)) { onBoundary++; continue; }
     if (pointInAreaQ(pt, area)) inside++;
+    // a vertex strictly outside disqualifies the donor: the way must lie
+    // ENTIRELY inside — a long road merely ENDING on the area boundary
+    // (its last vertices shared with the polygon) must not donate its
+    // surface to the junction it runs into
+    else return false;
   }
   return inside > 0 || onBoundary >= 2;
 }
@@ -755,6 +760,40 @@ export function extractFeatures(
     inherited++;
   }
   void inherited;
+  // highway areas still without surface (e.g. a junction area no centerline
+  // runs ENTIRELY through): take the majority surface of the centerlines
+  // passing through it (at least one segment midpoint inside, compatible
+  // highway type, same layer) — weighted by the length inside the area, so
+  // a long Rembrandtstraße sett run beats a short clipping driveway
+  const surfaceByArea = new Map<AreaFeature, Map<string, number>>();
+  for (const cl of centerlines) {
+    if (!cl.surface) continue;
+    const candidates = queryAreas(areaGrid, cl.bbox);
+    for (const area of candidates) {
+      if (area.surface) continue;
+      if (!highwayTypesCompatible(cl.highway, area.highway)) continue;
+      if (!bboxOverlap(area.bbox, cl.bbox)) continue;
+      // length of the centerline inside the area (segment midpoints)
+      let lenIn = 0;
+      for (let i = 1; i < cl.coords.length; i++) {
+        const a = cl.coords[i - 1], b = cl.coords[i];
+        const m = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+        if (pointInAreaTolQ2(m, area)) lenIn += Math.hypot(b[0] - a[0], b[1] - a[1]);
+      }
+      if (lenIn <= 0) continue;
+      let byArea = surfaceByArea.get(area);
+      if (!byArea) { byArea = new Map(); surfaceByArea.set(area, byArea); }
+      byArea.set(cl.surface, (byArea.get(cl.surface) ?? 0) + lenIn);
+    }
+  }
+  for (const [area, bySurface] of surfaceByArea) {
+    let topS = "", topL = -1;
+    for (const [sf, l] of bySurface) if (l > topL) { topL = l; topS = sf; }
+    if (topS) {
+      area.surface = topS;
+      area.surfaceColour = area.surfaceColour;
+    }
+  }
 
   // lane marking extraction: like crossings, lane-bearing centerlines may be
   // covered by their highway area (and then dropped below); extract the

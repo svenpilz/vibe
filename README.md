@@ -61,7 +61,11 @@ layer value. Conflicting parents leave the node at the default layer 0.
 **Surface inheritance.** A highway area without `surface=*` takes the surface of a
 centerline that (a) has a compatible highway type — equal, or the footway/sidewalk pair —
 (b) lies **entirely** inside the area (every vertex, holes respected), and (c) is on the
-same layer. A way that merely clips a polygon corner does not donate its surface.
+same layer. A way that merely clips a polygon corner does not donate its surface; any
+vertex strictly outside the area disqualifies the donor entirely. A highway area still
+without `surface=*` afterwards (e.g. a junction area no centerline crosses completely)
+takes the **majority surface of the centerlines passing through it**, weighted by the
+length inside the area (compatible type, same layer).
 
 **Adjacency inheritance.** `amenity=parking` areas and `area:highway=service` areas
 without `surface=*` take the surface of the **largest adjacent highway area** (rings
