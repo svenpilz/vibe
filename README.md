@@ -158,7 +158,10 @@ group, continuity is kept by anchoring:
   line between forward and backward lanes) sits at the same offset on every piece —
   the median of the pieces' natural border positions. Adding forward lanes extends
   the layout to the left of the anchor, adding backward lanes to the right, so a
-  2 → 3 lane change keeps the existing boundaries and adds one outside.
+  2 → 3 lane change keeps the existing boundaries and adds one outside. The
+  through-lane width is shared across the group (minimum of the pieces' traffic-lane
+  widths, parking strips absorbing the remainder), so **every** boundary — not just
+  the border — is continuous at the seams.
 - **One-way roads** have no border. Where the road **grows** along the group decides
   the anchor — the measured left/right edges of the pieces reveal which side gained
   the extra lanes:

@@ -1324,6 +1324,12 @@ export function extractFeatures(
         borderPieces.map((p) => trafficLeftM(p) - fwdOf(p.cl) * laneWOf(p)),
       );
       anchorOf = () => anchorM;
+      // share the through-lane width across the group (minimum of the
+      // pieces' traffic-lane widths, parking absorbing the remainder):
+      // with only the border anchored, per-piece lane widths would
+      // scatter the boundaries inside each direction at the seams
+      const w = Math.min(...borderPieces.map(trafficLaneWOf));
+      laneWShared = () => w;
     } else {
       // which side does the road GROW on along the group? Compare the
       // pieces' measured edges: when the lane count rises from one piece

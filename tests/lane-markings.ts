@@ -74,13 +74,15 @@ check("one marking piece per way/area section",
   A.length === 1 && B.length === 1 && C.length === 1 && D.length === 1,
   `A:${A.length} B:${B.length} C:${C.length} D:${D.length}`);
 
-// per-piece lane width: each piece splits its OWN measured width evenly
-// among its units (900/2, 1300/3, 900/4 lat units) so the layout follows
-// the local road width; the perpendicular cross street keeps its own 600/2
+// bidirectional road group: ALL pieces share the MINIMUM traffic-lane
+// width (the tightest piece, 900 lat units with 4 units, dictates it) so
+// every boundary — not just the direction border — is continuous at the
+// seams; parking absorbs the remaining width. The perpendicular cross
+// street keeps its own 600/2.
 const mPerLat = 111_320 / 1e7;
 const mPerLon = mPerLat * Math.cos((LAT / 1e7) * Math.PI / 180);
-check("each piece splits its own measured width evenly",
-  near(A[0].laneW!, 900 * mPerLat / 2) && near(B[0].laneW!, 1300 * mPerLat / 3)
+check("bidirectional pieces share the minimum lane width",
+  near(A[0].laneW!, 900 * mPerLat / 4) && near(B[0].laneW!, 900 * mPerLat / 4)
   && near(C[0].laneW!, 900 * mPerLat / 4),
   `A:${A[0].laneW} B:${B[0].laneW} C:${C[0].laneW}`);
 check("a different road keeps its own lane width",
