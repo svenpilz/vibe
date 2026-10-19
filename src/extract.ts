@@ -183,25 +183,28 @@ function segIntersect(
 
 /**
  * The shared boundary between the entering road area and the junction
- * area, as one or more polylines: the parts of the JUNCTION ring that lie
- * inside (or on) the road polygon, with ring edges cut at the road
- * boundary where they enter/leave. Handles partially overlapping polygons
- * (a wider junction meeting a narrower road: the boundary follows the
- * road's edge inside the junction).
+ * area, as SEPARATE polylines (chains) - one per place where the two
+ * polygons meet: the parts of the JUNCTION ring that lie inside (or on)
+ * the road polygon, with ring edges cut at the road boundary where they
+ * enter/leave. Handles partially overlapping polygons (a wider junction
+ * meeting a narrower road: the boundary follows the road's edge inside
+ * the junction). Callers drawing a stop line MUST pick the chain that
+ * contains the traffic_signals node itself - never the flattened set,
+ * which would run through the far end of the road too.
  */
 function sharedBoundaryQ(
   road: AreaFeature,
   junction: AreaFeature,
   tolQ: number,
-): number[][] {
-  const out: number[][] = [];
+): number[][][] {
+  const out: number[][][] = [];
   for (const jRing of junction.outer) {
     const inside = jRing.map(
       (pt) => pointOnAreaBoundaryQ(pt, road, tolQ) || pointInAreaQ(pt, road),
     );
     let chain: number[][] = [];
     const flush = () => {
-      if (chain.length >= 2) out.push(...chain);
+      if (chain.length >= 2) out.push(chain);
       chain = [];
     };
     for (let i = 0; i < jRing.length; i++) {
@@ -1259,17 +1262,45 @@ export function extractFeatures(
     let bestD = Infinity;
     for (const ja of junctionAreaList) {
       if (!bboxOverlap(ja.bbox, road.bbox)) continue;
-      const line = sharedBoundaryQ(road, ja, 10);
-      if (line.length < 2) continue;
+      const chains = sharedBoundaryQ(road, ja, 10);
+      if (chains.length === 0) continue;
       if (!sigQ) return ja;
       let d = Infinity;
-      for (const pt of line) {
+      for (const chain of chains)
+        for (const pt of chain) {
+          const dd = (pt[0] - sigQ[0]) ** 2 + (pt[1] - sigQ[1]) ** 2;
+          if (dd < d) d = dd;
+        }
+      if (d < bestD) {
+        bestD = d;
+        best = ja;
+      }
+    }
+    return best;
+  };
+  // the ONE boundary chain that carries the stop line: the chain
+  // CONTAINING the traffic_signals node itself (the node or its immediate
+  // surroundings lie on/at the road-junction mouth); among several, the
+  // chain nearest to the node. Never the flattened boundary - a junction
+  // touching the road area at both ends would put the stop line on the
+  // wrong end
+  const stopLineChain = (
+    road: AreaFeature,
+    junction: AreaFeature,
+    sigQ: number[],
+  ): number[][] | null => {
+    const chains = sharedBoundaryQ(road, junction, 10);
+    let best: number[][] | null = null;
+    let bestD = Infinity;
+    for (const chain of chains) {
+      let d = Infinity;
+      for (const pt of chain) {
         const dd = (pt[0] - sigQ[0]) ** 2 + (pt[1] - sigQ[1]) ** 2;
         if (dd < d) d = dd;
       }
       if (d < bestD) {
         bestD = d;
-        best = ja;
+        best = chain;
       }
     }
     return best;
@@ -1279,8 +1310,12 @@ export function extractFeatures(
     for (const sl of sigs) {
       const ja = findJunction(sl.area, cl.coords[sl.sigIdx]);
       if (!ja) continue;
-      const line = sharedBoundaryQ(sl.area, ja, 10);
-      if (line.length < 2) continue;
+      const line = stopLineChain(
+        sl.area,
+        ja,
+        cl.coords[sl.sigIdx],
+      );
+      if (!line || line.length < 2) continue;
       let minX = Infinity,
         minY = Infinity,
         maxX = -Infinity,
@@ -1710,14 +1745,15 @@ export function extractFeatures(
       let bestD = Infinity;
       for (const ja of junctionAreasStop) {
         if (!bboxOverlap(ja.bbox, road.bbox)) continue;
-        const line = sharedBoundaryQ(road, ja, 10);
-        if (line.length < 2) continue;
+        const chains = sharedBoundaryQ(road, ja, 10);
+        if (chains.length === 0) continue;
         if (!sigQ) return ja;
         let d = Infinity;
-        for (const pt of line) {
-          const dd = (pt[0] - sigQ[0]) ** 2 + (pt[1] - sigQ[1]) ** 2;
-          if (dd < d) d = dd;
-        }
+        for (const chain of chains)
+          for (const pt of chain) {
+            const dd = (pt[0] - sigQ[0]) ** 2 + (pt[1] - sigQ[1]) ** 2;
+            if (dd < d) d = dd;
+          }
         if (d < bestD) {
           bestD = d;
           best = ja;
@@ -1888,8 +1924,15 @@ export function extractFeatures(
           p.cl.coords[stopLine.sigIdx],
         );
         if (ja) {
-          const boundary = sharedBoundaryQ(p.area, ja, 10);
-          if (boundary.length >= 2) {
+          // only the chain containing the signal node - a junction
+          // touching the road area at both ends must never contribute
+          // its far-end chain
+          const boundary = stopLineChain(
+            p.area,
+            ja,
+            p.cl.coords[stopLine.sigIdx],
+          );
+          if (boundary && boundary.length >= 2) {
             const clipHalf = bidirectional && effectiveSide !== "mid";
             const fwdSide = effectiveSide === "end";
             stopLineQ = clipBoundaryToLanes(

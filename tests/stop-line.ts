@@ -444,4 +444,62 @@ if (failures > 0) {
     }
   }
 }
+// ONE junction area whose ring crosses the road area at SEVERAL places
+// (the signal's mouth AND mid-road): the shared boundary consists of
+// SEVERAL chains - the stop line must use only the chain at the signal's
+// mouth, never the flattened polyline running through the far chains
+{
+  // long road, signal near its right end
+  const sq = node(195000, 0, { highway: "traffic_signals" });
+  way([node(185000, 0), node(190000, 0), sq], {
+    highway: "tertiary",
+    surface: "asphalt",
+    lanes: "2",
+    name: "M-Stra\u00dfe",
+    oneway: "yes",
+  });
+  // road area
+  const mra = node(185450, -450),
+    mrb = node(195450, -450),
+    mrc = node(195450, 450),
+    mrd = node(185450, 450);
+  way([mra, mrb, mrc, mrd, mra], {
+    "area:highway": "tertiary",
+    surface: "asphalt",
+  });
+  // ONE junction area: a lobe over the road's right end (the signal's
+  // mouth at x=194500) plus a lobe touching the road mid-way (x=189000
+  // and x=190500), connected below the road - its ring crosses the road
+  // area at three separate places
+  const mja = node(189000, -700),
+    mjb = node(196000, -700),
+    mjc = node(196000, 700),
+    mjd = node(194500, 700),
+    mje = node(194500, -600),
+    mjf = node(190500, -600),
+    mjg = node(190500, 700),
+    mjh = node(189000, 700);
+  way([mja, mjb, mjc, mjd, mje, mjf, mjg, mjh, mja], {
+    "area:highway": "tertiary",
+    junction: "yes",
+  });
+  const res5 = extractFeatures(data);
+  const m = res5.laneMarkings.find((x) => x.name === "M-Stra\u00dfe");
+  check(
+    "multi-chain junction: stop line present",
+    m !== undefined && m.stopLineQ !== undefined && m.stopLineQ.length >= 2,
+  );
+  if (m?.stopLineQ) {
+    // the stop line must sit at the signal's mouth (x=194500), never
+    // reach the mid-road chains (x=189000 / 190500)
+    const maxAbsDev = Math.max(
+      ...m.stopLineQ.map((p) => Math.abs(p[0] - 194500)),
+    );
+    check(
+      "multi-chain junction: stop line only at the signal's mouth",
+      maxAbsDev < 200,
+      `max deviation from x=194500: ${maxAbsDev}`,
+    );
+  }
+}
 console.log("all stop line tests passed");
