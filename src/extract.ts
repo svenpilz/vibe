@@ -1435,8 +1435,8 @@ export function extractFeatures(
       // per-vertex width profile, parallel to cl.coords: the road width
       // can change along the area, so the lane block must follow the
       // local measured edges at every vertex, not one median
-      const profLeftM: number[] = [];
-      const profRightM: number[] = [];
+      const profLeftM: number[] = new Array(cl.coords.length).fill(undefined);
+      const profRightM: number[] = new Array(cl.coords.length).fill(undefined);
       const [minX, minY, maxX, maxY] = area.bbox;
       const maxRay = Math.hypot(maxX - minX, maxY - minY) + 1000;
       const measureAt = (sample: number[], nx: number, ny: number): [number, number] | null => {
@@ -1451,30 +1451,6 @@ export function extractFeatures(
         return [rayM(left, nx, ny), rayM(right, -nx, -ny)];
       };
       // vertex normal (averaged, like the renderer offsets by)
-      const vertexNormal = (vi: number): [number, number] | null => {
-        let nx = 0,
-          ny = 0;
-        if (vi > 0) {
-          const dx = cl.coords[vi][0] - cl.coords[vi - 1][0];
-          const dy = cl.coords[vi][1] - cl.coords[vi - 1][1];
-          const l = Math.hypot(dx, dy);
-          if (l > 0) {
-            nx += -dy / l;
-            ny += dx / l;
-          }
-        }
-        if (vi < cl.coords.length - 1) {
-          const dx = cl.coords[vi + 1][0] - cl.coords[vi][0];
-          const dy = cl.coords[vi + 1][1] - cl.coords[vi][1];
-          const l = Math.hypot(dx, dy);
-          if (l > 0) {
-            nx += -dy / l;
-            ny += dx / l;
-          }
-        }
-        const l = Math.hypot(nx, ny);
-        return l > 0 ? [nx / l, ny / l] : null;
-      };
       for (const bi of sampled) {
         const dxs = cl.coords[bi][0] - cl.coords[bi - 1][0];
         const dys = cl.coords[bi][1] - cl.coords[bi - 1][1];
@@ -1505,26 +1481,61 @@ export function extractFeatures(
         lefts.push(measured[0]);
         rights.push(measured[1]);
       }
-      // measure the width at every vertex inside this area (its averaged
-      // normal, like the renderer offsets by); vertices outside or ON the
-      // area boundary stay undefined — their markings are clipped away
-      // anyway, and a ray from a boundary vertex leaks through the shared
-      // edge (e.g. into a junction mouth) and measures nonsense
+      // measure the width at every vertex INSIDE this area (vertices
+      // outside or ON the boundary stay undefined — their markings are
+      // clipped away anyway). Instead of casting a ray along the averaged
+      // vertex normal (a bisector at a corner overshoots diagonally
+      // across the road and over-measures), take the CONSERVATIVE sides
+      // of the two adjacent SEGMENT measurements (the ray from the
+      // segment midpoint perpendicular to the segment cannot overshoot):
+      // the left edge is the nearer left edge of the two, likewise the
+      // right — the profile never exceeds the true local road span
       const medSpan =
         lefts.length > 0
           ? median(lefts) + median(rights)
           : 0;
+      // build the per-vertex profile by measuring DIRECTLY at each vertex
+      // strictly inside the area: rays along the normals of the segments
+      // touching it (NOT the averaged vertex normal — a bisector at a
+      // corner overshoots diagonally across the road), taking the
+      // conservative nearer edge per side. Exact on straight runs (the
+      // vertex normal IS the segment normal), conservative at corners,
+      // and two pieces sharing a seam vertex measure the SAME span there,
+      // so their boundaries meet exactly at the seam
       for (let vi = 0; vi < cl.coords.length; vi++) {
         if (!pointInAreaQ(cl.coords[vi], area)) continue;
-        const n = vertexNormal(vi);
-        if (!n) continue;
-        const m2 = measureAt(cl.coords[vi], n[0], n[1]);
-        if (!m2) continue;
-        if (medSpan > 0 && m2[0] + m2[1] < 0.5 * medSpan) continue;
-        profLeftM[vi] = m2[0];
-        profRightM[vi] = m2[1];
+        const dirs: [number, number][] = [];
+        if (vi > 0) {
+          const dx = cl.coords[vi][0] - cl.coords[vi - 1][0];
+          const dy = cl.coords[vi][1] - cl.coords[vi - 1][1];
+          const l = Math.hypot(dx, dy);
+          if (l > 0) dirs.push([-dy / l, dx / l]);
+        }
+        if (vi < cl.coords.length - 1) {
+          const dx = cl.coords[vi + 1][0] - cl.coords[vi][0];
+          const dy = cl.coords[vi + 1][1] - cl.coords[vi][1];
+          const l = Math.hypot(dx, dy);
+          if (l > 0) dirs.push([-dy / l, dx / l]);
+        }
+        let lBest: number | undefined;
+        let rBest: number | undefined;
+        for (const d of dirs) {
+          const m2 = measureAt(cl.coords[vi], d[0], d[1]);
+          if (!m2) continue;
+          if (medSpan > 0 && m2[0] + m2[1] < 0.5 * medSpan) continue;
+          if (lBest === undefined || m2[0] < lBest) lBest = m2[0];
+          if (rBest === undefined || m2[1] < rBest) rBest = m2[1];
+        }
+        if (lBest === undefined || rBest === undefined) continue;
+        profLeftM[vi] = lBest;
+        profRightM[vi] = rBest;
       }
       const profOk = profLeftM.some((v) => v !== undefined);
+      if (profOk && profLeftM.length !== cl.coords.length) {
+        // the profile arrays were preallocated per vertex; guard anyway
+        while (profLeftM.length < cl.coords.length) profLeftM.push(undefined as unknown as number);
+        while (profRightM.length < cl.coords.length) profRightM.push(undefined as unknown as number);
+      }
       // fill profile gaps: a vertex whose own ray measurement is missing
       // interpolates between its measured neighbours; ends copy the nearest
       if (profOk) {
