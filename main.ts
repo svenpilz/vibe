@@ -1242,38 +1242,28 @@ function drawLaneMarkings(cl: LineFeature) {
       })()
     : null;
   // meters-left convention: block spans laneLeftM (left edge) down to
-  // laneLeftM - lanes*laneW (right edge). Per sample the block's WIDTH
-  // follows the local measured span — the road can genuinely widen/narrow
-  // along the piece (dual carriageway at a junction mouth, way 288689072),
-  // and a piece-constant block would overflow the road there — but the
-  // rescaling keeps the piece's CONTINUITY ANCHOR (laneAnchorM: the
-  // direction border, or the stable edge on one-way roads) at its fixed
-  // offset: boundaries scale around the anchor, so they stay continuous
-  // across piece seams and never jump where the mapper jogged the way.
-  // The per-sample edges come Hampel-smoothed from the extractor, so
-  // dents (platforms, cutouts) are already gone
-  const anchorM = cl.laneAnchorM ?? 0;
+  // laneLeftM - lanes*laneW (right edge). The lane width is the road
+  // group's SHARED fitted width — one even width along the whole road —
+  // so every traffic boundary is a PIECE-CONSTANT offset extruded along
+  // the spline normals (curve handling); rescaling per sample would vary
+  // the lane width along the road. The extractor's clamp keeps the block
+  // inside each piece's measured span, and where the road is wider than
+  // the block the parking strips (drawn at the block's outer edges)
+  // absorb the remaining width
   const localOffsetM = (i: number, offM: number): number => {
     if (!hasSpline) return offM;
+    // never paint outside the highway area: clamp the boundary into this
+    // sample's measured road span (meters-right convention: the left road
+    // edge sits at +s.leftM, the right at -s.rightM). Lane widths stay
+    // even everywhere the road is wide enough; only where the road
+    // genuinely narrows below the block does the outer boundary follow
+    // the road edge instead of overlapping it
     const s = sp![i];
-    const units =
-      total + (cl.parkingLeft ? 1 : 0) + (cl.parkingRight ? 1 : 0);
-    const w = (s.leftM + s.rightM) / units;
-    const blockW = total * w;
-    const parkL = cl.parkingLeft ? w : 0;
-    const leftEdge = s.leftM - parkL;
-    // fraction of the block at the boundary and at the anchor
-    // (0=left edge, 1=right edge; offsets are right-positive:
-    // off = leftM_block + (frac-1)*blockW  <=>  frac = (off - leftOff + blockW)/blockW)
-    const drawnW = total * cl.laneW!;
-    const frac = (offM - leftM + drawnW) / drawnW;
-    const anchorFrac = (anchorM - leftM + drawnW) / drawnW;
-    // local block: same fractions, scaled width; the ANCHOR keeps its
-    // world offset, so the local block shifts to accommodate the local
-    // width while the anchor line stays put
-    const anchorOffLocal = anchorM;
-    const leftOffLocal = anchorOffLocal + (1 - anchorFrac) * blockW;
-    return leftOffLocal + (frac - 1) * blockW;
+    const MARGIN = 0.15;
+    return Math.max(
+      -(s.rightM - MARGIN),
+      Math.min(s.leftM - MARGIN, offM),
+    );
   };
   const drawOffsetLine = (
     offAt: (i: number) => number,

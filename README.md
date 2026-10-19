@@ -113,24 +113,27 @@ the highway area. For each (way, area) piece a densified centerline spline is
 sampled (~4 m), and at each sample the lateral cross-section through the area
 is probed from the sample point outwards (bounded metric steps + binary
 refinement, so narrow boundary features cannot be jumped). The piece's model
-is a **rectangle** of its width units (traffic lanes + parking strips, all
-evenly sized — a straight road would be exactly this rectangle), extruded along
-the mapped centerline with normal offsetting for curves. The fit chooses the
-unit width `w` and lateral shift `s` that maximize covered highway area minus
-the length spilling outside it, over a trimmed majority of the samples —
-minority dents (bus platforms, cutouts) and minority widenings (junction
-mouths) both vanish, and among equally-optimal shifts the rectangle centers
-itself on the measured area midline. The fitted rectangle replaces the
-piece's measured span, so the markings stay straight and parallel even where
-the area boundary is jagged; where the mapper jogged the centerline
-(parking-side changes), the fit re-aligns the block with the road.
-Continuity then differs by road type:
-- **Bidirectional roads** carry the solid direction border — its offset is the
-  median of the pieces' natural border positions, kept identical on every
-  piece: the center line is one continuous line over the whole road.
-- **One-way roads** have no border; the block anchors on the measured road
-  edge on the side that did **not** move where the road grows, so the
-  outermost lane continues across lane-count changes.
+is a **rectangle centered on the mapped centerline** (mappers place
+carriageway centerlines well; a fitted lateral shift would displace whole
+lane blocks off the true road) of its width units (traffic lanes + parking
+strips), extruded along the centerline with normal offsetting for curves.
+Its width is the largest even unit width whose centered block stays inside
+the highway area over a trimmed majority of the cross-sections — minority
+dents (bus platforms) and widenings (junction mouths) are both ignored.
+Continuity across the pieces of one road:
+- **One uniform lane width** per road group: the **median** of the pieces'
+  fitted traffic-lane widths — lanes are evenly sized along the whole road,
+  and a single narrow piece (a fork-mouth clip, an extra parking unit)
+  cannot shrink the rest (the minimum did).
+- **Bidirectional roads** carry the solid direction border at one shared
+  offset (median of the pieces' natural border positions): the center line
+  is one continuous line over the whole road.
+- **One-way roads** have no border; the block anchors on the road edge that
+  did **not** move where the road grows, so the outermost lane continues
+  across lane-count changes.
+- Each piece's **parking strips absorb its leftover width**; the renderer
+  clamps every boundary into the local measured road span, so markings never
+  overlap the area boundary even where the road narrows below the block.
 
 **Parking lanes.** A parking lane consumes road width but does not count as a traffic
 lane. It is recognised from three taggings:

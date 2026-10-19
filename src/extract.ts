@@ -2281,8 +2281,20 @@ export function extractFeatures(
     // one-way roads: which side of the road the block is anchored on
     // ("left" | "right" | "center"), decided by where the road grows
     let anchorKind: "left" | "right" | "center" = "left";
-    let laneWShared: (p: MarkingSample & { cl: LineFeature }) => number =
-      laneWOf;
+    // ONE through-lane width across the whole road group — the MEDIAN of
+    // the pieces' traffic-lane widths (each piece's fitted road width
+    // minus its parking units, split over its lanes). The median follows
+    // the majority road: a single narrow piece (a way clipped short at a
+    // fork mouth, way 288689072, or a piece with more parking units than
+    // its neighbors, way 4536810) must not shrink the lanes of the whole
+    // road — the min did exactly that. Every lane boundary sits at
+    // anchor + k*laneW, so markings are continuous across pieces even
+    // where parking sides change; each piece's parking strips absorb its
+    // remaining width, and the renderer clamps boundaries into the local
+    // road span where a piece is genuinely narrower
+    const groupLaneW = median(pieces.map(trafficLaneWOf));
+    const laneWShared: (p: MarkingSample & { cl: LineFeature }) => number =
+      () => groupLaneW;
     if (anchorBorder) {
       // right-hand traffic: traffic in the way's (forward) direction
       // keeps RIGHT of the direction border, oncoming traffic LEFT. The
@@ -2296,16 +2308,6 @@ export function extractFeatures(
         }),
       );
       anchorOf = () => anchorM;
-      // ONE through-lane width across the whole group: the minimum of
-      // the pieces' traffic-lane widths (each piece's road width minus
-      // its parking units, split over its lanes). Every lane boundary
-      // then sits at border + k*laneW - identical on all pieces, so the
-      // markings are fully continuous even where parking changes; the
-      // parking strips absorb each piece's remaining width
-      {
-        const w = Math.min(...pieces.map(trafficLaneWOf));
-        laneWShared = () => w;
-      }
     } else {
       // which side does the road GROW on along the group? Compare the
       // pieces' measured edges: when the lane count rises from one piece
@@ -2353,16 +2355,6 @@ export function extractFeatures(
         // both sides expanded: anchor on the centerline
         anchorKind = "center";
         anchorOf = () => 0;
-      }
-      // ONE through-lane width across the whole group: the minimum of
-      // the pieces' traffic-lane widths (each piece's road width minus
-      // its parking units, split over its lanes). The lanes fit the
-      // narrowest piece; wider pieces leave their extra width to the
-      // parking strips / unpainted. Boundaries sit at k*laneW from the
-      // growth-side anchor, continuous across the whole group
-      {
-        const w = Math.min(...pieces.map(trafficLaneWOf));
-        laneWShared = () => w;
       }
     }
     // junction adjacency + lane clipping for the stop line boundary

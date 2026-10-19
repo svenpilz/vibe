@@ -159,11 +159,16 @@ check(
 // its own 600/2.
 const mPerLat = 111_320 / 1e7;
 const mPerLon = mPerLat * Math.cos(((LAT / 1e7) * Math.PI) / 180);
+// ONE uniform TRAFFIC lane width across the whole road group (median of
+// the pieces' traffic-lane widths): lanes are evenly sized along the
+// road — the dominant continuity property. A single narrow piece (more
+// parking units, C) must not shrink the whole road (the old minimum did)
 check(
-  "one group-wide lane width (minimum of traffic widths)",
-  near(A[0].laneW!, (900 * mPerLat) / 4, 1e-5) &&
-    near(B[0].laneW!, (900 * mPerLat) / 4, 1e-5) &&
-    near(C[0].laneW!, (900 * mPerLat) / 4, 1e-5),
+  "one uniform lane width across the road (median, not minimum)",
+  near(A[0].laneW!, B[0].laneW!, 1e-6) &&
+    near(B[0].laneW!, C[0].laneW!, 1e-6) &&
+    // the median follows the majority: B's own even split
+    near(B[0].laneW!, (2 * 650 * mPerLat) / 3, 1e-4),
   `A:${A[0].laneW} B:${B[0].laneW} C:${C[0].laneW}`,
 );
 check(
@@ -203,10 +208,13 @@ check(
 // parking appears on the last section: the piece has one more unit, so
 // its lane width shrinks — but its block still fills the road evenly and
 // no boundary leaves the road span
+// parking absorbs the leftover: C's block keeps the uniform lane width
+// (2 traffic lanes at the group width); its parking strips are the
+// remainder of its road and the renderer clamps them to the road edge
 check(
-  "parking change splits the road width evenly over its units",
-  C[0].lanes === 2 && near(C[0].laneW!, (900 * mPerLat) / 4, 1e-5),
-  `C laneW:${C[0].laneW} expected:${(900 * mPerLat) / 4}`,
+  "parking piece keeps the uniform traffic lane width",
+  C[0].lanes === 2 && near(C[0].laneW!, B[0].laneW!, 1e-6),
+  `C laneW:${C[0].laneW} group:${B[0].laneW}`,
 );
 
 const E = byWay(wayE);
