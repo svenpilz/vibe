@@ -1675,17 +1675,68 @@ export function extractFeatures(
         }
       }
 
-      // outlier rejection: a sample at a boundary tip or where an island
-      // pokes into the road measures a truncated span; keep only samples
-      // within +-35% of the median span, then re-fill the kept range
+      // outlier repair: a sample at a boundary tip or junction mouth
+      // measures a truncated edge on ONE side (the other side is fine),
+      // and the edge jump bends the lane markings. Per-side medians flag
+      // such samples; INTERIOR outliers take their edges interpolated
+      // from their healthy neighbours, and a contiguous OUTLIER RUN AT
+      // EITHER END is truncated (the piece simply ends earlier - the
+      // markings stop before the junction mouth instead of squeezing
+      // into it)
       const splineFiltered = (() => {
         if (spline.length < 3) return spline;
-        const spans = spline.map((s) => s.leftM + s.rightM);
-        const med = median(spans);
-        const kept = spline.filter(
-          (s, i) => Math.abs(spans[i] - med) <= 0.25 * med,
+        const medL = median(spline.map((s) => s.leftM));
+        const medR = median(spline.map((s) => s.rightM));
+        const bad = spline.map(
+          (s) =>
+            Math.abs(s.leftM - medL) > 0.25 * medL ||
+            Math.abs(s.rightM - medR) > 0.25 * medR,
         );
-        return kept.length >= 3 ? kept : spline;
+        if (!bad.some((b) => b)) return spline;
+        // truncate leading/trailing runs of outliers
+        let lo = 0;
+        while (lo < bad.length && bad[lo]) lo++;
+        let hi = bad.length;
+        while (hi > lo && bad[hi - 1]) hi--;
+        const keptRange = spline.slice(lo, hi);
+        if (keptRange.length < 3) return spline;
+        // interpolate interior outliers from their healthy neighbours
+        const lefts = keptRange.map((s, i) =>
+          bad[lo + i] ? null : s.leftM,
+        );
+        const rights = keptRange.map((s, i) =>
+          bad[lo + i] ? null : s.rightM,
+        );
+        const fill = (xs: (number | null)[]): void => {
+          let lastGood = -1;
+          for (let i = 0; i < xs.length; i++) {
+            if (xs[i] !== null) {
+              lastGood = i;
+              continue;
+            }
+            let nextGood = -1;
+            for (let j = i + 1; j < xs.length; j++)
+              if (xs[j] !== null) {
+                nextGood = j;
+                break;
+              }
+            if (lastGood >= 0 && nextGood >= 0) {
+              xs[i] =
+                (xs[lastGood] as number) +
+                (((xs[nextGood] as number) - (xs[lastGood] as number)) *
+                  (i - lastGood)) /
+                  (nextGood - lastGood);
+            } else if (lastGood >= 0) xs[i] = xs[lastGood];
+            else if (nextGood >= 0) xs[i] = xs[nextGood];
+          }
+        };
+        fill(lefts);
+        fill(rights);
+        return keptRange.map((s, i) => ({
+          ...s,
+          leftM: lefts[i] as number,
+          rightM: rights[i] as number,
+        }));
       })();
       const splineOk = splineFiltered.length >= 2;
 
