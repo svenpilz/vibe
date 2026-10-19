@@ -1,6 +1,8 @@
 /**
- * Regression: exact Overpass snapshot around way 288689072 (Saarstraße).
- * Not part of npm test.
+ * Regression: exact Overpass snapshot around way 288689072 (Saarstraße,
+ * Berlin) — a dual carriageway whose area:highway width CHANGES along the
+ * way (~9.4 m at the fork to ~13.1 m at the junction mouth). The marking
+ * piece must follow the local road width, not one piece-wide median.
  */
 import { createOSMData } from "../src/osm-pbf";
 import { extractFeatures } from "../src/extract";
@@ -63,18 +65,68 @@ area(392402737, [[52.4673202,13.3366681],[52.4672730,13.3368093]],
 area(949520998, [[52.4672486,13.3374130],[52.4672755,13.3373461],[52.4672987,13.3372856],[52.4673213,13.3372257],[52.4673475,13.3371519],[52.4673717,13.3370825],[52.4673807,13.3370558],[52.4673378,13.3370004],[52.4673268,13.3370270],[52.4672592,13.3371889],[52.4672358,13.3372423],[52.4671958,13.3373346],[52.4671917,13.3373437]],
   { amenity: "parking", access: "yes", fee: "yes", layer: "1", orientation: "diagonal", parking: "street_side" });
 
-const result = extractFeatures(data);
-const lm = result.laneMarkings.filter((m) => m.name?.includes("Saar"));
-lm.sort((a, b) => a.coords[0][0] - b.coords[0][0]);
-console.log(`${lm.length} Saarstraße marking pieces\n`);
-console.log("id                 lanes  laneW    roadLeftM  roadRightM  spanM");
-for (const p of lm) {
-  const span = (p.roadLeftM ?? 0) + (p.roadRightM ?? 0);
-  console.log(
-    `${p.id.padEnd(18)}  ${String(p.lanes).padEnd(5)}  ${(p.laneW ?? 0).toFixed(3)}   ` +
-    `${(p.roadLeftM ?? 0).toFixed(2).padStart(8)}  ${(p.roadRightM ?? 0).toFixed(2).padStart(9)}  ${span.toFixed(2)}`
-  );
-  if (p.id === "w288689072" && p.roadLeftProfileM) {
-    console.log("  per-vertex span:", p.roadLeftProfileM.map((l, i) => (l + (p.roadRightProfileM ?? [])[i]).toFixed(2)).join(" "));
+let failures = 0;
+function check(name: string, cond: boolean, detail?: string) {
+  if (cond) console.log(`  ok  ${name}`);
+  else {
+    failures++;
+    console.error(`FAIL  ${name}${detail ? " — " + detail : ""}`);
   }
 }
+const near = (a: number, b: number, eps: number) => Math.abs(a - b) < eps;
+
+const result = extractFeatures(data);
+const byId = new Map(result.laneMarkings.map((m) => [m.id, m]));
+const piece = byId.get("w288689072");
+
+check(
+  "one marking piece for way 288689072 (Saarstraße)",
+  result.laneMarkings.filter((m) => m.id === "w288689072").length === 1,
+);
+check("piece has 4 lanes", piece?.lanes === 4, `lanes:${piece?.lanes}`);
+
+// the road width changes along the area (~9.4 m -> ~13.1 m): the piece
+// must carry a per-vertex road-edge profile following the local span
+check(
+  "piece carries per-vertex road-edge profiles",
+  piece?.roadLeftProfileM !== undefined &&
+    piece?.roadRightProfileM !== undefined &&
+    piece.roadLeftProfileM!.length === piece.coords.length &&
+    piece.roadRightProfileM!.length === piece.coords.length,
+  `profile:${piece?.roadLeftProfileM?.length} coords:${piece?.coords.length}`,
+);
+if (piece?.roadLeftProfileM && piece.roadRightProfileM) {
+  const spans = piece.roadLeftProfileM.map(
+    (l, i) => l + piece.roadRightProfileM![i],
+  );
+  // local spans at the inner vertices, away from the junction mouth
+  const minSpan = Math.min(...spans);
+  const maxSpan = Math.max(...spans);
+  check(
+    "profile follows the changing road width (> 0.25 m variation)",
+    maxSpan - minSpan > 0.25,
+    `spans:${spans.map((s) => s.toFixed(2)).join(" ")}`,
+  );
+  // every local span stays inside the physically plausible range of
+  // the mapped area: between 9 m and 14 m
+  check(
+    "every local span is plausible (9–14 m)",
+    spans.every((s) => s > 9 && s < 14),
+    `spans:${spans.map((s) => s.toFixed(2)).join(" ")}`,
+  );
+  // the lane block must fill the local road: at the WIDEST vertex the
+  // per-vertex lane width exceeds the piece-wide group minimum
+  const laneWLocal = spans.map((s) => s / 4);
+  check(
+    "local lane width exceeds the group minimum at the wide end",
+    near(Math.max(...laneWLocal), maxSpan / 4, 1e-9) &&
+      Math.max(...laneWLocal) > (piece.laneW ?? 0),
+    `local:${laneWLocal.map((w) => w.toFixed(3)).join(" ")} group:${piece.laneW}`,
+  );
+}
+
+if (failures > 0) {
+  console.error(`${failures} saar regression test(s) failed`);
+  process.exit(1);
+}
+console.log("all saar regression tests passed");
