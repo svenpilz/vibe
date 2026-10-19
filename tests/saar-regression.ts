@@ -88,41 +88,43 @@ check("piece has 4 lanes", piece?.lanes === 4, `lanes:${piece?.lanes}`);
 // the road width changes along the area (~9.4 m -> ~13.1 m): the piece
 // must carry a per-vertex road-edge profile following the local span
 check(
-  "piece carries per-vertex road-edge profiles",
-  piece?.roadLeftProfileM !== undefined &&
-    piece?.roadRightProfileM !== undefined &&
-    piece.roadLeftProfileM!.length === piece.coords.length &&
-    piece.roadRightProfileM!.length === piece.coords.length,
-  `profile:${piece?.roadLeftProfileM?.length} coords:${piece?.coords.length}`,
+  "piece carries a densified spline with measured edges",
+  piece?.spline !== undefined && piece.spline!.length >= 8,
+  `spline:${piece?.spline?.length}`,
 );
-if (piece?.roadLeftProfileM && piece.roadRightProfileM) {
-  const spans = piece.roadLeftProfileM.map(
-    (l, i) => l + piece.roadRightProfileM![i],
-  );
-  // local spans at the inner vertices, away from the junction mouth
+if (piece?.spline) {
+  const spans = piece.spline.map((s) => s.leftM + s.rightM);
   const minSpan = Math.min(...spans);
   const maxSpan = Math.max(...spans);
   check(
-    "profile follows the changing road width (> 0.25 m variation)",
+    "spline follows the changing road width (> 0.25 m variation)",
     maxSpan - minSpan > 0.25,
     `spans:${spans.map((s) => s.toFixed(2)).join(" ")}`,
   );
-  // every local span stays inside the physically plausible range of
+  // every sampled span stays inside the physically plausible range of
   // the mapped area: between 9 m and 14 m
   check(
-    "every local span is plausible (9–14 m)",
+    "every sampled span is plausible (9–14 m)",
     spans.every((s) => s > 9 && s < 14),
     `spans:${spans.map((s) => s.toFixed(2)).join(" ")}`,
   );
-  // the lane block must fill the local road: at the WIDEST vertex the
-  // per-vertex lane width exceeds the piece-wide group minimum
+  // the lane block fills the local road: at the widest sample the
+  // local lane width exceeds the piece-wide group minimum
   const laneWLocal = spans.map((s) => s / 4);
   check(
     "local lane width exceeds the group minimum at the wide end",
     near(Math.max(...laneWLocal), maxSpan / 4, 1e-9) &&
       Math.max(...laneWLocal) > (piece.laneW ?? 0),
-    `local:${laneWLocal.map((w) => w.toFixed(3)).join(" ")} group:${piece.laneW}`,
+    `local max:${Math.max(...laneWLocal).toFixed(3)} group:${piece.laneW}`,
   );
+  // the spline runs strictly inside the area: every sample point is in
+  for (const s of piece.spline) {
+    if (!s.pt || s.pt.length !== 2) {
+      check("spline sample points are coordinate pairs", false, `${s.pt}`);
+      break;
+    }
+  }
+  check("spline samples are coordinate pairs", piece.spline.every((s) => Array.isArray(s.pt) && s.pt.length === 2));
 }
 
 if (failures > 0) {

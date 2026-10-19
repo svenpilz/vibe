@@ -1195,19 +1195,65 @@ function drawLaneMarkings(cl: LineFeature) {
   // edge profile, every lane boundary follows the LOCAL road span instead
   // of the piece-wide median, so the block fills the road exactly at every
   // vertex (lane k keeps its fraction of the local width)
-  const profL = cl.roadLeftProfileM,
-    profR = cl.roadRightProfileM;
-  const hasProf =
-    profL !== undefined &&
-    profR !== undefined &&
-    profL.length === base.length &&
-    profR.length === base.length;
-  const localBlock = (i: number): { left: number; w: number } => {
-    if (!hasProf) return { left: leftM, w: cl.laneW! };
-    const units = total + (cl.parkingLeft ? 1 : 0) + (cl.parkingRight ? 1 : 0);
-    const w = (profL[i] + profR[i]) / units;
+  // densified spline centerline with per-sample measured road edges: the
+  // road width can change along the area, so every boundary follows the
+  // LOCAL span at each sample (the block fills the road exactly), while
+  // the sample points/normals come from the fitted spline — smooth
+  // curves even where the mapped way is a coarse polyline
+  const sp = cl.spline;
+  const hasSpline =
+    sp !== undefined &&
+    sp.length >= 2 &&
+    sp.every((s) => s.pt.length === 2);
+  const splineBase: [number, number][] | null = hasSpline
+    ? sp!.map((s) => [lonToX(s.pt[0] / Q), latToY(s.pt[1] / Q)])
+    : null;
+  const splineNormals: [number, number][] | null = hasSpline
+    ? sp!.map((s) => [s.nx, s.ny] as [number, number])
+    : null;
+  // meters-left convention: block spans laneLeftM (left edge) down to
+  // laneLeftM - lanes*laneW (right edge); per sample the block is
+  // rescaled into the LOCAL measured span so boundaries sit at the same
+  // FRACTION of the local width (lane k of N), corrected for the
+  // centerline's real offset within the road
+  const localOffsetM = (i: number, offM: number): number => {
+    if (!hasSpline) return offM;
+    const s = sp![i];
+    // fraction of the block width at this boundary (0=left edge, 1=right)
+    const frac = 1 - (offM + leftM) / (total * cl.laneW!);
+    const units =
+      total + (cl.parkingLeft ? 1 : 0) + (cl.parkingRight ? 1 : 0);
+    const w = (s.leftM + s.rightM) / units;
     const parkL = cl.parkingLeft ? w : 0;
-    return { left: profL[i] - parkL, w };
+    const leftEdge = s.leftM - parkL;
+    const blockW = total * w;
+    return -(leftEdge - frac * blockW);
+  };
+  const drawOffsetLine = (
+    offAt: (i: number) => number,
+    solid: boolean,
+  ): void => {
+    // prefer the spline; fall back to the way polyline
+    const pts: [number, number][] =
+      splineBase !== null
+        ? splineBase.map((p, i) => [
+            p[0] + splineNormals![i][0] * offAt(i),
+            p[1] + splineNormals![i][1] * offAt(i),
+          ])
+        : base.map((p, i) => [
+            p[0] + normals[i][0] * offAt(i),
+            p[1] + normals[i][1] * offAt(i),
+          ]);
+    const smooth = chaikin(pts, 2);
+    ctx.strokeStyle = "#e8e8e8";
+    if (!solid)
+      ctx.setLineDash([Math.max(3, 1.2 * px), Math.max(2, 1.0 * px)]);
+    ctx.beginPath();
+    ctx.moveTo(smooth[0][0], smooth[0][1]);
+    for (let i = 1; i < smooth.length; i++)
+      ctx.lineTo(smooth[i][0], smooth[i][1]);
+    ctx.stroke();
+    if (!solid) ctx.setLineDash([]);
   };
 
   // draw a boundary between a parking unit and the adjacent traffic lane so
@@ -1215,7 +1261,8 @@ function drawLaneMarkings(cl: LineFeature) {
   const boundaryOffsets: number[] = [];
   if (cl.parkingLeft) boundaryOffsets.push(-leftM);
   if (cl.parkingRight) boundaryOffsets.push(-leftM + total * cl.laneW!);
-  for (const offPx of hasProf ? [] : boundaryOffsets.map((o) => o * px)) {
+  for (const offPx of boundaryOffsets.map((o) => o * px)) {
+    if (hasSpline) break;
     const offset: [number, number][] = base.map((p, i) => [
       p[0] + normals[i][0] * offPx,
       p[1] + normals[i][1] * offPx,
@@ -1230,55 +1277,28 @@ function drawLaneMarkings(cl: LineFeature) {
     ctx.stroke();
     ctx.setLineDash([]);
   }
-  if (hasProf) {
-    // parking boundaries following the local road span
-    const parkSides: (1 | 2)[] = [];
-    if (cl.parkingLeft) parkSides.push(1);
-    if (cl.parkingRight) parkSides.push(2);
-    for (const side of parkSides) {
-      const offset: [number, number][] = base.map((p, i) => {
-        const lb = localBlock(i);
-        const offM = side === 1 ? lb.left : lb.left - total * lb.w;
-        const o = -offM * px;
-        return [p[0] + normals[i][0] * o, p[1] + normals[i][1] * o];
-      });
-      const smooth = chaikin(offset, 2);
-      ctx.strokeStyle = "#e8e8e8";
-      ctx.setLineDash([Math.max(3, 1.2 * px), Math.max(2, 1.0 * px)]);
-      ctx.beginPath();
-      ctx.moveTo(smooth[0][0], smooth[0][1]);
-      for (let i = 1; i < smooth.length; i++)
-        ctx.lineTo(smooth[i][0], smooth[i][1]);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
+  if (hasSpline && sp) {
+    // parking boundaries at the local road edges
+    if (cl.parkingLeft)
+      drawOffsetLine((i) => localOffsetM(i, leftM) * px, false);
+    if (cl.parkingRight)
+      drawOffsetLine(
+        (i) => localOffsetM(i, -leftM + total * cl.laneW!) * px,
+        false,
+      );
   }
-
   for (let k = 1; k < total; k++) {
-    // distance from the centerline, negative = left side; with a
-    // per-vertex edge profile the boundary follows the local road span
+    // distance from the centerline, negative = left side
     const offPx = (-leftM + k * cl.laneW!) * px;
     // solid only between opposite directions: exists when some (but not
     // all) lanes run forward — a one-way road has no solid separator
     const solid = fwd > 0 && fwd < total && k === fwd;
-
-    // continuous offset curve through averaged normals, then smoothed
-    const offset: [number, number][] = base.map((p, i) => {
-      const o = hasProf
-        ? (-localBlock(i).left + k * localBlock(i).w) * px
-        : offPx;
-      return [p[0] + normals[i][0] * o, p[1] + normals[i][1] * o];
-    });
-    const smooth = chaikin(offset, 2);
-
-    ctx.strokeStyle = "#e8e8e8";
-    if (!solid) ctx.setLineDash([Math.max(3, 1.2 * px), Math.max(2, 1.0 * px)]);
-    ctx.beginPath();
-    ctx.moveTo(smooth[0][0], smooth[0][1]);
-    for (let i = 1; i < smooth.length; i++)
-      ctx.lineTo(smooth[i][0], smooth[i][1]);
-    ctx.stroke();
-    if (!solid) ctx.setLineDash([]);
+    if (hasSpline)
+      drawOffsetLine(
+        (i) => localOffsetM(i, -leftM + k * cl.laneW!) * px,
+        solid,
+      );
+    else drawOffsetLine(() => offPx, solid);
   }
   // stop line: the shared boundary polyline between the entering road
   // area and the junction area (not necessarily orthogonal to the road),

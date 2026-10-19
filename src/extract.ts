@@ -1362,13 +1362,22 @@ export function extractFeatures(
   // lane count, so boundaries keep their offsets across pieces: a 2→3 lane
   // change keeps the two existing lanes and adds one on the outside, and a
   // parking lane appearing or disappearing shifts no lane boundary at all.
+  interface SplineSampleInfo {
+    /** quantized position on the spline */
+    pt: number[];
+    /** unit normal (left-positive) at the sample */
+    nx: number;
+    ny: number;
+    /** measured distance to the left/right area edge, meters */
+    leftM: number;
+    rightM: number;
+  }
   interface MarkingSample {
     area: AreaFeature;
     leftM: number;
     rightM: number;
-    /** per-vertex left/right road-edge distances in meters, parallel to cl.coords (width profile) */
-    profLeftM?: number[];
-    profRightM?: number[];
+    /** densified spline centerline of the piece, sampled ~4 m, with per-sample measured road edges */
+    spline?: SplineSampleInfo[];
   }
   const samplesOf = new Map<LineFeature, MarkingSample[]>();
   for (const cl of laneCandidates) {
@@ -1423,23 +1432,15 @@ export function extractFeatures(
       }
       const segs = insideSegs.length > 0 ? insideSegs : tolSegs;
       if (segs.length === 0) continue;
-      const sampled = segs;
       const lefts: number[] = [];
       const rights: number[] = [];
-      const median = (xs: number[]): number => {
-        const s2 = [...xs].sort((a, b) => a - b);
-        const m = s2.length >> 1;
-        return s2.length % 2 ? s2[m] : (s2[m - 1] + s2[m]) / 2;
-      };
-
-      // per-vertex width profile, parallel to cl.coords: the road width
-      // can change along the area, so the lane block must follow the
-      // local measured edges at every vertex, not one median
-      const profLeftM: number[] = new Array(cl.coords.length).fill(undefined);
-      const profRightM: number[] = new Array(cl.coords.length).fill(undefined);
       const [minX, minY, maxX, maxY] = area.bbox;
       const maxRay = Math.hypot(maxX - minX, maxY - minY) + 1000;
-      const measureAt = (sample: number[], nx: number, ny: number): [number, number] | null => {
+      const measureAt = (
+        sample: number[],
+        nx: number,
+        ny: number,
+      ): [number, number] | null => {
         const left = rayExitInArea(sample, [nx, ny], area, maxRay);
         const right = rayExitInArea(sample, [-nx, -ny], area, maxRay);
         if (left === null || right === null) return null;
@@ -1450,13 +1451,18 @@ export function extractFeatures(
           Math.hypot(dx2 * t * mPerLon, dy2 * t * mPerLat);
         return [rayM(left, nx, ny), rayM(right, -nx, -ny)];
       };
-      // vertex normal (averaged, like the renderer offsets by)
-      for (const bi of sampled) {
+      const median = (xs: number[]): number => {
+        const s2 = [...xs].sort((a, b) => a - b);
+        const m = s2.length >> 1;
+        return s2.length % 2 ? s2[m] : (s2[m - 1] + s2[m]) / 2;
+      };
+      // piece-wide median from segment-midpoint samples (the group
+      // layout below still keys off these medians)
+      for (const bi of segs) {
         const dxs = cl.coords[bi][0] - cl.coords[bi - 1][0];
         const dys = cl.coords[bi][1] - cl.coords[bi - 1][1];
         const segLen = Math.hypot(dxs, dys);
-        // sample: the segment midpoint, or — when it lies on the boundary —
-        // a point of the segment strictly inside this area
+        if (segLen === 0) continue;
         let sample: number[] | null = null;
         const a0 = cl.coords[bi - 1],
           a1 = cl.coords[bi];
@@ -1481,86 +1487,133 @@ export function extractFeatures(
         lefts.push(measured[0]);
         rights.push(measured[1]);
       }
-      // measure the width at every vertex INSIDE this area (vertices
-      // outside or ON the boundary stay undefined — their markings are
-      // clipped away anyway). Instead of casting a ray along the averaged
-      // vertex normal (a bisector at a corner overshoots diagonally
-      // across the road and over-measures), take the CONSERVATIVE sides
-      // of the two adjacent SEGMENT measurements (the ray from the
-      // segment midpoint perpendicular to the segment cannot overshoot):
-      // the left edge is the nearer left edge of the two, likewise the
-      // right — the profile never exceeds the true local road span
+      // ---- spline centerline of this (way, area) piece ----
+      // Fit a Catmull-Rom cubic spline through the way vertices that
+      // touch or lie inside the area, and sample it meaningfully (~4 m
+      // spacing along the arc, clamped to a sane sample count). The
+      // mapped centerline only approximates the real one, so the road
+      // span is MEASURED per sample: rays along the spline normal in
+      // both directions until they leave the area, in meters. Samples
+      // whose point is not strictly inside the area are dropped (start
+      // and end samples move an EPS tangentially INTO the area first —
+      // a sample exactly on the shared boundary edge would leak through
+      // it into the neighbour area and measure nonsense).
+      const EPS = 30; // quantized units ≈ 0.3 m tangential inset
+      const verts: number[][] = [];
+      for (const c of cl.coords) {
+        if (pointInAreaQ(c, area) || pointInAreaTolQ2(c, area)) verts.push(c);
+      }
       const medSpan =
         lefts.length > 0
           ? median(lefts) + median(rights)
           : 0;
-      // build the per-vertex profile by measuring DIRECTLY at each vertex
-      // strictly inside the area: rays along the normals of the segments
-      // touching it (NOT the averaged vertex normal — a bisector at a
-      // corner overshoots diagonally across the road), taking the
-      // conservative nearer edge per side. Exact on straight runs (the
-      // vertex normal IS the segment normal), conservative at corners,
-      // and two pieces sharing a seam vertex measure the SAME span there,
-      // so their boundaries meet exactly at the seam
-      for (let vi = 0; vi < cl.coords.length; vi++) {
-        if (!pointInAreaQ(cl.coords[vi], area)) continue;
-        const dirs: [number, number][] = [];
-        if (vi > 0) {
-          const dx = cl.coords[vi][0] - cl.coords[vi - 1][0];
-          const dy = cl.coords[vi][1] - cl.coords[vi - 1][1];
-          const l = Math.hypot(dx, dy);
-          if (l > 0) dirs.push([-dy / l, dx / l]);
-        }
-        if (vi < cl.coords.length - 1) {
-          const dx = cl.coords[vi + 1][0] - cl.coords[vi][0];
-          const dy = cl.coords[vi + 1][1] - cl.coords[vi][1];
-          const l = Math.hypot(dx, dy);
-          if (l > 0) dirs.push([-dy / l, dx / l]);
-        }
-        let lBest: number | undefined;
-        let rBest: number | undefined;
-        for (const d of dirs) {
-          const m2 = measureAt(cl.coords[vi], d[0], d[1]);
-          if (!m2) continue;
-          if (medSpan > 0 && m2[0] + m2[1] < 0.5 * medSpan) continue;
-          if (lBest === undefined || m2[0] < lBest) lBest = m2[0];
-          if (rBest === undefined || m2[1] < rBest) rBest = m2[1];
-        }
-        if (lBest === undefined || rBest === undefined) continue;
-        profLeftM[vi] = lBest;
-        profRightM[vi] = rBest;
+      interface SplineSample {
+        pt: number[];
+        nx: number;
+        ny: number;
+        leftM: number;
+        rightM: number;
       }
-      const profOk = profLeftM.some((v) => v !== undefined);
-      if (profOk && profLeftM.length !== cl.coords.length) {
-        // the profile arrays were preallocated per vertex; guard anyway
-        while (profLeftM.length < cl.coords.length) profLeftM.push(undefined as unknown as number);
-        while (profRightM.length < cl.coords.length) profRightM.push(undefined as unknown as number);
-      }
-      // fill profile gaps: a vertex whose own ray measurement is missing
-      // interpolates between its measured neighbours; ends copy the nearest
-      if (profOk) {
-        const fill = (prof: number[]): void => {
-          let last = -1;
-          for (let i = 0; i < prof.length; i++) {
-            if (prof[i] !== undefined) last = i;
-            else {
-              let next = -1;
-              for (let j = i + 1; j < prof.length; j++)
-                if (prof[j] !== undefined) {
-                  next = j;
-                  break;
-                }
-              if (last >= 0 && next >= 0)
-                prof[i] = prof[last] + ((prof[next] - prof[last]) * (i - last)) / (next - last);
-              else if (last >= 0) prof[i] = prof[last];
+      const spline: SplineSample[] = [];
+      if (verts.length >= 2) {
+        // parametrize by cumulative chord length
+        const cum: number[] = [0];
+        for (let i = 1; i < verts.length; i++)
+          cum.push(
+            cum[i - 1] +
+              Math.hypot(
+                verts[i][0] - verts[i - 1][0],
+                verts[i][1] - verts[i - 1][1],
+              ),
+          );
+        const total = cum[cum.length - 1];
+        const ptAt = (t: number): { p: number[]; d: number[] } => {
+          // locate knot span
+          let k = 1;
+          while (k < cum.length - 1 && cum[k] < t) k++;
+          const t0 = cum[k - 1],
+            t1 = cum[k];
+          const f = t1 - t0 > 0 ? (t - t0) / (t1 - t0) : 0;
+          const p0 = verts[Math.max(0, k - 2)],
+            p1 = verts[k - 1],
+            p2 = verts[k],
+            p3 = verts[Math.min(verts.length - 1, k + 1)];
+          // Catmull-Rom (uniform, chord-approximated)
+          const f2 = f * f,
+            f3 = f2 * f;
+          const px =
+            0.5 *
+            (2 * p1[0] +
+              (-p0[0] + p2[0]) * f +
+              (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * f2 +
+              (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * f3);
+          const py =
+            0.5 *
+            (2 * p1[1] +
+              (-p0[1] + p2[1]) * f +
+              (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * f2 +
+              (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * f3);
+          const dx =
+            0.5 *
+            (-p0[0] +
+              p2[0] +
+              2 * (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * f +
+              3 * (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * f2) /
+            (t1 - t0 || 1);
+          const dy =
+            0.5 *
+            (-p0[1] +
+              p2[1] +
+              2 * (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * f +
+              3 * (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * f2) /
+            (t1 - t0 || 1);
+          return {
+            p: [px, py],
+            d: [dx, dy],
+          };
+        };
+        const nSamples = Math.min(
+          120,
+          Math.max(8, Math.round(total / 40000)),
+        );
+        for (let s = 0; s <= nSamples; s++) {
+          let t = (total * s) / nSamples;
+          const { p, d } = ptAt(t);
+          const dl = Math.hypot(d[0], d[1]);
+          if (dl === 0) continue;
+          let px = p[0],
+            py = p[1];
+          // move start/end samples an EPS tangentially INTO the area
+          if (!pointInAreaQ([px, py], area)) {
+            const inT =
+              d[0] * (verts[verts.length - 1][0] - verts[0][0]) >= 0
+                ? EPS
+                : -EPS;
+            // nudge along the tangent towards the interior
+            const nudged = [px + (d[0] / dl) * inT, py + (d[1] / dl) * inT];
+            if (pointInAreaQ(nudged, area)) {
+              px = nudged[0];
+              py = nudged[1];
+            } else {
+              continue;
             }
           }
-          for (let i = prof.length - 1; i >= 0; i--)
-            if (prof[i] === undefined) prof[i] = prof[Math.min(i + 1, prof.length - 1)] ?? 0;
-        };
-        fill(profLeftM);
-        fill(profRightM);
+          const nx = -d[1] / dl,
+            ny = d[0] / dl;
+          const m2 = measureAt([px, py], nx, ny);
+          if (!m2) continue;
+          if (medSpan > 0 && m2[0] + m2[1] < 0.5 * medSpan) continue;
+          spline.push({
+            pt: [Math.round(px), Math.round(py)],
+            nx,
+            ny,
+            leftM: m2[0],
+            rightM: m2[1],
+          });
+        }
       }
+      const splineOk = spline.length >= 2;
+
       if (lefts.length === 0) continue;
       let arr = samplesOf.get(cl);
       if (!arr) {
@@ -1571,8 +1624,7 @@ export function extractFeatures(
         area,
         leftM: median(lefts),
         rightM: median(rights),
-        profLeftM: profOk ? profLeftM : undefined,
-        profRightM: profOk ? profRightM : undefined,
+        spline: splineOk ? spline : undefined,
       });
     }
   }
@@ -2045,8 +2097,7 @@ export function extractFeatures(
         laneRightM: laneLeftM + p.cl.lanes! * laneW,
         roadLeftM: p.leftM,
         roadRightM: p.rightM,
-        roadLeftProfileM: p.profLeftM,
-        roadRightProfileM: p.profRightM,
+        spline: p.spline,
         lanesFwd: fwd,
         areaIds: [p.area.id],
         stopLinesQ: stopLinesQ.length > 0 ? stopLinesQ : undefined,

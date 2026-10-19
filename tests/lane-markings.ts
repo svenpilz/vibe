@@ -211,23 +211,26 @@ check(
 
 const E = byWay(wayE);
 check(
-  "variable-width road carries a per-vertex edge profile",
+  "variable-width road carries a densified spline with edges",
   E.length === 1 &&
-    E[0].roadLeftProfileM !== undefined &&
-    E[0].roadLeftProfileM.length === 2 &&
-    E[0].roadRightProfileM !== undefined &&
-    E[0].roadRightProfileM.length === 2,
-  `E pieces:${E.length} profile:${E[0]?.roadLeftProfileM?.length}`,
+    E[0].spline !== undefined &&
+    E[0].spline!.length >= 8,
+  `E pieces:${E.length} spline:${E[0]?.spline?.length}`,
 );
-if (E.length === 1 && E[0].roadLeftProfileM && E[0].roadRightProfileM) {
-  const span0 = E[0].roadLeftProfileM[0] + E[0].roadRightProfileM[0];
-  const span1 =
-    E[0].roadLeftProfileM[1] + E[0].roadRightProfileM[1];
+if (E.length === 1 && E[0].spline) {
+  const spans = E[0].spline.map((s) => s.leftM + s.rightM);
+  const span0 = spans[0];
+  const span1 = spans[spans.length - 1];
+  // samples at the ends sit ~EPS inside the trapezoid; the width grows
+  // linearly 9 m -> 13 m, so the end spans bracket those values
   check(
-    "profile follows the local road span (9 m -> 13 m)",
-    near(span0, 900 * mPerLat, 1e-3) && near(span1, 1300 * mPerLat, 1e-3),
+    "spline samples follow the local road span (9 m -> 13 m)",
+    near(span0, 900 * mPerLat, 60 * mPerLat) &&
+      near(span1, 1300 * mPerLat, 60 * mPerLat),
     `span0:${span0} span1:${span1}`,
   );
+  const growing = spans.every((s, i) => i === 0 || s >= spans[i - 1] - 1e-6);
+  check("spans grow monotonically along the trapezoid", growing, `spans:${spans.map((s) => s.toFixed(1)).join(" ")}`);
 }
 
 if (failures > 0) {
