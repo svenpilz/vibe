@@ -104,12 +104,12 @@ for (const p of lm) {
     s.pt[0] * (1e-7 * 111320 * cosLat),
     s.pt[1] * (1e-7 * 111320),
   ]);
-  const units =
-    p.lanes! + (p.parkingLeft ? 1 : 0) + (p.parkingRight ? 1 : 0);
+  // the DRAWN boundary: under the fitted road model the offset is
+  // piece-constant from the mapped centerline (the spline provides the
+  // smooth base curve and normals)
   const line = pts.map((q, i) => {
     const s = sp[i];
-    const w = (s.leftM + s.rightM) / units;
-    const d = s.leftM - (p.parkingLeft ? w : 0) - w;
+    const d = -p.laneLeftM! + p.laneW!;
     return [q[0] + s.nx * d, q[1] + s.ny * d];
   });
   const n = line.length;
@@ -164,3 +164,48 @@ if (failures > 0) {
   process.exit(1);
 }
 console.log("all rubens regression tests passed");
+
+// ---- solid continuous center line (the direction border) ----
+// The road-model fit must align the direction border across ALL pieces
+// of the group: the solid center line is one continuous straight line
+// over the whole road, and the fitted rectangle stays centered on the
+// mapped centerline (the mapper placed it well; the fit must confirm,
+// not fight it).
+{
+  const bidir = lm.filter(
+    (p) => (p.lanesFwd ?? 0) > 0 && (p.lanesFwd ?? 0) < p.lanes!,
+  );
+  check(
+    "solid center line exists on every bidirectional piece",
+    bidir.length === lm.length,
+    `bidir:${bidir.length} of ${lm.length}`,
+  );
+  // border offset from the mapped centerline, per piece
+  const offs = bidir.map(
+    (p) => -p.laneLeftM! + (p.lanesFwd ?? 1) * p.laneW!,
+  );
+  const spread = Math.max(...offs.map((o) => Math.abs(o - offs[0])));
+  check(
+    "border offset uniform across pieces (continuous center line)",
+    spread < 0.05,
+    `offsets:${offs.map((o) => o.toFixed(3)).join(" ")} spread:${spread.toFixed(3)}`,
+  );
+  // the fitted rectangle must agree with the MEASURED area midline: the
+  // mapper may jog the centerline where parking sides change, but the
+  // area boundary is objective — the fit follows it, staying within a
+  // fraction of a lane width of the raw midline measurement
+  for (const p of lm) {
+    const sp = p.spline ?? [];
+    if (sp.length < 2) continue;
+    const midOffs = sp
+      .map((s) => (s.leftM - s.rightM) / 2)
+      .sort((a, b) => a - b);
+    const med = midOffs[Math.floor(midOffs.length / 2)];
+    const shift = (p.roadLeftM! - p.roadRightM!) / 2;
+    check(
+      `piece ${p.id}: fit follows the measured area midline (< 0.35 m)`,
+      Math.abs(shift - med) < 0.35,
+      `fit:${shift.toFixed(3)} midline:${med.toFixed(3)}`,
+    );
+  }
+}

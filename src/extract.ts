@@ -74,46 +74,6 @@ function bboxOfQ(coords: number[][]): [number, number, number, number] {
 }
 
 /** distance along direction d from pt until leaving the area, or null if never */
-function rayExitInArea(
-  pt: number[],
-  d: number[],
-  area: AreaFeature,
-  maxRay: number,
-): number | null {
-  let best: number | null = null;
-  const test = (t: number): void => {
-    const p = [pt[0] + d[0] * t, pt[1] + d[1] * t];
-    if (!pointInAreaQ(p, area)) {
-      if (best === null || t < best) best = t;
-    }
-  };
-  // coarse scan then refine; the step adapts to the ray length so small
-  // areas (diagonal below the previous fixed step) are still scanned
-  const steps = 40;
-  const step = Math.max(1, maxRay / steps);
-  let prevInside = true;
-  for (let t = step; t <= maxRay; t += step) {
-    const p = [pt[0] + d[0] * t, pt[1] + d[1] * t];
-    const inside = pointInAreaQ(p, area);
-    if (prevInside && !inside) {
-      // binary refine between t-step and t
-      let lo = t - step,
-        hi = t;
-      for (let k = 0; k < 24; k++) {
-        const midT = (lo + hi) / 2;
-        const pm = [pt[0] + d[0] * midT, pt[1] + d[1] * midT];
-        if (pointInAreaQ(pm, area)) lo = midT;
-        else hi = midT;
-      }
-      best = (lo + hi) / 2;
-      break;
-    }
-    prevInside = inside;
-  }
-  void test;
-  return best;
-}
-
 function pointInRingQ(pt: number[], ring: number[][]): boolean {
   let inside = false;
   const x = pt[0],
@@ -143,6 +103,132 @@ function pointInAreaQ(pt: number[], area: AreaFeature): boolean {
     if (pointInRingQ(pt, hole)) return false;
   }
   return true;
+}
+
+/**
+ * Robust lateral cross-section: walk outward from the sample along BOTH
+ * normals until the first exit from the area (coarse metric steps, then
+ * binary refinement). Returns [leftM, rightM], the distances in meters to
+ * the area boundary on each side of the sample. Unlike a plain ray cast,
+ * the bounded metric step cannot jump over narrow boundary features, and
+ * starting at the sample itself detects a sample sitting outside the area.
+ */
+function lateralIntervalInArea(
+  pt: number[],
+  nx: number,
+  ny: number,
+  mPerLon: number,
+  mPerLat: number,
+  area: AreaFeature,
+  maxM: number,
+): [number, number] | null {
+  if (!pointInAreaQ(pt, area)) return null;
+  const inside = (m: number): boolean =>
+    pointInAreaQ(
+      [pt[0] + (nx * m) / mPerLon, pt[1] + (ny * m) / mPerLat],
+      area,
+    );
+  const edge = (dir: number): number => {
+    const STEP = 2;
+    let prev = 0;
+    for (let m = STEP; m <= maxM; m += STEP) {
+      if (!inside(dir * m)) {
+        let lo = prev,
+          hi = m;
+        for (let k = 0; k < 20; k++) {
+          const mid = (lo + hi) / 2;
+          if (inside(dir * mid)) lo = mid;
+          else hi = mid;
+        }
+        return dir * ((lo + hi) / 2);
+      }
+      prev = m;
+    }
+    return dir * maxM;
+  };
+  const left = edge(1);
+  const right = edge(-1);
+  return [left, -right];
+}
+
+/**
+ * Fit the extruded road model to the measured cross-sections of one
+ * (way, area) piece. The model is a rectangle of `units` evenly sized
+ * strips (traffic lanes + parking units), centered on the mapped
+ * centerline and shifted `s` meters to its left. At sample i the block
+ * covers the lateral interval [s - U*w/2, s + U*w/2] (meters-left
+ * convention); the road occupies [-rightM_i, leftM_i]. The fit maximizes
+ * covered length minus the length spilling outside the highway area,
+ * summed over the samples: the largest rectangle that actually fits the
+ * geometry, tolerating minority dents (bus platforms, cutouts) that
+ * would shrink an exact fit.
+ */
+function fitRoadRectangle(
+  samples: { leftM: number; rightM: number }[],
+  units: number,
+): { w: number; s: number } {
+  const ivs: [number, number][] = samples.map((s) => [-s.rightM, s.leftM]);
+  const overlap = (i: number, lo: number, hi: number): number =>
+    Math.max(0, Math.min(hi, ivs[i][1]) - Math.max(lo, ivs[i][0]));
+  // the optimal block sits flush against cross-section edges: the
+  // coverage function is piecewise linear in s with breakpoints exactly
+  // where a block edge meets an interval edge — evaluating those
+  // candidates is exact, no ternary assumptions. When the block is
+  // NARROWER than the road along the whole piece (fewer units than the
+  // area has room for — e.g. a 2-lane way crossing a wide area), a whole
+  // PLATEAU of shifts achieves full coverage and the objective alone is
+  // underdetermined: among equally-optimal shifts, the one closest to
+  // the measured area midline wins — the rectangle centers itself in
+  // the road instead of clinging to an arbitrary plateau edge
+  const midPref = (() => {
+    const offs = samples.map((x) => (x.leftM - x.rightM) / 2).sort((a, b) => a - b);
+    return offs[Math.floor(offs.length / 2)];
+  })();
+  // TRIMMED objective: the plain sum lets a minority of samples
+  // dominate — junction-mouth widenings pull the rectangle sideways and
+  // inflate its width, platform dents shrink it. Dropping the top and
+  // bottom per-sample coverages makes the MAJORITY cross-section decide,
+  // which is the robust reading of an inconsistent OSM area
+  const trim = Math.max(0, Math.floor(ivs.length * 0.15));
+  const scoreOf = (per: number[]): number => {
+    const s = [...per].sort((a, b) => a - b);
+    let sum = 0;
+    for (let i = trim; i < s.length - trim; i++) sum += s[i];
+    return sum;
+  };
+  const bestShift = (w: number): { s: number; v: number } => {
+    const h = (units * w) / 2;
+    const cands: number[] = [0];
+    for (const [lo, hi] of ivs) {
+      cands.push(lo + h, hi - h, (lo + hi) / 2);
+    }
+    let best = { s: 0, v: -Infinity };
+    for (const s of cands) {
+      const per = ivs.map((_, i) => overlap(i, s - h, s + h));
+      const v = 2 * scoreOf(per) - units * w * (ivs.length - 2 * trim);
+      if (v > best.v + 1e-6) best = { s, v };
+      else if (v > best.v - 1e-6 && Math.abs(s - midPref) < Math.abs(best.s - midPref))
+        best = { s, v: Math.max(best.v, v) };
+    }
+    return best;
+  };
+  const cand = [
+    ...new Set(samples.map((x) => (x.leftM + x.rightM) / units)),
+  ].sort((a, b) => a - b);
+  const wLo = Math.max(0.5, cand[0] * 0.5);
+  const wHi = cand[cand.length - 1] * 1.5;
+  let best = { ...bestShift(cand[0]), w: cand[0] };
+  const N = 24;
+  for (let i = 0; i <= N; i++) {
+    const w = wLo + ((wHi - wLo) * i) / N;
+    const r = bestShift(w);
+    if (r.v > best.v) best = { ...r, w };
+  }
+  for (const w of cand) {
+    const r = bestShift(w);
+    if (r.v > best.v) best = { ...r, w };
+  }
+  return { w: best.w, s: best.s };
 }
 
 /** squared distance from pt to segment a-b in quantized units */
@@ -1376,6 +1462,10 @@ export function extractFeatures(
     area: AreaFeature;
     leftM: number;
     rightM: number;
+    /** fitted unit width (m) of the extruded road-model rectangle, when a spline fit succeeded */
+    fitW?: number;
+    /** fitted lateral shift (m, positive = left) of the rectangle center vs the mapped centerline */
+    fitShift?: number;
     /** densified spline centerline of the piece, sampled ~4 m, with per-sample measured road edges */
     spline?: SplineSampleInfo[];
   }
@@ -1447,25 +1537,15 @@ export function extractFeatures(
         const mPerLon =
           (111_320 * Math.cos(((sample[1] / 1e7) * Math.PI) / 180)) / 1e7;
         const mPerLat = 111_320 / 1e7;
-        const dl = Math.hypot(
-          (nx / mPerLon) * mPerLon,
-          (ny / mPerLat) * mPerLat,
-        );
-        void dl;
-        const left = rayExitInArea(
+        return lateralIntervalInArea(
           sample,
-          [nx / mPerLon, ny / mPerLat],
+          nx,
+          ny,
+          mPerLon,
+          mPerLat,
           area,
           maxRay,
         );
-        const right = rayExitInArea(
-          sample,
-          [-nx / mPerLon, -ny / mPerLat],
-          area,
-          maxRay,
-        );
-        if (left === null || right === null) return null;
-        return [left, right];
       };
       const median = (xs: number[]): number => {
         const s2 = [...xs].sort((a, b) => a - b);
@@ -1697,6 +1777,11 @@ export function extractFeatures(
     if (!seed) seed = ways[0];
     const usedOrig = new Set<LineFeature>([seed]);
     const chain: LineFeature[] = [seedFlipped ? reversed(seed) : seed];
+    // whether each chain entry runs REVERSED vs its own way direction:
+    // chain[i] may be a reversed() copy ("__orig" set) or the way itself
+    const isRev = (w: LineFeature): boolean =>
+      (w as unknown as { __orig?: LineFeature }).__orig !== undefined;
+    const chainRev: boolean[] = [seedFlipped && isRev(chain[0])];
     // extend forward from the chain end
     while (true) {
       const last = chain[chain.length - 1];
@@ -1706,11 +1791,9 @@ export function extractFeatures(
       );
       if (!next) break;
       usedOrig.add(next);
-      chain.push(
-        key(next.coords[0]) === key(lastEnd)
-          ? next
-          : reversed(next),
-      );
+      const fwd = key(next.coords[0]) === key(lastEnd);
+      chain.push(fwd ? next : reversed(next));
+      chainRev.push(!fwd);
     }
     // extend backward from the chain start
     while (true) {
@@ -1721,17 +1804,19 @@ export function extractFeatures(
       );
       if (!prev) break;
       usedOrig.add(prev);
-      chain.unshift(
-        key(prev.coords[prev.coords.length - 1]) === key(firstEnd)
-          ? prev
-          : reversed(prev),
-      );
+      const fwd = key(prev.coords[prev.coords.length - 1]) === key(firstEnd);
+      chain.unshift(fwd ? prev : reversed(prev));
+      chainRev.unshift(!fwd);
     }
     const used = new Set<LineFeature>();
     // merged vertex list with way ownership (dedup shared seam
     // vertices); ownership always refers to the ORIGINAL way object
     const origOfChain = (w: LineFeature): LineFeature =>
       (w as unknown as { __orig?: LineFeature }).__orig ?? w;
+    // owner way -> reversed in the chain? samples for a REVERSED way are
+    // later flipped back to the way's own left/right convention
+    const revByOrig = new Map<LineFeature, boolean>();
+    chain.forEach((w, i) => revByOrig.set(origOfChain(w), chainRev[i]));
     const verts: { p: number[]; cl: LineFeature }[] = [];
     for (const w of chain) {
       const owner = origOfChain(w);
@@ -1844,20 +1929,15 @@ export function extractFeatures(
     ): [number, number] | null => {
       const mPerLon = (111_320 * cosLat) / 1e7;
       const mPerLat = 111_320 / 1e7;
-      const left = rayExitInArea(
+      return lateralIntervalInArea(
         sample,
-        [nx / mPerLon, ny / mPerLat],
+        nx,
+        ny,
+        mPerLon,
+        mPerLat,
         area,
         maxRay,
       );
-      const right = rayExitInArea(
-        sample,
-        [-nx / mPerLon, -ny / mPerLat],
-        area,
-        maxRay,
-      );
-      if (left === null || right === null) return null;
-      return [left, right];
     };
     const EPS_M = 0.3;
     const nSamples = Math.min(120, Math.max(8, Math.round(total / 4)));
@@ -1892,7 +1972,23 @@ export function extractFeatures(
         cl: ownerAt(t),
       });
     }
-    if (raw.length < 3) return raw;
+    // samples of a way the chain traverses REVERSED carry the chain's
+    // normal and left/right split; flip them back so every consumer sees
+    // the sample in the OWNING WAY's own orientation (left/right must
+    // match the way's tags: parking:left etc.)
+    const orient = (
+      s: SplineSampleInfo & { cl: LineFeature },
+    ): SplineSampleInfo & { cl: LineFeature } =>
+      revByOrig.get(s.cl)
+        ? {
+            ...s,
+            nx: -s.nx,
+            ny: -s.ny,
+            leftM: s.rightM,
+            rightM: s.leftM,
+          }
+        : s;
+    if (raw.length < 3) return raw.map(orient);
     // ---- pass 2: re-center on the geometric midline ----
     // The mapped centerline can be SHIFTED by the mapper (jogging the way
     // where parking sides change, honoring placement). The AREA boundary
@@ -1937,9 +2033,10 @@ export function extractFeatures(
       const tl = Math.hypot(tx, ty);
       if (tl === 0) { raw2.push(raw[i]); continue; }
       const nx = -ty / tl, ny = tx / tl; // metric unit normal at the midline
-      const qx = m[0] / (1e-7 * 111_320 * cosLat);
-      const qy = m[1] / (1e-7 * 111_320);
-      const m2 = measureAt([qx, qy], nx, ny);
+      // measure from the sample's own point (pt keeps the drawn curve):
+      // leftM/rightM must stay relative to pt, or downstream consumers
+      // (the rectangle fit) read them against the wrong reference
+      const m2 = measureAt(raw[i].pt, nx, ny);
       if (!m2) { raw2.push(raw[i]); continue; }
       raw2.push({
         ...raw[i],
@@ -2014,13 +2111,13 @@ export function extractFeatures(
         Math.abs(s.leftM - medL) > 0.25 * medL ||
         Math.abs(s.rightM - medR) > 0.25 * medR,
     );
-    if (!bad.some((b) => b)) return final;
+    if (!bad.some((b) => b)) return final.map(orient);
     let lo = 0;
     while (lo < bad.length && bad[lo]) lo++;
     let hi = bad.length;
     while (hi > lo && bad[hi - 1]) hi--;
     const kept = final.slice(lo, hi);
-    if (kept.length < 3) return final;
+    if (kept.length < 3) return final.map(orient);
     const lefts: (number | null)[] = kept.map((s, i) =>
       bad[lo + i] ? null : s.leftM,
     );
@@ -2052,11 +2149,13 @@ export function extractFeatures(
     };
     fill(lefts);
     fill(rights);
-    return kept.map((s, i) => ({
-      ...s,
-      leftM: lefts[i] as number,
-      rightM: rights[i] as number,
-    }));
+    return kept.map((s, i) =>
+      orient({
+        ...s,
+        leftM: lefts[i] as number,
+        rightM: rights[i] as number,
+      }),
+    );
   };
 
   for (const ways of groups.values()) {
@@ -2080,7 +2179,24 @@ export function extractFeatures(
     for (const p of pieces) {
       const sp = splineByArea.get(p.area);
       if (!sp) continue;
-      p.spline = sp.filter((s) => s.cl === p.cl).map((s) => ({
+      // CONTIGUOUS index range of the spline samples owned by this way;
+      // the samples of the neighboring ways (same area) pad the range by
+      // one sample on each side so the drawn boundary MEETS the neighbor
+      // piece's — without the padding, a one-sample gap (~4 m) would open
+      // at every way seam inside one area
+      let lo = -1,
+        hi = -1;
+      for (let i = 0; i < sp.length; i++) {
+        if (sp[i].cl !== p.cl) continue;
+        if (lo < 0) lo = i;
+        hi = i;
+      }
+      if (lo < 0) continue;
+      const pad = (i: number): boolean =>
+        i >= 0 && i < sp.length && sp[i].cl !== p.cl;
+      const from = pad(lo - 1) ? lo - 1 : lo;
+      const to = pad(hi + 1) ? hi + 1 : hi;
+      p.spline = sp.slice(from, to + 1).map((s) => ({
         pt: s.pt,
         nx: s.nx,
         ny: s.ny,
@@ -2088,26 +2204,58 @@ export function extractFeatures(
         rightM: s.rightM,
       }));
     }
-    // PER-PIECE lane width: each piece splits its OWN measured width
-    // evenly among its units (traffic + parking lanes), so the layout
-    // follows the local road width and every piece fills its road exactly
-    // (a 12 m piece with 4 units gets 3 m lanes, the neighbouring 12 m
-    // piece with 3 units gets 4 m lanes)
-    // even split of the piece's width over all its units (traffic+parking)
+    // FIT THE ROAD MODEL per piece: an extruded rectangle with the
+    // piece's units (traffic lanes + parking strips), evenly sized,
+    // centered on the mapped centerline and shifted sideways to maximize
+    // covered highway area minus spill outside it. The fitted rectangle
+    // REPLACES the piece's measured span: the layout no longer follows
+    // boundary dents (bus platforms, cutouts) — one straight extrusion
+    // per piece is the robust shape the OSM area actually describes,
+    // and the lateral shift aligns the mapped centerline with the road's
+    // true center where the mapper jogged it
+    for (const p of pieces) {
+      const units =
+        p.cl.lanes! +
+        (p.cl.parkingLeft ? 1 : 0) +
+        (p.cl.parkingRight ? 1 : 0);
+      const sp = p.spline;
+      if (!sp || sp.length < 2) continue;
+      const { w, s: shift } = fitRoadRectangle(sp, units);
+      if (!(w > 0) || !isFinite(w) || !isFinite(shift)) continue;
+      p.fitW = w;
+      p.fitShift = shift;
+    }
+    // FITTED edges of the piece's road-model rectangle, in the mapped-
+    // centerline meters-left convention (shift + h / h - shift); pieces
+    // without a fit keep their measured edges
+    const fitLeftM = (p: MarkingSample & { cl: LineFeature }): number =>
+      p.fitW !== undefined
+        ? p.fitShift! + (unitsOf(p) * p.fitW) / 2
+        : p.leftM;
+    const fitRightM = (p: MarkingSample & { cl: LineFeature }): number =>
+      p.fitW !== undefined
+        ? (unitsOf(p) * p.fitW) / 2 - p.fitShift!
+        : p.rightM;
+    const unitsOf = (p: MarkingSample & { cl: LineFeature }): number =>
+      p.cl.lanes! +
+      (p.cl.parkingLeft ? 1 : 0) +
+      (p.cl.parkingRight ? 1 : 0);
+    // fitted unit width of the piece's road-model rectangle (falling
+    // back to the even split of its measured width when no spline fit
+    // succeeded); the layout is the FIT, not the boundary measurement
     const laneWOf = (p: MarkingSample & { cl: LineFeature }): number =>
-      (p.leftM + p.rightM) /
-      (p.cl.lanes! + (p.cl.parkingLeft ? 1 : 0) + (p.cl.parkingRight ? 1 : 0));
+      p.fitW ?? (p.leftM + p.rightM) / unitsOf(p);
     // the through-lane width when the parking strips absorb the remaining
     // road width instead of narrowing the traffic lanes: total minus one
     // parking unit per side, split over the traffic lanes
     const trafficLaneWOf = (p: MarkingSample & { cl: LineFeature }): number => {
       const park = (p.cl.parkingLeft ? 1 : 0) + (p.cl.parkingRight ? 1 : 0);
       const unitsW = laneWOf(p);
-      return (p.leftM + p.rightM - park * unitsW) / p.cl.lanes!;
+      return (fitLeftM(p) + fitRightM(p) - park * unitsW) / p.cl.lanes!;
     };
     // left traffic edge of a piece (its parking lane virtually removed)
     const trafficLeftM = (p: MarkingSample & { cl: LineFeature }): number =>
-      p.leftM - (p.cl.parkingLeft ? laneWOf(p) : 0);
+      fitLeftM(p) - (p.cl.parkingLeft ? laneWOf(p) : 0);
     // continuity anchor in METERS: the position of the direction border
     // (solid line between forward and backward lanes), or — on purely
     // one-way roads — the left edge of the leftmost lane. The solid border
@@ -2144,7 +2292,7 @@ export function extractFeatures(
       const anchorM = median(
         borderPieces.map((p) => {
           const park = p.cl.parkingRight ? laneWOf(p) : 0;
-          return p.rightM - park - fwdOf(p.cl) * laneWOf(p);
+          return fitRightM(p) - park - fwdOf(p.cl) * laneWOf(p);
         }),
       );
       anchorOf = () => anchorM;
@@ -2167,6 +2315,11 @@ export function extractFeatures(
       // lanes added on the LEFT anchor on the RIGHT edge, so the right
       // lanes continue; lanes added on BOTH sides (centerline stays)
       // anchor on the centerline itself, continuous outwards from it
+      // the growth-side analysis needs the MEASURED road edges: each
+      // piece's FIT spans only its own units (a 2-lane piece's rectangle
+      // is narrower than a 5-lane piece's), so comparing fitted edges
+      // would misread the unit-count change as road growth. The measured
+      // edges span the full area at each piece — the objective geometry
       const edges = pieces.map((p) => ({ l: trafficLeftM(p), r: p.rightM }));
       // max edge movement between any two pieces
       let dl = 0,
@@ -2359,14 +2512,23 @@ export function extractFeatures(
         // continuously outwards from it
         laneLeftM = anchorOf(p) - (p.cl.lanes! * laneW) / 2;
       }
-      // clamp into this piece's measured span so markings never extend
-      // past the road edge even where the centerline wanders off-center;
-      // one-way pieces reserve the parking strips outside the block
+      // clamp so markings never extend past the road edge. BIDIRECTIONAL
+      // pieces clamp into their FITTED rectangle — the border continuity
+      // is the fit's product and the rectangle is where the road is.
+      // ONE-WAY pieces clamp into their MEASURED span instead: there the
+      // outermost lane carries the continuity (anchored on the measured
+      // road edge), and a narrow fitted rectangle (fewer units than the
+      // area holds, e.g. a 2-lane way across a wide mouth) must not
+      // cut the anchored outer lane off the road
       const blockW = p.cl.lanes! * laneW;
       const parkLeft = bidirectional ? 0 : p.cl.parkingLeft ? laneW : 0;
       const parkRight = bidirectional ? 0 : p.cl.parkingRight ? laneW : 0;
-      const minLeft = blockW + parkRight - p.rightM;
-      const maxLeft = p.leftM - parkLeft;
+      const minLeft = bidirectional
+        ? blockW + parkRight - fitRightM(p)
+        : blockW + parkRight - p.rightM;
+      const maxLeft = bidirectional
+        ? fitLeftM(p) - parkLeft
+        : p.leftM - parkLeft;
       if (laneLeftM < minLeft) laneLeftM = minLeft;
       if (laneLeftM > maxLeft) laneLeftM = maxLeft;
       // stop line geometry, ONE PER SIGNAL NODE on this piece: start at
@@ -2428,8 +2590,8 @@ export function extractFeatures(
         laneW,
         laneLeftM,
         laneRightM: laneLeftM + p.cl.lanes! * laneW,
-        roadLeftM: p.leftM,
-        roadRightM: p.rightM,
+        roadLeftM: fitLeftM(p),
+        roadRightM: fitRightM(p),
         spline: p.spline,
         lanesFwd: fwd,
         areaIds: [p.area.id],

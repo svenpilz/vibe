@@ -107,14 +107,30 @@ For every centerline (`type=centerline`) with `lanes >= 2`, `lane_markings != no
 runs inside a non-junction highway area, one marking piece is produced **per
 (way, area section)**. Junction areas never contribute pieces.
 
-**Width measurement.** For each (way, area) piece, up to 12 segments whose midpoints
-lie inside the area are sampled (evenly spaced when more exist; segments strictly
-inside preferred over boundary-touching ones). At each sample, two rays are cast
-orthogonally to the centerline until they leave the area (coarse scan, then binary
-refinement), converted to meters (§1). The piece's road span is the **median** of the
-sampled left and right edges — long curving ways follow their local geometry instead
-of one smoothed measurement. This works even when the centerline is not the
-geometric center of the road.
+**Road-model fit (width and centerline).** Lane markings are not measured
+per ray cast — they are the result of fitting an extruded **road model** to
+the highway area. For each (way, area) piece a densified centerline spline is
+sampled (~4 m), and at each sample the lateral cross-section through the area
+is probed from the sample point outwards (bounded metric steps + binary
+refinement, so narrow boundary features cannot be jumped). The piece's model
+is a **rectangle** of its width units (traffic lanes + parking strips, all
+evenly sized — a straight road would be exactly this rectangle), extruded along
+the mapped centerline with normal offsetting for curves. The fit chooses the
+unit width `w` and lateral shift `s` that maximize covered highway area minus
+the length spilling outside it, over a trimmed majority of the samples —
+minority dents (bus platforms, cutouts) and minority widenings (junction
+mouths) both vanish, and among equally-optimal shifts the rectangle centers
+itself on the measured area midline. The fitted rectangle replaces the
+piece's measured span, so the markings stay straight and parallel even where
+the area boundary is jagged; where the mapper jogged the centerline
+(parking-side changes), the fit re-aligns the block with the road.
+Continuity then differs by road type:
+- **Bidirectional roads** carry the solid direction border — its offset is the
+  median of the pieces' natural border positions, kept identical on every
+  piece: the center line is one continuous line over the whole road.
+- **One-way roads** have no border; the block anchors on the measured road
+  edge on the side that did **not** move where the road grows, so the
+  outermost lane continues across lane-count changes.
 
 **Parking lanes.** A parking lane consumes road width but does not count as a traffic
 lane. It is recognised from three taggings:
