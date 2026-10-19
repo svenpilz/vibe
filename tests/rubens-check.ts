@@ -1,6 +1,10 @@
 /**
- * One-off validation against real Overpass data around way 1122774351
- * (Rubensstraße, Berlin). Not part of npm test.
+ * Regression: exact Overpass snapshot of Rubensstraße (ways 4463559 +
+ * 1122774349..352). The road is STRAIGHT with parking sides changing
+ * between ways (both/left/both/right) and bus platforms denting the
+ * area boundary. The extracted lane block must stay straight: the
+ * mapped centerline's parking-induced jogs and the platform dents must
+ * not bend the markings.
  */
 import { createOSMData } from "../src/osm-pbf";
 import { extractFeatures } from "../src/extract";
@@ -77,19 +81,86 @@ area([[52.4760068,13.3430184],[52.4760028,13.3429390],[52.4759984,13.3428541],[5
 
 const result = extractFeatures(data);
 const lm = result.laneMarkings.filter((m) => m.name === "Rubensstraße");
-lm.sort((a, b) => a.coords[0][1] - b.coords[0][1]);
-console.log(`${lm.length} Rubensstraße marking pieces\n`);
-console.log("id(lat0)      park(L/R)  laneW    laneLeftM  border-offset");
-const border: number[] = [];
-for (const p of lm) {
-  const off = -p.laneLeftM! + p.lanesFwd! * p.laneW!;
-  border.push(off);
-  console.log(
-    (p.coords[0][1] / 1e7).toFixed(7).slice(3) +
-    `  ${p.parkingLeft ? "L" : "-"}${p.parkingRight ? "R" : "-"}        ` +
-    `${p.laneW!.toFixed(3)}    ${p.laneLeftM!.toFixed(3)}      ${off.toFixed(3)}`);
+
+let failures = 0;
+function check(name: string, cond: boolean, detail?: string) {
+  if (cond) console.log(`  ok  ${name}`);
+  else {
+    failures++;
+    console.error(`FAIL  ${name}${detail ? " — " + detail : ""}`);
+  }
 }
-const laneWs = new Set(lm.map((p) => p.laneW!.toFixed(4)));
-const borders = new Set(border.map((o) => o.toFixed(4)));
-console.log(`\ndistinct lane widths : ${[...laneWs].join(", ") || "-"}`);
-console.log(`distinct border off. : ${[...borders].join(", ") || "-"}`);
+
+check("marking pieces extracted", lm.length >= 5, `pieces:${lm.length}`);
+
+// boundary-1 straightness per piece: midline re-centering + robust
+// smoothing must keep the drawn boundaries straight despite the
+// platform dents and the parking-change way jogs
+const cosLat = Math.cos(52.475 * (Math.PI / 180));
+for (const p of lm) {
+  const sp = p.spline ?? [];
+  if (sp.length < 4) continue;
+  const pts = sp.map((s) => [
+    s.pt[0] * (1e-7 * 111320 * cosLat),
+    s.pt[1] * (1e-7 * 111320),
+  ]);
+  const units =
+    p.lanes! + (p.parkingLeft ? 1 : 0) + (p.parkingRight ? 1 : 0);
+  const line = pts.map((q, i) => {
+    const s = sp[i];
+    const w = (s.leftM + s.rightM) / units;
+    const d = s.leftM - (p.parkingLeft ? w : 0) - w;
+    return [q[0] + s.nx * d, q[1] + s.ny * d];
+  });
+  const n = line.length;
+  const mx = line.reduce((a, b) => a + b[0], 0) / n;
+  const my = line.reduce((a, b) => a + b[1], 0) / n;
+  let sxx = 0,
+    sxy = 0,
+    syy = 0;
+  for (const q of line) {
+    sxx += (q[0] - mx) ** 2;
+    sxy += (q[0] - mx) * (q[1] - my);
+    syy += (q[1] - my) ** 2;
+  }
+  const theta = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+  const ux = Math.cos(theta),
+    uy = Math.sin(theta);
+  let maxDev = 0;
+  for (const q of line) {
+    const dev = Math.abs(-uy * (q[0] - mx) + ux * (q[1] - my));
+    if (dev > maxDev) maxDev = dev;
+  }
+  check(
+    `piece ${p.id}: boundary straight (< 0.6 m deviation)`,
+    maxDev < 0.6,
+    `maxDev:${maxDev.toFixed(2)} m over ${n} samples`,
+  );
+}
+// spans must ignore ONE-SIDED platform dents (mapping artifacts):
+// pieces outside the bus-stop zone stay within 0.8 m of the road-wide
+// median span. The bus-stop piece itself (w1122774351, staggered
+// platforms on both sides) genuinely narrows and is exempt
+const spans = lm
+  .filter((p) => p.id !== "w5")
+  .flatMap((p) => (p.spline ?? []).map((s) => s.leftM + s.rightM));
+const medSpan = [...spans].sort((a, b) => a - b)[Math.floor(spans.length / 2)];
+for (const p of lm) {
+  if (p.id === "w5") continue;
+  const sp = p.spline ?? [];
+  if (!sp.length) continue;
+  const worst = Math.max(
+    ...sp.map((s) => Math.abs(s.leftM + s.rightM - medSpan)),
+  );
+  check(
+    `piece ${p.id}: span ignores one-sided platform dents (< 0.8 m from median)`,
+    worst < 0.8,
+    `worst:${worst.toFixed(2)} med:${medSpan.toFixed(2)}`,
+  );
+}
+
+if (failures > 0) {
+  console.error(`${failures} rubens regression test(s) failed`);
+  process.exit(1);
+}
+console.log("all rubens regression tests passed");

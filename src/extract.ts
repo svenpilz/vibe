@@ -1892,24 +1892,135 @@ export function extractFeatures(
         cl: ownerAt(t),
       });
     }
-    if (process.env.DBG_CHAIN) console.error(`DBG RAW n=${raw.length} of ${nSamples}`);
     if (raw.length < 3) return raw;
+    // ---- pass 2: re-center on the geometric midline ----
+    // The mapped centerline can be SHIFTED by the mapper (jogging the way
+    // where parking sides change, honoring placement). The AREA boundary
+    // is objective: the midline between the two measured edges is a
+    // property of the road, not of the mapping. Re-measure from it so
+    // the split (leftM/rightM) stops wobbling with the way.
+    // Robust smoothing per side (moving median): boundary DENTS (bus
+    // platforms, cutouts) are minority outliers and vanish, while real
+    // widenings (span changes with lane counts) survive.
+    const midPts: { p: number[] }[] = raw.map((s) => {
+      // boundary hit points in metric coords: p +- normal * dist
+      const nxq = s.nx, nyq = s.ny; // metric unit normal
+      const lx = s.pt[0] * (1e-7 * 111_320 * cosLat) - nxq * s.leftM;
+      const ly = s.pt[1] * (1e-7 * 111_320) - nyq * s.leftM;
+      const rx = s.pt[0] * (1e-7 * 111_320 * cosLat) + nxq * s.rightM;
+      const ry = s.pt[1] * (1e-7 * 111_320) + nyq * s.rightM;
+      return { p: [(lx + rx) / 2, (ly + ry) / 2] };
+    });
+    // smooth the midline with a moving average over the arc
+    const midSmoothed = midPts.map((m, i) => {
+      if (!m) return null;
+      const W = 2;
+      let sx = 0, sy = 0, n = 0;
+      for (let j = Math.max(0, i - W); j <= Math.min(midPts.length - 1, i + W); j++) {
+        const mj = midPts[j];
+        if (mj) { sx += mj.p[0]; sy += mj.p[1]; n++; }
+      }
+      return n > 0 ? [sx / n, sy / n] : m.p;
+    });
+    // re-measure from the smoothed midline: radial pairs via the LOCAL
+    // midline tangent (circle-fit-free: midline points are ~4 m apart,
+    // the chord direction is a good local tangent)
+    const raw2: (SplineSampleInfo & { cl: LineFeature })[] = [];
+    for (let i = 0; i < raw.length; i++) {
+      const m = midSmoothed[i];
+      if (!m) { raw2.push(raw[i]); continue; }
+      // local tangent from neighbours on the smoothed midline
+      const prev = midSmoothed[Math.max(0, i - 1)];
+      const next = midSmoothed[Math.min(midSmoothed.length - 1, i + 1)];
+      if (!prev || !next) { raw2.push(raw[i]); continue; }
+      const tx = next[0] - prev[0], ty = next[1] - prev[1];
+      const tl = Math.hypot(tx, ty);
+      if (tl === 0) { raw2.push(raw[i]); continue; }
+      const nx = -ty / tl, ny = tx / tl; // metric unit normal at the midline
+      const qx = m[0] / (1e-7 * 111_320 * cosLat);
+      const qy = m[1] / (1e-7 * 111_320);
+      const m2 = measureAt([qx, qy], nx, ny);
+      if (!m2) { raw2.push(raw[i]); continue; }
+      raw2.push({
+        ...raw[i],
+        nx,
+        ny,
+        leftM: m2[0],
+        rightM: m2[1],
+      });
+    }
+    // Hampel-style robust smoothing per side (window ~9 samples = ~36 m):
+    // a sample whose edge deviates more than 1.2 m from its window
+    // median is replaced by that median. INWARD spikes (platforms,
+    // bollard cutouts, kerb dents - the edge cuts INTO the road) are
+    // always replaced; OUTWARD deviations are kept only at the very ends
+    // of the chain (junction mouths widen outward for real). Genuine
+    // widenings (lane-count changes) span whole windows and their
+    // window medians follow them, so they survive
+    const smoothSide = (vals: number[], other: number[]): number[] => {
+      const W = 6;
+      const out = [...vals];
+      for (let i = 0; i < vals.length; i++) {
+        const win: number[] = [];
+        for (
+          let j = Math.max(0, i - W);
+          j <= Math.min(vals.length - 1, i + W);
+          j++
+        )
+          win.push(vals[j]);
+        const med = median2(win);
+        if (med - vals[i] > 1.2 && Math.abs(other[i] - median2(
+          (() => {
+            const w2: number[] = [];
+            for (
+              let j = Math.max(0, i - W);
+              j <= Math.min(other.length - 1, i + W);
+              j++
+            )
+              w2.push(other[j]);
+            return w2;
+          })(),
+        )) < 1.0) {
+          // ONE-SIDED inward dent with the other side stable: a mapping
+          // artifact (platform, cutout on one boundary) — the true road
+          // edge is farther out. When BOTH sides dent together the road
+          // genuinely narrows (facing platforms) and the dent is kept
+          out[i] = med;
+        } else if (vals[i] - med > 1.2) {
+          // outward spike: keep only at the chain ends (mouth widening)
+          if (i > W && i < vals.length - 1 - W) out[i] = med;
+        }
+      }
+      return out;
+    };
+    const L = raw2.map((s) => s.leftM);
+    const R = raw2.map((s) => s.rightM);
+    const smL = smoothSide(L, R);
+    const smR = smoothSide(R, L);
+    const smoothed = raw2.map((s, i) => ({
+      ...s,
+      leftM: smL[i],
+      rightM: smR[i],
+    }));
+    // keep the ORIGINAL sample positions (the drawn curve) but with the
+    // re-centered, smoothed edges
+    const final = smoothed;
     // per-side outlier repair (boundary tips / junction mouths truncate
     // one side); interior outliers interpolate, end runs truncate
-    const medL = median2(raw.map((s) => s.leftM));
-    const medR = median2(raw.map((s) => s.rightM));
-    const bad = raw.map(
+    const medL = median2(final.map((s) => s.leftM));
+    const medR = median2(final.map((s) => s.rightM));
+    const bad = final.map(
       (s) =>
         Math.abs(s.leftM - medL) > 0.25 * medL ||
         Math.abs(s.rightM - medR) > 0.25 * medR,
     );
-    if (!bad.some((b) => b)) return raw;
+    if (!bad.some((b) => b)) return final;
     let lo = 0;
     while (lo < bad.length && bad[lo]) lo++;
     let hi = bad.length;
     while (hi > lo && bad[hi - 1]) hi--;
-    const kept = raw.slice(lo, hi);
-    if (kept.length < 3) return raw;
+    const kept = final.slice(lo, hi);
+    if (kept.length < 3) return final;
     const lefts: (number | null)[] = kept.map((s, i) =>
       bad[lo + i] ? null : s.leftM,
     );

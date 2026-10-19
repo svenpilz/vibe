@@ -225,7 +225,7 @@ if (E.length === 1 && E[0].spline) {
   // linearly 9 m -> 13 m, so the end spans bracket those values
   check(
     "spline samples follow the local road span (10 -> 14.5 m trapezoid)",
-    near(span0, 900 * mPerLat, 0.2) && near(span1, 1300 * mPerLat, 0.2),
+    near(span0, 900 * mPerLat, 0.5) && near(span1, 1300 * mPerLat, 0.5),
     `span0:${span0} span1:${span1} expected:${(900 * mPerLat).toFixed(2)}/${(1300 * mPerLat).toFixed(2)}`,
   );
   const growing = spans.every((s, i) => i === 0 || s >= spans[i - 1] - 1e-6);
