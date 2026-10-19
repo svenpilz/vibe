@@ -320,4 +320,128 @@ if (failures > 0) {
   }
 }
 
+// a road area bordered by TWO junction areas (one at each end): the stop
+// line must sit at the junction CONTAINING the signal node, never at the
+// opposite end. The junction at the signal's far end is created FIRST so
+// that a "first junction wins" picker would pick the wrong one
+{
+  // signal at the road area's right end, inside the RIGHT junction
+  const sk = node(160000, 0, { highway: "traffic_signals" });
+  way([node(150000, 0), node(155000, 0), sk], {
+    highway: "tertiary",
+    surface: "asphalt",
+    lanes: "2",
+    name: "K-Stra\u00dfe",
+    oneway: "yes",
+  });
+  // FAR junction created first (wrong-end candidate), overlapping the
+  // road area's left end by a sliver
+  const kfa = node(149800, -450),
+    kfb = node(150200, -450),
+    kfc = node(150200, 450),
+    kfd = node(149800, 450);
+  way([kfa, kfb, kfc, kfd, kfa], {
+    "area:highway": "tertiary",
+    junction: "yes",
+  });
+  // road area spanning between the two junctions
+  const kra = node(150200, -450),
+    krb = node(160000, -450),
+    krc = node(160000, 450),
+    krd = node(150200, 450);
+  way([kra, krb, krc, krd, kra], {
+    "area:highway": "tertiary",
+    surface: "asphalt",
+  });
+  // NEAR junction containing the signal node, created LAST
+  const kna = node(160000, -450),
+    knb = node(162000, -450),
+    knc = node(162000, 450),
+    knd = node(160000, 450);
+  way([kna, knb, knc, knd, kna], {
+    "area:highway": "tertiary",
+    junction: "yes",
+  });
+  const res3 = extractFeatures(data);
+  const k = res3.laneMarkings.find((m) => m.name === "K-Stra\u00dfe");
+  check(
+    "two junctions: stop line present",
+    k !== undefined && k.stopLineQ !== undefined && k.stopLineQ.length >= 2,
+  );
+  if (k?.stopLineQ) {
+    // every stop line point must lie at the NEAR junction mouth
+    // (x = 160000), never at the far end (x = 150200)
+    const maxAbsDev = Math.max(
+      ...k.stopLineQ.map((p) => Math.abs(p[0] - 160000)),
+    );
+    check(
+      "two junctions: stop line at the signal's junction end",
+      maxAbsDev < 200,
+      `max deviation from x=160000: ${maxAbsDev}`,
+    );
+  }
+  // same scenario for the standalone (no-lanes) stop line output
+  const ks = node(175000, 0, { highway: "traffic_signals" });
+  way([node(165000, 0), node(170000, 0), ks], {
+    highway: "residential",
+    surface: "asphalt",
+    name: "L-Stra\u00dfe",
+  });
+  const lfa = node(164800, -350),
+    lfb = node(165200, -350),
+    lfc = node(165200, 350),
+    lfd = node(164800, 350);
+  way([lfa, lfb, lfc, lfd, lfa], {
+    "area:highway": "residential",
+    junction: "yes",
+  });
+  const lra = node(165200, -350),
+    lrb = node(175000, -350),
+    lrc = node(175000, 350),
+    lrd = node(165200, 350);
+  way([lra, lrb, lrc, lrd, lra], {
+    "area:highway": "residential",
+    surface: "asphalt",
+  });
+  const lna = node(175000, -350),
+    lnb = node(177000, -350),
+    lnc = node(177000, 350),
+    lnd = node(175000, 350);
+  way([lna, lnb, lnc, lnd, lna], {
+    "area:highway": "residential",
+    junction: "yes",
+  });
+  const res4 = extractFeatures(data);
+  const l = res4.laneMarkings.find((m) => m.name === "L-Stra\u00dfe");
+  if (l?.stopLineQ) {
+    const maxAbsDev2 = Math.max(
+      ...l.stopLineQ.map((p) => Math.abs(p[0] - 175000)),
+    );
+    check(
+      "two junctions (no-lanes): stop line at the signal's junction end",
+      maxAbsDev2 < 200,
+      `max deviation from x=175000: ${maxAbsDev2}`,
+    );
+  } else {
+    // the L-Stra\u00dfe stop line is the one near x=175000
+    const sl = res4.stopLines.find(
+      (s) => s.bbox[0] > 170000 && s.bbox[2] < 180000,
+    );
+    check(
+      "two junctions (standalone): stop line present",
+      sl !== undefined,
+      `count near signal=${res4.stopLines.filter((s) => s.bbox[0] > 170000 && s.bbox[2] < 180000).length}`,
+    );
+    if (sl) {
+      const maxAbsDev3 = Math.max(
+        ...sl.line.map((p) => Math.abs(p[0] - 175000)),
+      );
+      check(
+        "two junctions (standalone): stop line at the signal's end",
+        maxAbsDev3 < 200,
+        `max deviation from x=175000: ${maxAbsDev3}`,
+      );
+    }
+  }
+}
 console.log("all stop line tests passed");

@@ -1127,6 +1127,7 @@ export function extractFeatures(
       idx: number;
       side: "start" | "mid" | "end";
       sigDir: "forward" | "backward" | "both" | undefined;
+      sigIdx: number;
     }[]
   >();
   for (const cl of stopWays) {
@@ -1158,7 +1159,7 @@ export function extractFeatures(
         arr = [];
         stopLineAt.set(cl, arr);
       }
-      arr.push({ idx: ri, side, sigDir });
+      arr.push({ idx: ri, side, sigDir, sigIdx: ri });
     }
   }
   // resolve each signal to its stop position: walk from the signal node
@@ -1196,6 +1197,7 @@ export function extractFeatures(
       idx: number;
       side: "start" | "mid" | "end";
       sigDir: "forward" | "backward" | "both" | undefined;
+      sigIdx: number;
       area: AreaFeature;
     }[]
   >();
@@ -1223,6 +1225,7 @@ export function extractFeatures(
             idx: i,
             side: sl.side,
             sigDir: sl.sigDir,
+            sigIdx: sl.sigIdx,
             area: hit,
           });
           break;
@@ -1239,17 +1242,42 @@ export function extractFeatures(
   // bidirectional lane-bearing ways it is laterally clipped to the
   // stopping direction's half (forward = right half, backward = left)
   const junctionAreaList = areas.filter((a) => a.junction);
-  const findJunction = (road: AreaFeature): AreaFeature | null => {
+  // pick THE junction area the stop line belongs to: the one CONTAINING
+  // the traffic_signals node wins (a road area can border several
+  // junction areas, e.g. one at each end - the wrong pick would draw
+  // the stop line at the far end); among junctions sharing a boundary
+  // with the road area, the nearest to the signal node wins
+  const findJunction = (
+    road: AreaFeature,
+    sigQ: number[] | undefined,
+  ): AreaFeature | null => {
+    if (sigQ) {
+      for (const ja of junctionAreaList)
+        if (pointInAreaTolQ2(sigQ, ja)) return ja;
+    }
+    let best: AreaFeature | null = null;
+    let bestD = Infinity;
     for (const ja of junctionAreaList) {
       if (!bboxOverlap(ja.bbox, road.bbox)) continue;
-      if (sharedBoundaryQ(road, ja, 10).length >= 2) return ja;
+      const line = sharedBoundaryQ(road, ja, 10);
+      if (line.length < 2) continue;
+      if (!sigQ) return ja;
+      let d = Infinity;
+      for (const pt of line) {
+        const dd = (pt[0] - sigQ[0]) ** 2 + (pt[1] - sigQ[1]) ** 2;
+        if (dd < d) d = dd;
+      }
+      if (d < bestD) {
+        bestD = d;
+        best = ja;
+      }
     }
-    return null;
+    return best;
   };
   for (const [cl, sigs] of stopLineResolved) {
     if (laneCandidates.includes(cl)) continue;
     for (const sl of sigs) {
-      const ja = findJunction(sl.area);
+      const ja = findJunction(sl.area, cl.coords[sl.sigIdx]);
       if (!ja) continue;
       const line = sharedBoundaryQ(sl.area, ja, 10);
       if (line.length < 2) continue;
@@ -1670,12 +1698,32 @@ export function extractFeatures(
     }
     // junction adjacency + lane clipping for the stop line boundary
     const junctionAreasStop = areas.filter((a) => a.junction);
-    const findJunctionForStopLine = (road: AreaFeature): AreaFeature | null => {
+    const findJunctionForStopLine = (
+      road: AreaFeature,
+      sigQ: number[] | undefined,
+    ): AreaFeature | null => {
+      if (sigQ) {
+        for (const ja of junctionAreasStop)
+          if (pointInAreaTolQ2(sigQ, ja)) return ja;
+      }
+      let best: AreaFeature | null = null;
+      let bestD = Infinity;
       for (const ja of junctionAreasStop) {
         if (!bboxOverlap(ja.bbox, road.bbox)) continue;
-        if (sharedBoundaryQ(road, ja, 10).length >= 2) return ja;
+        const line = sharedBoundaryQ(road, ja, 10);
+        if (line.length < 2) continue;
+        if (!sigQ) return ja;
+        let d = Infinity;
+        for (const pt of line) {
+          const dd = (pt[0] - sigQ[0]) ** 2 + (pt[1] - sigQ[1]) ** 2;
+          if (dd < d) d = dd;
+        }
+        if (d < bestD) {
+          bestD = d;
+          best = ja;
+        }
       }
-      return null;
+      return best;
     };
     /**
      * Clip the shared-boundary polyline to the stopping half of the road:
@@ -1835,7 +1883,10 @@ export function extractFeatures(
       // boundary)
       let stopLineQ: Q[][] | undefined;
       if (stopLine && effectiveSide) {
-        const ja = findJunctionForStopLine(p.area);
+        const ja = findJunctionForStopLine(
+          p.area,
+          p.cl.coords[stopLine.sigIdx],
+        );
         if (ja) {
           const boundary = sharedBoundaryQ(p.area, ja, 10);
           if (boundary.length >= 2) {
