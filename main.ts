@@ -1208,8 +1208,38 @@ function drawLaneMarkings(cl: LineFeature) {
   const splineBase: [number, number][] | null = hasSpline
     ? sp!.map((s) => [lonToX(s.pt[0] / Q), latToY(s.pt[1] / Q)])
     : null;
+  // screen-space normals of the spline polyline: the offset direction
+  // must be perpendicular IN SCREEN SPACE, and offM * px (ground scale)
+  // then gives the metrically correct distance
   const splineNormals: [number, number][] | null = hasSpline
-    ? sp!.map((s) => [s.nx, s.ny] as [number, number])
+    ? (() => {
+        const b = sp!.map((s) => [lonToX(s.pt[0] / Q), latToY(s.pt[1] / Q)] as [number, number]);
+        const ns: [number, number][] = b.map((_, i) => {
+          let nx = 0,
+            ny = 0;
+          if (i > 0) {
+            const dx = b[i][0] - b[i - 1][0],
+              dy = b[i][1] - b[i - 1][1];
+            const l = Math.hypot(dx, dy);
+            if (l > 0) {
+              nx += -dy / l;
+              ny += dx / l;
+            }
+          }
+          if (i < b.length - 1) {
+            const dx = b[i + 1][0] - b[i][0],
+              dy = b[i + 1][1] - b[i][1];
+            const l = Math.hypot(dx, dy);
+            if (l > 0) {
+              nx += -dy / l;
+              ny += dx / l;
+            }
+          }
+          const l = Math.hypot(nx, ny);
+          return l > 0 ? ([nx / l, ny / l] as [number, number]) : ([0, 0] as [number, number]);
+        });
+        return ns;
+      })()
     : null;
   // meters-left convention: block spans laneLeftM (left edge) down to
   // laneLeftM - lanes*laneW (right edge); per sample the block is

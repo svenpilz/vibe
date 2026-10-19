@@ -1436,20 +1436,36 @@ export function extractFeatures(
       const rights: number[] = [];
       const [minX, minY, maxX, maxY] = area.bbox;
       const maxRay = Math.hypot(maxX - minX, maxY - minY) + 1000;
+      // nx/ny is a UNIT NORMAL IN METRIC SPACE; the quantized ray
+      // direction (nx/mPerLon, ny/mPerLat) has metric length 1, so the
+      // ray parameter t IS the distance in meters
       const measureAt = (
         sample: number[],
         nx: number,
         ny: number,
       ): [number, number] | null => {
-        const left = rayExitInArea(sample, [nx, ny], area, maxRay);
-        const right = rayExitInArea(sample, [-nx, -ny], area, maxRay);
-        if (left === null || right === null) return null;
         const mPerLon =
           (111_320 * Math.cos(((sample[1] / 1e7) * Math.PI) / 180)) / 1e7;
         const mPerLat = 111_320 / 1e7;
-        const rayM = (t: number, dx2: number, dy2: number): number =>
-          Math.hypot(dx2 * t * mPerLon, dy2 * t * mPerLat);
-        return [rayM(left, nx, ny), rayM(right, -nx, -ny)];
+        const dl = Math.hypot(
+          (nx / mPerLon) * mPerLon,
+          (ny / mPerLat) * mPerLat,
+        );
+        void dl;
+        const left = rayExitInArea(
+          sample,
+          [nx / mPerLon, ny / mPerLat],
+          area,
+          maxRay,
+        );
+        const right = rayExitInArea(
+          sample,
+          [-nx / mPerLon, -ny / mPerLat],
+          area,
+          maxRay,
+        );
+        if (left === null || right === null) return null;
+        return [left, right];
       };
       const median = (xs: number[]): number => {
         const s2 = [...xs].sort((a, b) => a - b);
@@ -1480,24 +1496,33 @@ export function extractFeatures(
           if (sample) break;
         }
         if (!sample) continue;
-        const nx = -dys / segLen,
-          ny = dxs / segLen;
-        const measured = measureAt(sample, nx, ny);
+        const mPerLonS =
+          (111_320 *
+            Math.cos(((sample[1] / 1e7) * Math.PI) / 180)) /
+          1e7;
+        const mPerLatS = 111_320 / 1e7;
+        const tx = (dxs / segLen) * mPerLonS,
+          ty = (dys / segLen) * mPerLatS;
+        const tl = Math.hypot(tx, ty);
+        const measured = measureAt(sample, -ty / tl, tx / tl);
         if (!measured) continue;
         lefts.push(measured[0]);
         rights.push(measured[1]);
       }
       // ---- spline centerline of this (way, area) piece ----
       // Fit a Catmull-Rom cubic spline through the way vertices that
-      // touch or lie inside the area, and sample it meaningfully (~4 m
-      // spacing along the arc, clamped to a sane sample count). The
-      // mapped centerline only approximates the real one, so the road
-      // span is MEASURED per sample: rays along the spline normal in
-      // both directions until they leave the area, in meters. Samples
-      // whose point is not strictly inside the area are dropped (start
-      // and end samples move an EPS tangentially INTO the area first —
-      // a sample exactly on the shared boundary edge would leak through
-      // it into the neighbour area and measure nonsense).
+      // touch or lie inside the area, in METRIC coordinates (meters,
+      // so tangents/normals are metrically correct), and sample it
+      // meaningfully (~4 m along the arc). At the two ends the missing
+      // outer control point is REFLECTED at the end vertex (a natural
+      // spline end condition) instead of duplicating the endpoint —
+      // duplication bends the curve far too much at start and end.
+      // The mapped centerline only approximates the real one, so the
+      // road span is MEASURED per sample: rays along the metric spline
+      // normal in both directions until they leave the area, in meters.
+      // Samples not strictly inside the area move an EPS tangentially
+      // into the area first (a sample on the shared boundary edge would
+      // leak through it into the neighbour area).
       const EPS = 30; // quantized units ≈ 0.3 m tangential inset
       const verts: number[][] = [];
       for (const c of cl.coords) {
@@ -1516,29 +1541,42 @@ export function extractFeatures(
       }
       const spline: SplineSample[] = [];
       if (verts.length >= 2) {
-        // parametrize by cumulative chord length
+        // metric working coordinates
+        const cosLat = Math.cos((verts[0][1] / 1e7) * (Math.PI / 180));
+        const MX = (lonQ: number): number => lonQ * 1e-7 * 111_320 * cosLat;
+        const MY = (latQ: number): number => latQ * 1e-7 * 111_320;
+        const mv = verts.map((c) => [MX(c[0]), MY(c[1])]);
+        // chord-length parametrization
         const cum: number[] = [0];
-        for (let i = 1; i < verts.length; i++)
+        for (let i = 1; i < mv.length; i++)
           cum.push(
-            cum[i - 1] +
-              Math.hypot(
-                verts[i][0] - verts[i - 1][0],
-                verts[i][1] - verts[i - 1][1],
-              ),
+            cum[i - 1] + Math.hypot(mv[i][0] - mv[i - 1][0], mv[i][1] - mv[i - 1][1]),
           );
         const total = cum[cum.length - 1];
         const ptAt = (t: number): { p: number[]; d: number[] } => {
-          // locate knot span
           let k = 1;
           while (k < cum.length - 1 && cum[k] < t) k++;
           const t0 = cum[k - 1],
             t1 = cum[k];
           const f = t1 - t0 > 0 ? (t - t0) / (t1 - t0) : 0;
-          const p0 = verts[Math.max(0, k - 2)],
-            p1 = verts[k - 1],
-            p2 = verts[k],
-            p3 = verts[Math.min(verts.length - 1, k + 1)];
-          // Catmull-Rom (uniform, chord-approximated)
+          // control points, with the ends REFLECTED (natural end
+          // condition: mirror p1 at p0 / p_{n-2} at p_{n-1})
+          const P = (idx: number): number[] =>
+            idx < 0
+              ? [
+                  2 * mv[0][0] - mv[1][0],
+                  2 * mv[0][1] - mv[1][1],
+                ]
+              : idx > mv.length - 1
+                ? [
+                    2 * mv[mv.length - 1][0] - mv[mv.length - 2][0],
+                    2 * mv[mv.length - 1][1] - mv[mv.length - 2][1],
+                  ]
+                : mv[idx];
+          const p0 = P(k - 2),
+            p1 = P(k - 1),
+            p2 = P(k),
+            p3 = P(k + 1);
           const f2 = f * f,
             f3 = f2 * f;
           const px =
@@ -1558,53 +1596,54 @@ export function extractFeatures(
             (-p0[0] +
               p2[0] +
               2 * (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * f +
-              3 * (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * f2) /
-            (t1 - t0 || 1);
+              3 * (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * f2);
           const dy =
             0.5 *
             (-p0[1] +
               p2[1] +
               2 * (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * f +
-              3 * (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * f2) /
-            (t1 - t0 || 1);
-          return {
-            p: [px, py],
-            d: [dx, dy],
-          };
+              3 * (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * f2);
+          return { p: [px, py], d: [dx, dy] };
         };
-        const nSamples = Math.min(
-          120,
-          Math.max(8, Math.round(total / 40000)),
-        );
+        const nSamples = Math.min(120, Math.max(8, Math.round(total / 4)));
         for (let s = 0; s <= nSamples; s++) {
-          let t = (total * s) / nSamples;
+          const t = (total * s) / nSamples;
           const { p, d } = ptAt(t);
           const dl = Math.hypot(d[0], d[1]);
           if (dl === 0) continue;
-          let px = p[0],
-            py = p[1];
+          // metric unit normal
+          const nx = -d[1] / dl,
+            ny = d[0] / dl;
+          // back to quantized for containment/ray tests
+          const qx = p[0] / (1e-7 * 111_320 * cosLat);
+          const qy = p[1] / (1e-7 * 111_320);
           // move start/end samples an EPS tangentially INTO the area
-          if (!pointInAreaQ([px, py], area)) {
-            const inT =
-              d[0] * (verts[verts.length - 1][0] - verts[0][0]) >= 0
-                ? EPS
-                : -EPS;
-            // nudge along the tangent towards the interior
-            const nudged = [px + (d[0] / dl) * inT, py + (d[1] / dl) * inT];
+          let qx2 = qx,
+            qy2 = qy;
+          if (!pointInAreaQ([qx2, qy2], area)) {
+            const ux = d[0] / dl,
+              uy = d[1] / dl;
+            // tangent towards the middle of the spline
+            const mid = ptAt(total / 2).p;
+            const towards =
+              (mid[0] - p[0]) * ux + (mid[1] - p[1]) * uy >= 0 ? 1 : -1;
+            const qstep = EPS;
+            const nudged = [
+              qx2 + (ux / (1e-7 * 111_320 * cosLat)) * qstep * towards,
+              qy2 + (uy / (1e-7 * 111_320)) * qstep * towards,
+            ];
             if (pointInAreaQ(nudged, area)) {
-              px = nudged[0];
-              py = nudged[1];
+              qx2 = nudged[0];
+              qy2 = nudged[1];
             } else {
               continue;
             }
           }
-          const nx = -d[1] / dl,
-            ny = d[0] / dl;
-          const m2 = measureAt([px, py], nx, ny);
+          const m2 = measureAt([qx2, qy2], nx, ny);
           if (!m2) continue;
           if (medSpan > 0 && m2[0] + m2[1] < 0.5 * medSpan) continue;
           spline.push({
-            pt: [Math.round(px), Math.round(py)],
+            pt: [Math.round(qx2), Math.round(qy2)],
             nx,
             ny,
             leftM: m2[0],
@@ -1612,6 +1651,7 @@ export function extractFeatures(
           });
         }
       }
+
       const splineOk = spline.length >= 2;
 
       if (lefts.length === 0) continue;
