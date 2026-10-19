@@ -125,6 +125,31 @@ if (piece?.spline) {
     }
   }
   check("spline samples are coordinate pairs", piece.spline.every((s) => Array.isArray(s.pt) && s.pt.length === 2));
+  // the middle of the road (the sharp way corner) must stay smooth too:
+  // no zigzag in the spline geometry relative to the way centerline
+  const cosLat = Math.cos((piece.coords[0][1] / 1e7) * (Math.PI / 180));
+  const mPerLon = (111_320 * cosLat) / 1e7;
+  const mPerLat = 111_320 / 1e7;
+  const wayM = piece.coords.map((c) => [c[0] * mPerLon, c[1] * mPerLat]);
+  const spM = piece.spline.map((s) => [s.pt[0] * mPerLon, s.pt[1] * mPerLat]);
+  let maxDev = 0;
+  for (const s of spM) {
+    let best = Infinity;
+    for (let i = 0; i + 1 < wayM.length; i++) {
+      const a = wayM[i], b = wayM[i + 1];
+      const dx = b[0] - a[0], dy = b[1] - a[1];
+      const l2 = dx * dx + dy * dy;
+      const t = Math.max(0, Math.min(1, ((s[0] - a[0]) * dx + (s[1] - a[1]) * dy) / (l2 || 1)));
+      const d = Math.hypot(s[0] - a[0] - t * dx, s[1] - a[1] - t * dy);
+      if (d < best) best = d;
+    }
+    if (best > maxDev) maxDev = best;
+  }
+  check(
+    "spline hugs the way centerline (max deviation < 1 m)",
+    maxDev < 1,
+    `maxDev:${maxDev.toFixed(2)} m`,
+  );
 }
 
 if (failures > 0) {

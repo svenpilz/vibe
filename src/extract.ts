@@ -1523,10 +1523,31 @@ export function extractFeatures(
       // Samples not strictly inside the area move an EPS tangentially
       // into the area first (a sample on the shared boundary edge would
       // leak through it into the neighbour area).
-      const EPS = 30; // quantized units ≈ 0.3 m tangential inset
+      const EPS_M = 0.3; // meters of tangential inset into the area
+      // vertices of every segment that belongs to this area section —
+      // INCLUDING a vertex that lies in the neighbouring (junction) area:
+      // the piece extends to the section boundary (the junction mouth),
+      // and dropping that vertex leaves the first metres of the piece
+      // without samples, so its markings are visibly missing
+      // vertices of every segment with ANY part inside this area —
+      // including a segment that only CROSSES the boundary (its midpoint
+      // may lie in the neighbouring junction area while its tail is in
+      // this section): dropping that vertex leaves the first metres of
+      // the piece — from the junction mouth to the first kept vertex —
+      // without samples, so its markings are visibly missing
       const verts: number[][] = [];
-      for (const c of cl.coords) {
-        if (pointInAreaQ(c, area) || pointInAreaTolQ2(c, area)) verts.push(c);
+      const touchesArea = (p: number[]): boolean =>
+        pointInAreaQ(p, area) || pointInAreaTolQ2(p, area);
+      for (let si = 1; si < cl.coords.length; si++) {
+        const a = cl.coords[si - 1],
+          b = cl.coords[si];
+        const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+        if (!touchesArea(a) && !touchesArea(b) && !touchesArea(mid))
+          continue;
+        for (const c of [a, b]) {
+          const last = verts[verts.length - 1];
+          if (!last || last[0] !== c[0] || last[1] !== c[1]) verts.push(c);
+        }
       }
       const medSpan =
         lefts.length > 0
@@ -1540,6 +1561,8 @@ export function extractFeatures(
         rightM: number;
       }
       const spline: SplineSample[] = [];
+      if (process.env.DBG_SPLINE)
+        console.error(`DBG WAY=${cl.id} AREA=${area.id} verts=${verts.length} [${verts.map((v) => (v[0]/1e7).toFixed(7) + "," + (v[1]/1e7).toFixed(7)).join(" | ")}] lefts=${lefts.length}`);
       if (verts.length >= 2) {
         // metric working coordinates
         const cosLat = Math.cos((verts[0][1] / 1e7) * (Math.PI / 180));
@@ -1617,29 +1640,29 @@ export function extractFeatures(
           // back to quantized for containment/ray tests
           const qx = p[0] / (1e-7 * 111_320 * cosLat);
           const qy = p[1] / (1e-7 * 111_320);
-          // move start/end samples an EPS tangentially INTO the area
-          let qx2 = qx,
-            qy2 = qy;
-          if (!pointInAreaQ([qx2, qy2], area)) {
-            const ux = d[0] / dl,
-              uy = d[1] / dl;
-            // tangent towards the middle of the spline
-            const mid = ptAt(total / 2).p;
-            const towards =
-              (mid[0] - p[0]) * ux + (mid[1] - p[1]) * uy >= 0 ? 1 : -1;
-            const qstep = EPS;
-            const nudged = [
-              qx2 + (ux / (1e-7 * 111_320 * cosLat)) * qstep * towards,
-              qy2 + (uy / (1e-7 * 111_320)) * qstep * towards,
-            ];
-            if (pointInAreaQ(nudged, area)) {
-              qx2 = nudged[0];
-              qy2 = nudged[1];
-            } else {
-              continue;
-            }
-          }
+          // EVERY sample moves an EPS tangentially into the area before
+          // measuring: a sample ON the shared boundary (a way vertex
+          // where a traffic-island tip or the neighbour section touches)
+          // has one ray exit immediately and measures a near-zero span,
+          // which bends the local lane layout. The nudge runs along the
+          // tangent towards the spline's middle, away from both ends
+          const ux = d[0] / dl,
+            uy = d[1] / dl;
+          const mid = ptAt(total / 2).p;
+          const towards =
+            (mid[0] - p[0]) * ux + (mid[1] - p[1]) * uy >= 0 ? 1 : -1;
+          const nudged = [
+            qx + (ux * EPS_M * towards) / (1e-7 * 111_320 * cosLat),
+            qy + (uy * EPS_M * towards) / (1e-7 * 111_320),
+          ];
+          if (!pointInAreaQ(nudged, area)) continue;
+          const qx2 = nudged[0],
+            qy2 = nudged[1];
           const m2 = measureAt([qx2, qy2], nx, ny);
+          if (process.env.DBG_SPLINE)
+            console.error(
+              `DBG s=${s}/${nSamples} span=${m2 ? (m2[0] + m2[1]).toFixed(2) : "null"} med=${medSpan.toFixed(2)} in=${pointInAreaQ([qx, qy], area)}`,
+            );
           if (!m2) continue;
           if (medSpan > 0 && m2[0] + m2[1] < 0.5 * medSpan) continue;
           spline.push({
@@ -1652,7 +1675,19 @@ export function extractFeatures(
         }
       }
 
-      const splineOk = spline.length >= 2;
+      // outlier rejection: a sample at a boundary tip or where an island
+      // pokes into the road measures a truncated span; keep only samples
+      // within +-35% of the median span, then re-fill the kept range
+      const splineFiltered = (() => {
+        if (spline.length < 3) return spline;
+        const spans = spline.map((s) => s.leftM + s.rightM);
+        const med = median(spans);
+        const kept = spline.filter(
+          (s, i) => Math.abs(spans[i] - med) <= 0.25 * med,
+        );
+        return kept.length >= 3 ? kept : spline;
+      })();
+      const splineOk = splineFiltered.length >= 2;
 
       if (lefts.length === 0) continue;
       let arr = samplesOf.get(cl);
@@ -1664,7 +1699,7 @@ export function extractFeatures(
         area,
         leftM: median(lefts),
         rightM: median(rights),
-        spline: splineOk ? spline : undefined,
+        spline: splineOk ? splineFiltered : undefined,
       });
     }
   }
