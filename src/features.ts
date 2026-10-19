@@ -57,6 +57,10 @@ export interface LineFeature {
   roadLeftM?: number;
   /** measured distance in meters from centerline to the RIGHT road edge of the piece (markings only) */
   roadRightM?: number;
+  /** per-vertex left road-edge distances in meters, parallel to coords (markings only) */
+  roadLeftProfileM?: number[];
+  /** per-vertex right road-edge distances in meters, parallel to coords (markings only) */
+  roadRightProfileM?: number[];
   /**
    * Stop line (markings only): the centerline flows from a non-junction
    * highway area into a junction area through a highway=traffic_signals

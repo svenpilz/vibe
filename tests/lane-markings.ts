@@ -111,6 +111,32 @@ way(rectV(0, 9000, 300), {
   surface: "asphalt",
 });
 
+// a road whose area WIDTH CHANGES along the way (trapezoid, 9 m -> 13 m):
+// the piece must carry a per-vertex road-edge profile following the local
+// span, not one piece-wide median (way 288689072 regression)
+const trapez = (x: number): number => 450 + ((x - 40000) / 10000) * 200;
+{
+  const t0 = node(39800, -trapez(39800));
+  way(
+    [
+      t0,
+      node(50200, -trapez(50200)),
+      node(50200, trapez(50200)),
+      node(39800, trapez(39800)),
+      t0,
+    ],
+    { "area:highway": "residential", area: "yes", surface: "asphalt" },
+  );
+}
+const nE0 = node(40000, 0), nE1 = node(50000, 0);
+
+const wayE = way([nE0, nE1], {
+  highway: "residential",
+  surface: "asphalt",
+  lanes: "2",
+  name: "Breite Straße",
+});
+
 const result = extractFeatures(data);
 const lm = result.laneMarkings;
 const byWay = (id: number): LineFeature[] =>
@@ -182,6 +208,27 @@ check(
   C[0].lanes === 2 && near(C[0].laneW!, (900 * mPerLat) / 4),
   `C laneW:${C[0].laneW} expected:${(900 * mPerLat) / 4}`,
 );
+
+const E = byWay(wayE);
+check(
+  "variable-width road carries a per-vertex edge profile",
+  E.length === 1 &&
+    E[0].roadLeftProfileM !== undefined &&
+    E[0].roadLeftProfileM.length === 2 &&
+    E[0].roadRightProfileM !== undefined &&
+    E[0].roadRightProfileM.length === 2,
+  `E pieces:${E.length} profile:${E[0]?.roadLeftProfileM?.length}`,
+);
+if (E.length === 1 && E[0].roadLeftProfileM && E[0].roadRightProfileM) {
+  const span0 = E[0].roadLeftProfileM[0] + E[0].roadRightProfileM[0];
+  const span1 =
+    E[0].roadLeftProfileM[1] + E[0].roadRightProfileM[1];
+  check(
+    "profile follows the local road span (9 m -> 13 m)",
+    near(span0, 900 * mPerLat, 1e-3) && near(span1, 1300 * mPerLat, 1e-3),
+    `span0:${span0} span1:${span1}`,
+  );
+}
 
 if (failures > 0) {
   console.error(`${failures} test(s) failed`);

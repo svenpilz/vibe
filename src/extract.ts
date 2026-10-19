@@ -1366,6 +1366,9 @@ export function extractFeatures(
     area: AreaFeature;
     leftM: number;
     rightM: number;
+    /** per-vertex left/right road-edge distances in meters, parallel to cl.coords (width profile) */
+    profLeftM?: number[];
+    profRightM?: number[];
   }
   const samplesOf = new Map<LineFeature, MarkingSample[]>();
   for (const cl of laneCandidates) {
@@ -1420,20 +1423,58 @@ export function extractFeatures(
       }
       const segs = insideSegs.length > 0 ? insideSegs : tolSegs;
       if (segs.length === 0) continue;
-      const sampled =
-        segs.length <= 12
-          ? segs
-          : [...Array(12).keys()].map(
-              (k) =>
-                segs[
-                  Math.min(
-                    segs.length - 1,
-                    Math.round((k * (segs.length - 1)) / 11),
-                  )
-                ],
-            );
+      const sampled = segs;
       const lefts: number[] = [];
       const rights: number[] = [];
+      const median = (xs: number[]): number => {
+        const s2 = [...xs].sort((a, b) => a - b);
+        const m = s2.length >> 1;
+        return s2.length % 2 ? s2[m] : (s2[m - 1] + s2[m]) / 2;
+      };
+
+      // per-vertex width profile, parallel to cl.coords: the road width
+      // can change along the area, so the lane block must follow the
+      // local measured edges at every vertex, not one median
+      const profLeftM: number[] = [];
+      const profRightM: number[] = [];
+      const [minX, minY, maxX, maxY] = area.bbox;
+      const maxRay = Math.hypot(maxX - minX, maxY - minY) + 1000;
+      const measureAt = (sample: number[], nx: number, ny: number): [number, number] | null => {
+        const left = rayExitInArea(sample, [nx, ny], area, maxRay);
+        const right = rayExitInArea(sample, [-nx, -ny], area, maxRay);
+        if (left === null || right === null) return null;
+        const mPerLon =
+          (111_320 * Math.cos(((sample[1] / 1e7) * Math.PI) / 180)) / 1e7;
+        const mPerLat = 111_320 / 1e7;
+        const rayM = (t: number, dx2: number, dy2: number): number =>
+          Math.hypot(dx2 * t * mPerLon, dy2 * t * mPerLat);
+        return [rayM(left, nx, ny), rayM(right, -nx, -ny)];
+      };
+      // vertex normal (averaged, like the renderer offsets by)
+      const vertexNormal = (vi: number): [number, number] | null => {
+        let nx = 0,
+          ny = 0;
+        if (vi > 0) {
+          const dx = cl.coords[vi][0] - cl.coords[vi - 1][0];
+          const dy = cl.coords[vi][1] - cl.coords[vi - 1][1];
+          const l = Math.hypot(dx, dy);
+          if (l > 0) {
+            nx += -dy / l;
+            ny += dx / l;
+          }
+        }
+        if (vi < cl.coords.length - 1) {
+          const dx = cl.coords[vi + 1][0] - cl.coords[vi][0];
+          const dy = cl.coords[vi + 1][1] - cl.coords[vi][1];
+          const l = Math.hypot(dx, dy);
+          if (l > 0) {
+            nx += -dy / l;
+            ny += dx / l;
+          }
+        }
+        const l = Math.hypot(nx, ny);
+        return l > 0 ? [nx / l, ny / l] : null;
+      };
       for (const bi of sampled) {
         const dxs = cl.coords[bi][0] - cl.coords[bi - 1][0];
         const dys = cl.coords[bi][1] - cl.coords[bi - 1][1];
@@ -1459,33 +1500,69 @@ export function extractFeatures(
         if (!sample) continue;
         const nx = -dys / segLen,
           ny = dxs / segLen;
-        const [minX, minY, maxX, maxY] = area.bbox;
-        const maxRay = Math.hypot(maxX - minX, maxY - minY) + 1000;
-        const left = rayExitInArea(sample, [nx, ny], area, maxRay);
-        const right = rayExitInArea(sample, [-nx, -ny], area, maxRay);
-        if (left === null || right === null) continue;
-        // convert each ray to meters: lon units scale with cos(latitude),
-        // lat units are constant; the ray travels in mixed units
-        const mPerLon =
-          (111_320 * Math.cos(((sample[1] / 1e7) * Math.PI) / 180)) / 1e7;
-        const mPerLat = 111_320 / 1e7;
-        const rayM = (t: number, dx2: number, dy2: number): number =>
-          Math.hypot(dx2 * t * mPerLon, dy2 * t * mPerLat);
-        lefts.push(rayM(left, nx, ny));
-        rights.push(rayM(right, -nx, -ny));
+        const measured = measureAt(sample, nx, ny);
+        if (!measured) continue;
+        lefts.push(measured[0]);
+        rights.push(measured[1]);
+      }
+      // measure the width at every vertex inside this area (its averaged
+      // normal, like the renderer offsets by); vertices outside or ON the
+      // area boundary stay undefined — their markings are clipped away
+      // anyway, and a ray from a boundary vertex leaks through the shared
+      // edge (e.g. into a junction mouth) and measures nonsense
+      const medSpan =
+        lefts.length > 0
+          ? median(lefts) + median(rights)
+          : 0;
+      for (let vi = 0; vi < cl.coords.length; vi++) {
+        if (!pointInAreaQ(cl.coords[vi], area)) continue;
+        const n = vertexNormal(vi);
+        if (!n) continue;
+        const m2 = measureAt(cl.coords[vi], n[0], n[1]);
+        if (!m2) continue;
+        if (medSpan > 0 && m2[0] + m2[1] < 0.5 * medSpan) continue;
+        profLeftM[vi] = m2[0];
+        profRightM[vi] = m2[1];
+      }
+      const profOk = profLeftM.some((v) => v !== undefined);
+      // fill profile gaps: a vertex whose own ray measurement is missing
+      // interpolates between its measured neighbours; ends copy the nearest
+      if (profOk) {
+        const fill = (prof: number[]): void => {
+          let last = -1;
+          for (let i = 0; i < prof.length; i++) {
+            if (prof[i] !== undefined) last = i;
+            else {
+              let next = -1;
+              for (let j = i + 1; j < prof.length; j++)
+                if (prof[j] !== undefined) {
+                  next = j;
+                  break;
+                }
+              if (last >= 0 && next >= 0)
+                prof[i] = prof[last] + ((prof[next] - prof[last]) * (i - last)) / (next - last);
+              else if (last >= 0) prof[i] = prof[last];
+            }
+          }
+          for (let i = prof.length - 1; i >= 0; i--)
+            if (prof[i] === undefined) prof[i] = prof[Math.min(i + 1, prof.length - 1)] ?? 0;
+        };
+        fill(profLeftM);
+        fill(profRightM);
       }
       if (lefts.length === 0) continue;
-      const median = (xs: number[]): number => {
-        const s2 = [...xs].sort((a, b) => a - b);
-        const m = s2.length >> 1;
-        return s2.length % 2 ? s2[m] : (s2[m - 1] + s2[m]) / 2;
-      };
       let arr = samplesOf.get(cl);
       if (!arr) {
         arr = [];
         samplesOf.set(cl, arr);
       }
-      arr.push({ area, leftM: median(lefts), rightM: median(rights) });
+      arr.push({
+        area,
+        leftM: median(lefts),
+        rightM: median(rights),
+        profLeftM: profOk ? profLeftM : undefined,
+        profRightM: profOk ? profRightM : undefined,
+      });
     }
   }
   // group the lane-bearing ways into roads: centerlines that touch
@@ -1957,6 +2034,8 @@ export function extractFeatures(
         laneRightM: laneLeftM + p.cl.lanes! * laneW,
         roadLeftM: p.leftM,
         roadRightM: p.rightM,
+        roadLeftProfileM: p.profLeftM,
+        roadRightProfileM: p.profRightM,
         lanesFwd: fwd,
         areaIds: [p.area.id],
         stopLinesQ: stopLinesQ.length > 0 ? stopLinesQ : undefined,
