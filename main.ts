@@ -1242,13 +1242,26 @@ function drawLaneMarkings(cl: LineFeature) {
       })()
     : null;
   // meters-left convention: block spans laneLeftM (left edge) down to
-  // laneLeftM - lanes*laneW (right edge). The extruded road-model
-  // rectangle was FIT in the extractor (unit width + lateral shift),
-  // so every boundary is a PIECE-CONSTANT offset from the fitted
-  // centerline — extruding it along the spline normals is the curve
-  // handling; rescaling per sample would reintroduce the boundary
-  // dents (platforms, cutouts) the fit just removed
-  const localOffsetM = (_i: number, offM: number): number => offM;
+  // laneLeftM - lanes*laneW (right edge); per sample the block is
+  // rescaled into the LOCAL measured span so boundaries sit at the same
+  // FRACTION of the local width (lane k of N) — the road can genuinely
+  // widen/narrow along the piece (dual carriageway at a junction mouth,
+  // way 288689072), and a piece-constant block would overflow the road
+  // there. The per-sample edges come Hampel-smoothed from the extractor,
+  // so dents (platforms, cutouts) are already gone
+  const localOffsetM = (i: number, offM: number): number => {
+    if (!hasSpline) return offM;
+    const s = sp![i];
+    // fraction of the block width at this boundary (0=left edge, 1=right)
+    const frac = 1 - (offM + leftM) / (total * cl.laneW!);
+    const units =
+      total + (cl.parkingLeft ? 1 : 0) + (cl.parkingRight ? 1 : 0);
+    const w = (s.leftM + s.rightM) / units;
+    const parkL = cl.parkingLeft ? w : 0;
+    const leftEdge = s.leftM - parkL;
+    const blockW = total * w;
+    return -(leftEdge - frac * blockW);
+  };
   const drawOffsetLine = (
     offAt: (i: number) => number,
     solid: boolean,
@@ -1298,9 +1311,12 @@ function drawLaneMarkings(cl: LineFeature) {
     ctx.setLineDash([]);
   }
   if (hasSpline && sp) {
-    // parking boundaries at the local road edges
+    // parking boundaries sit at the block's outer edges — the SAME
+    // offsets as the non-spline path (negative = left of the centerline):
+    // the parking strip occupies the unit between the block edge and the
+    // road edge on its side
     if (cl.parkingLeft)
-      drawOffsetLine((i) => localOffsetM(i, leftM) * px, false);
+      drawOffsetLine((i) => localOffsetM(i, -leftM) * px, false);
     if (cl.parkingRight)
       drawOffsetLine(
         (i) => localOffsetM(i, -leftM + total * cl.laneW!) * px,
