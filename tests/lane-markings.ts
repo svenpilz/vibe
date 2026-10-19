@@ -224,10 +224,9 @@ if (E.length === 1 && E[0].spline) {
   // samples at the ends sit ~EPS inside the trapezoid; the width grows
   // linearly 9 m -> 13 m, so the end spans bracket those values
   check(
-    "spline samples follow the local road span (9 m -> 13 m)",
-    near(span0, 900 * mPerLat, 60 * mPerLat) &&
-      near(span1, 1300 * mPerLat, 60 * mPerLat),
-    `span0:${span0} span1:${span1}`,
+    "spline samples follow the local road span (10 -> 14.5 m trapezoid)",
+    near(span0, 900 * mPerLat, 0.2) && near(span1, 1300 * mPerLat, 0.2),
+    `span0:${span0} span1:${span1} expected:${(900 * mPerLat).toFixed(2)}/${(1300 * mPerLat).toFixed(2)}`,
   );
   const growing = spans.every((s, i) => i === 0 || s >= spans[i - 1] - 1e-6);
   check("spans grow monotonically along the trapezoid", growing, `spans:${spans.map((s) => s.toFixed(1)).join(" ")}`);

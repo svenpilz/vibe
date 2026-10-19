@@ -151,6 +151,35 @@ if (piece?.spline) {
     `maxDev:${maxDev.toFixed(2)} m`,
   );
 }
+{
+  // the road is SPLIT into w288689072 + w1196780749 within one area:
+  // both pieces must carry splines and meet SEAMLESSLY at the shared
+  // way junction (no gap between the last and first samples)
+  const a = result.laneMarkings.find((m) => m.id === "w288689072");
+  const b = result.laneMarkings.find((m) => m.id === "w1196780749");
+  const okSplines = (a?.spline?.length ?? 0) >= 4 && (b?.spline?.length ?? 0) >= 2;
+  check(
+    "split road pieces both carry splines",
+    okSplines,
+    `a:${a?.spline?.length} b:${b?.spline?.length}`,
+  );
+  if (okSplines && a?.spline && b?.spline) {
+    const la = a.spline[a.spline.length - 1];
+    const fb = b.spline[0];
+    const cosL = Math.cos((la.pt[1] / 1e7) * (Math.PI / 180));
+    const mPerLon = (111_320 * cosL) / 1e7;
+    const mPerLat = 111_320 / 1e7;
+    const dx = (fb.pt[0] - la.pt[0]) * mPerLon;
+    const dy = (fb.pt[1] - la.pt[1]) * mPerLat;
+    const gap = Math.hypot(dx, dy);
+    // sample spacing is ~4 m; the seam gap must not exceed one step
+    check(
+      "spline runs seamlessly across the way split (< 6 m gap)",
+      gap < 6,
+      `gap:${gap.toFixed(2)} m`,
+    );
+  }
+}
 
 if (failures > 0) {
   console.error(`${failures} saar regression test(s) failed`);

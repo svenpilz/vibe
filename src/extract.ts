@@ -1509,237 +1509,6 @@ export function extractFeatures(
         lefts.push(measured[0]);
         rights.push(measured[1]);
       }
-      // ---- spline centerline of this (way, area) piece ----
-      // Fit a Catmull-Rom cubic spline through the way vertices that
-      // touch or lie inside the area, in METRIC coordinates (meters,
-      // so tangents/normals are metrically correct), and sample it
-      // meaningfully (~4 m along the arc). At the two ends the missing
-      // outer control point is REFLECTED at the end vertex (a natural
-      // spline end condition) instead of duplicating the endpoint —
-      // duplication bends the curve far too much at start and end.
-      // The mapped centerline only approximates the real one, so the
-      // road span is MEASURED per sample: rays along the metric spline
-      // normal in both directions until they leave the area, in meters.
-      // Samples not strictly inside the area move an EPS tangentially
-      // into the area first (a sample on the shared boundary edge would
-      // leak through it into the neighbour area).
-      const EPS_M = 0.3; // meters of tangential inset into the area
-      // vertices of every segment that belongs to this area section —
-      // INCLUDING a vertex that lies in the neighbouring (junction) area:
-      // the piece extends to the section boundary (the junction mouth),
-      // and dropping that vertex leaves the first metres of the piece
-      // without samples, so its markings are visibly missing
-      // vertices of every segment with ANY part inside this area —
-      // including a segment that only CROSSES the boundary (its midpoint
-      // may lie in the neighbouring junction area while its tail is in
-      // this section): dropping that vertex leaves the first metres of
-      // the piece — from the junction mouth to the first kept vertex —
-      // without samples, so its markings are visibly missing
-      const verts: number[][] = [];
-      const touchesArea = (p: number[]): boolean =>
-        pointInAreaQ(p, area) || pointInAreaTolQ2(p, area);
-      for (let si = 1; si < cl.coords.length; si++) {
-        const a = cl.coords[si - 1],
-          b = cl.coords[si];
-        const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-        if (!touchesArea(a) && !touchesArea(b) && !touchesArea(mid))
-          continue;
-        for (const c of [a, b]) {
-          const last = verts[verts.length - 1];
-          if (!last || last[0] !== c[0] || last[1] !== c[1]) verts.push(c);
-        }
-      }
-      const medSpan =
-        lefts.length > 0
-          ? median(lefts) + median(rights)
-          : 0;
-      interface SplineSample {
-        pt: number[];
-        nx: number;
-        ny: number;
-        leftM: number;
-        rightM: number;
-      }
-      const spline: SplineSample[] = [];
-      if (process.env.DBG_SPLINE)
-        console.error(`DBG WAY=${cl.id} AREA=${area.id} verts=${verts.length} [${verts.map((v) => (v[0]/1e7).toFixed(7) + "," + (v[1]/1e7).toFixed(7)).join(" | ")}] lefts=${lefts.length}`);
-      if (verts.length >= 2) {
-        // metric working coordinates
-        const cosLat = Math.cos((verts[0][1] / 1e7) * (Math.PI / 180));
-        const MX = (lonQ: number): number => lonQ * 1e-7 * 111_320 * cosLat;
-        const MY = (latQ: number): number => latQ * 1e-7 * 111_320;
-        const mv = verts.map((c) => [MX(c[0]), MY(c[1])]);
-        // chord-length parametrization
-        const cum: number[] = [0];
-        for (let i = 1; i < mv.length; i++)
-          cum.push(
-            cum[i - 1] + Math.hypot(mv[i][0] - mv[i - 1][0], mv[i][1] - mv[i - 1][1]),
-          );
-        const total = cum[cum.length - 1];
-        const ptAt = (t: number): { p: number[]; d: number[] } => {
-          let k = 1;
-          while (k < cum.length - 1 && cum[k] < t) k++;
-          const t0 = cum[k - 1],
-            t1 = cum[k];
-          const f = t1 - t0 > 0 ? (t - t0) / (t1 - t0) : 0;
-          // control points, with the ends REFLECTED (natural end
-          // condition: mirror p1 at p0 / p_{n-2} at p_{n-1})
-          const P = (idx: number): number[] =>
-            idx < 0
-              ? [
-                  2 * mv[0][0] - mv[1][0],
-                  2 * mv[0][1] - mv[1][1],
-                ]
-              : idx > mv.length - 1
-                ? [
-                    2 * mv[mv.length - 1][0] - mv[mv.length - 2][0],
-                    2 * mv[mv.length - 1][1] - mv[mv.length - 2][1],
-                  ]
-                : mv[idx];
-          const p0 = P(k - 2),
-            p1 = P(k - 1),
-            p2 = P(k),
-            p3 = P(k + 1);
-          const f2 = f * f,
-            f3 = f2 * f;
-          const px =
-            0.5 *
-            (2 * p1[0] +
-              (-p0[0] + p2[0]) * f +
-              (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * f2 +
-              (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * f3);
-          const py =
-            0.5 *
-            (2 * p1[1] +
-              (-p0[1] + p2[1]) * f +
-              (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * f2 +
-              (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * f3);
-          const dx =
-            0.5 *
-            (-p0[0] +
-              p2[0] +
-              2 * (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * f +
-              3 * (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * f2);
-          const dy =
-            0.5 *
-            (-p0[1] +
-              p2[1] +
-              2 * (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * f +
-              3 * (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * f2);
-          return { p: [px, py], d: [dx, dy] };
-        };
-        const nSamples = Math.min(120, Math.max(8, Math.round(total / 4)));
-        for (let s = 0; s <= nSamples; s++) {
-          const t = (total * s) / nSamples;
-          const { p, d } = ptAt(t);
-          const dl = Math.hypot(d[0], d[1]);
-          if (dl === 0) continue;
-          // metric unit normal
-          const nx = -d[1] / dl,
-            ny = d[0] / dl;
-          // back to quantized for containment/ray tests
-          const qx = p[0] / (1e-7 * 111_320 * cosLat);
-          const qy = p[1] / (1e-7 * 111_320);
-          // EVERY sample moves an EPS tangentially into the area before
-          // measuring: a sample ON the shared boundary (a way vertex
-          // where a traffic-island tip or the neighbour section touches)
-          // has one ray exit immediately and measures a near-zero span,
-          // which bends the local lane layout. The nudge runs along the
-          // tangent towards the spline's middle, away from both ends
-          const ux = d[0] / dl,
-            uy = d[1] / dl;
-          const mid = ptAt(total / 2).p;
-          const towards =
-            (mid[0] - p[0]) * ux + (mid[1] - p[1]) * uy >= 0 ? 1 : -1;
-          const nudged = [
-            qx + (ux * EPS_M * towards) / (1e-7 * 111_320 * cosLat),
-            qy + (uy * EPS_M * towards) / (1e-7 * 111_320),
-          ];
-          if (!pointInAreaQ(nudged, area)) continue;
-          const qx2 = nudged[0],
-            qy2 = nudged[1];
-          const m2 = measureAt([qx2, qy2], nx, ny);
-          if (process.env.DBG_SPLINE)
-            console.error(
-              `DBG s=${s}/${nSamples} span=${m2 ? (m2[0] + m2[1]).toFixed(2) : "null"} med=${medSpan.toFixed(2)} in=${pointInAreaQ([qx, qy], area)}`,
-            );
-          if (!m2) continue;
-          if (medSpan > 0 && m2[0] + m2[1] < 0.5 * medSpan) continue;
-          spline.push({
-            pt: [Math.round(qx2), Math.round(qy2)],
-            nx,
-            ny,
-            leftM: m2[0],
-            rightM: m2[1],
-          });
-        }
-      }
-
-      // outlier repair: a sample at a boundary tip or junction mouth
-      // measures a truncated edge on ONE side (the other side is fine),
-      // and the edge jump bends the lane markings. Per-side medians flag
-      // such samples; INTERIOR outliers take their edges interpolated
-      // from their healthy neighbours, and a contiguous OUTLIER RUN AT
-      // EITHER END is truncated (the piece simply ends earlier - the
-      // markings stop before the junction mouth instead of squeezing
-      // into it)
-      const splineFiltered = (() => {
-        if (spline.length < 3) return spline;
-        const medL = median(spline.map((s) => s.leftM));
-        const medR = median(spline.map((s) => s.rightM));
-        const bad = spline.map(
-          (s) =>
-            Math.abs(s.leftM - medL) > 0.25 * medL ||
-            Math.abs(s.rightM - medR) > 0.25 * medR,
-        );
-        if (!bad.some((b) => b)) return spline;
-        // truncate leading/trailing runs of outliers
-        let lo = 0;
-        while (lo < bad.length && bad[lo]) lo++;
-        let hi = bad.length;
-        while (hi > lo && bad[hi - 1]) hi--;
-        const keptRange = spline.slice(lo, hi);
-        if (keptRange.length < 3) return spline;
-        // interpolate interior outliers from their healthy neighbours
-        const lefts = keptRange.map((s, i) =>
-          bad[lo + i] ? null : s.leftM,
-        );
-        const rights = keptRange.map((s, i) =>
-          bad[lo + i] ? null : s.rightM,
-        );
-        const fill = (xs: (number | null)[]): void => {
-          let lastGood = -1;
-          for (let i = 0; i < xs.length; i++) {
-            if (xs[i] !== null) {
-              lastGood = i;
-              continue;
-            }
-            let nextGood = -1;
-            for (let j = i + 1; j < xs.length; j++)
-              if (xs[j] !== null) {
-                nextGood = j;
-                break;
-              }
-            if (lastGood >= 0 && nextGood >= 0) {
-              xs[i] =
-                (xs[lastGood] as number) +
-                (((xs[nextGood] as number) - (xs[lastGood] as number)) *
-                  (i - lastGood)) /
-                  (nextGood - lastGood);
-            } else if (lastGood >= 0) xs[i] = xs[lastGood];
-            else if (nextGood >= 0) xs[i] = xs[nextGood];
-          }
-        };
-        fill(lefts);
-        fill(rights);
-        return keptRange.map((s, i) => ({
-          ...s,
-          leftM: lefts[i] as number,
-          rightM: rights[i] as number,
-        }));
-      })();
-      const splineOk = splineFiltered.length >= 2;
-
       if (lefts.length === 0) continue;
       let arr = samplesOf.get(cl);
       if (!arr) {
@@ -1750,7 +1519,6 @@ export function extractFeatures(
         area,
         leftM: median(lefts),
         rightM: median(rights),
-        spline: splineOk ? splineFiltered : undefined,
       });
     }
   }
@@ -1875,12 +1643,340 @@ export function extractFeatures(
   };
   const fwdOf = (cl: LineFeature): number =>
     cl.lanesFwd ?? (cl.oneway ? cl.lanes! : Math.ceil(cl.lanes! / 2));
+  // Build one spline per (road group, area): the ways of a group form a
+  // POLYLINE through the area (often several joined ways - a road split
+  // mid-block), and the spline must cover ALL of them with no seams.
+  // Each sample records the way it lies on, so lane counts, parking and
+  // other properties come from the corresponding way.
+  const median2 = (xs: number[]): number => {
+    const s2 = [...xs].sort((a, b) => a - b);
+    const m = s2.length >> 1;
+    return s2.length % 2 ? s2[m] : (s2[m - 1] + s2[m]) / 2;
+  };
+  const chainSplines = (
+    ways: LineFeature[],
+    area: AreaFeature,
+  ): (SplineSampleInfo & { cl: LineFeature })[] => {
+    // chain the ways into one ordered polyline (they touch end-to-end)
+    const byEnd = new Map<string, LineFeature[]>();
+    const key = (p: number[]): string => `${p[0]},${p[1]}`;
+    for (const w of ways) {
+      for (const e of [w.coords[0], w.coords[w.coords.length - 1]]) {
+        const arr = byEnd.get(key(e));
+        if (arr) arr.push(w);
+        else byEnd.set(key(e), [w]);
+      }
+    }
+    // seed: the first way with a FREE end (a chain end), then walk
+    // BOTH directions from it, flipping directions as needed; each way
+    // keeps its identity so per-way properties survive
+    // reversed copies carry their ORIGINAL way object so ownership
+    // comparisons survive the direction flip
+    const reversed = (w: LineFeature): LineFeature =>
+      ({
+        ...w,
+        coords: [...w.coords].reverse(),
+        __orig: w,
+      } as LineFeature);
+    let seed: LineFeature | undefined;
+    let seedFlipped = false;
+    for (const w of ways) {
+      if ((byEnd.get(key(w.coords[0])) ?? []).length === 1) {
+        seed = w;
+        seedFlipped = false;
+        break;
+      }
+      if (
+        (byEnd.get(key(w.coords[w.coords.length - 1])) ?? []).length === 1
+      ) {
+        seed = w;
+        seedFlipped = true;
+        break;
+      }
+    }
+    if (!seed) seed = ways[0];
+    const usedOrig = new Set<LineFeature>([seed]);
+    const chain: LineFeature[] = [seedFlipped ? reversed(seed) : seed];
+    // extend forward from the chain end
+    while (true) {
+      const last = chain[chain.length - 1];
+      const lastEnd = last.coords[last.coords.length - 1];
+      const next = (byEnd.get(key(lastEnd)) ?? []).find(
+        (c) => !usedOrig.has(c),
+      );
+      if (!next) break;
+      usedOrig.add(next);
+      chain.push(
+        key(next.coords[0]) === key(lastEnd)
+          ? next
+          : reversed(next),
+      );
+    }
+    // extend backward from the chain start
+    while (true) {
+      const first = chain[0];
+      const firstEnd = first.coords[0];
+      const prev = (byEnd.get(key(firstEnd)) ?? []).find(
+        (c) => !usedOrig.has(c),
+      );
+      if (!prev) break;
+      usedOrig.add(prev);
+      chain.unshift(
+        key(prev.coords[prev.coords.length - 1]) === key(firstEnd)
+          ? prev
+          : reversed(prev),
+      );
+    }
+    const used = new Set<LineFeature>();
+    // merged vertex list with way ownership (dedup shared seam
+    // vertices); ownership always refers to the ORIGINAL way object
+    const origOfChain = (w: LineFeature): LineFeature =>
+      (w as unknown as { __orig?: LineFeature }).__orig ?? w;
+    const verts: { p: number[]; cl: LineFeature }[] = [];
+    for (const w of chain) {
+      const owner = origOfChain(w);
+      for (const c of w.coords) {
+        const lastV = verts[verts.length - 1];
+        if (
+          chain.length > 1 &&
+          lastV &&
+          lastV.cl !== owner &&
+          lastV.p[0] === c[0] &&
+          lastV.p[1] === c[1]
+        ) {
+          lastV.cl = owner; // seam vertex belongs to the NEXT way
+          continue;
+        }
+        if (lastV && lastV.p[0] === c[0] && lastV.p[1] === c[1] && lastV.cl === owner)
+          continue;
+        verts.push({ p: c, cl: owner });
+      }
+    }
+    if (verts.length < 2) return [];
+    // metric working coordinates
+    const cosLat = Math.cos((verts[0].p[1] / 1e7) * (Math.PI / 180));
+    const MX = (lonQ: number): number => lonQ * 1e-7 * 111_320 * cosLat;
+    const MY = (latQ: number): number => latQ * 1e-7 * 111_320;
+    const mv = verts.map((v) => [MX(v.p[0]), MY(v.p[1])]);
+    // vertex -> sample ownership: interpolate along the chain
+    const ownerAt = (t: number): LineFeature => {
+      // arc-length t along the merged metric polyline
+      let acc = 0;
+      for (let i = 1; i < mv.length; i++) {
+        const segLen = Math.hypot(
+          mv[i][0] - mv[i - 1][0],
+          mv[i][1] - mv[i - 1][1],
+        );
+        if (t <= acc + segLen || i === mv.length - 1) {
+          const f = segLen > 0 ? (t - acc) / segLen : 0;
+          const px = mv[i - 1][0] + (mv[i][0] - mv[i - 1][0]) * f;
+          const py = mv[i - 1][1] + (mv[i][1] - mv[i - 1][1]) * f;
+          // nearest vertex decides the owner (way boundaries are vertices)
+          const dPrev = Math.hypot(px - mv[i - 1][0], py - mv[i - 1][1]);
+          const dNext = Math.hypot(px - mv[i][0], py - mv[i][1]);
+          return dPrev <= dNext ? verts[i - 1].cl : verts[i].cl;
+        }
+        acc += segLen;
+      }
+      return verts[verts.length - 1].cl;
+    };
+    // chord-length parametrization and Catmull-Rom over the merged chain
+    const cum: number[] = [0];
+    for (let i = 1; i < mv.length; i++)
+      cum.push(
+        cum[i - 1] +
+          Math.hypot(mv[i][0] - mv[i - 1][0], mv[i][1] - mv[i - 1][1]),
+      );
+    const total = cum[cum.length - 1];
+    const ptAt = (t: number): { p: number[]; d: number[] } => {
+      let k = 1;
+      while (k < cum.length - 1 && cum[k] < t) k++;
+      const t0 = cum[k - 1],
+        t1 = cum[k];
+      const f = t1 - t0 > 0 ? (t - t0) / (t1 - t0) : 0;
+      const P = (idx: number): number[] =>
+        idx < 0
+          ? [2 * mv[0][0] - mv[1][0], 2 * mv[0][1] - mv[1][1]]
+          : idx > mv.length - 1
+            ? [
+                2 * mv[mv.length - 1][0] - mv[mv.length - 2][0],
+                2 * mv[mv.length - 1][1] - mv[mv.length - 2][1],
+              ]
+            : mv[idx];
+      const p0 = P(k - 2),
+        p1 = P(k - 1),
+        p2 = P(k),
+        p3 = P(k + 1);
+      const f2 = f * f,
+        f3 = f2 * f;
+      const px =
+        0.5 *
+        (2 * p1[0] +
+          (-p0[0] + p2[0]) * f +
+          (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * f2 +
+          (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * f3);
+      const py =
+        0.5 *
+        (2 * p1[1] +
+          (-p0[1] + p2[1]) * f +
+          (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * f2 +
+          (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * f3);
+      const dx =
+        0.5 *
+        (-p0[0] +
+          p2[0] +
+          2 * (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * f +
+          3 * (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * f2);
+      const dy =
+        0.5 *
+        (-p0[1] +
+          p2[1] +
+          2 * (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * f +
+          3 * (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * f2);
+      return { p: [px, py], d: [dx, dy] };
+    };
+    const [minX, minY, maxX, maxY] = area.bbox;
+    const maxRay = Math.hypot(maxX - minX, maxY - minY) + 1000;
+    const measureAt = (
+      sample: number[],
+      nx: number,
+      ny: number,
+    ): [number, number] | null => {
+      const mPerLon = (111_320 * cosLat) / 1e7;
+      const mPerLat = 111_320 / 1e7;
+      const left = rayExitInArea(
+        sample,
+        [nx / mPerLon, ny / mPerLat],
+        area,
+        maxRay,
+      );
+      const right = rayExitInArea(
+        sample,
+        [-nx / mPerLon, -ny / mPerLat],
+        area,
+        maxRay,
+      );
+      if (left === null || right === null) return null;
+      return [left, right];
+    };
+    const EPS_M = 0.3;
+    const nSamples = Math.min(120, Math.max(8, Math.round(total / 4)));
+    const raw: (SplineSampleInfo & { cl: LineFeature })[] = [];
+    for (let s = 0; s <= nSamples; s++) {
+      const t = (total * s) / nSamples;
+      const { p, d } = ptAt(t);
+      const dl = Math.hypot(d[0], d[1]);
+      if (dl === 0) continue;
+      const nx = -d[1] / dl,
+        ny = d[0] / dl;
+      const qx = p[0] / (1e-7 * 111_320 * cosLat);
+      const qy = p[1] / (1e-7 * 111_320);
+      const ux = d[0] / dl,
+        uy = d[1] / dl;
+      const mid = ptAt(total / 2).p;
+      const towards =
+        (mid[0] - p[0]) * ux + (mid[1] - p[1]) * uy >= 0 ? 1 : -1;
+      const nudged = [
+        qx + (ux * EPS_M * towards) / (1e-7 * 111_320 * cosLat),
+        qy + (uy * EPS_M * towards) / (1e-7 * 111_320),
+      ];
+      if (!pointInAreaQ(nudged, area)) continue;
+      const m2 = measureAt(nudged, nx, ny);
+      if (!m2) continue;
+      raw.push({
+        pt: [Math.round(nudged[0]), Math.round(nudged[1])],
+        nx,
+        ny,
+        leftM: m2[0],
+        rightM: m2[1],
+        cl: ownerAt(t),
+      });
+    }
+    if (process.env.DBG_CHAIN) console.error(`DBG RAW n=${raw.length} of ${nSamples}`);
+    if (raw.length < 3) return raw;
+    // per-side outlier repair (boundary tips / junction mouths truncate
+    // one side); interior outliers interpolate, end runs truncate
+    const medL = median2(raw.map((s) => s.leftM));
+    const medR = median2(raw.map((s) => s.rightM));
+    const bad = raw.map(
+      (s) =>
+        Math.abs(s.leftM - medL) > 0.25 * medL ||
+        Math.abs(s.rightM - medR) > 0.25 * medR,
+    );
+    if (!bad.some((b) => b)) return raw;
+    let lo = 0;
+    while (lo < bad.length && bad[lo]) lo++;
+    let hi = bad.length;
+    while (hi > lo && bad[hi - 1]) hi--;
+    const kept = raw.slice(lo, hi);
+    if (kept.length < 3) return raw;
+    const lefts: (number | null)[] = kept.map((s, i) =>
+      bad[lo + i] ? null : s.leftM,
+    );
+    const rights: (number | null)[] = kept.map((s, i) =>
+      bad[lo + i] ? null : s.rightM,
+    );
+    const fill = (xs: (number | null)[]): void => {
+      let lastGood = -1;
+      for (let i = 0; i < xs.length; i++) {
+        if (xs[i] !== null) {
+          lastGood = i;
+          continue;
+        }
+        let nextGood = -1;
+        for (let j = i + 1; j < xs.length; j++)
+          if (xs[j] !== null) {
+            nextGood = j;
+            break;
+          }
+        if (lastGood >= 0 && nextGood >= 0)
+          xs[i] =
+            (xs[lastGood] as number) +
+            (((xs[nextGood] as number) - (xs[lastGood] as number)) *
+              (i - lastGood)) /
+              (nextGood - lastGood);
+        else if (lastGood >= 0) xs[i] = xs[lastGood];
+        else if (nextGood >= 0) xs[i] = xs[nextGood];
+      }
+    };
+    fill(lefts);
+    fill(rights);
+    return kept.map((s, i) => ({
+      ...s,
+      leftM: lefts[i] as number,
+      rightM: rights[i] as number,
+    }));
+  };
+
   for (const ways of groups.values()) {
     // one marking piece per (way, area section) of the road
     const pieces: (MarkingSample & { cl: LineFeature })[] = [];
     for (const w of ways)
       for (const s of samplesOf.get(w) ?? []) pieces.push({ cl: w, ...s });
     if (pieces.length === 0) continue;
+    // ONE spline per (group, area) covering ALL the group's ways in
+    // that area - a road split mid-block gets a seamless spline; each
+    // piece keeps the sub-range of samples lying on ITS way
+    const splineByArea = new Map<AreaFeature, (SplineSampleInfo & { cl: LineFeature })[]>();
+    for (const p of pieces) {
+      if (splineByArea.has(p.area)) continue;
+      const groupWays = ways.filter((w) =>
+        (samplesOf.get(w) ?? []).some((s) => s.area === p.area),
+      );
+      if (groupWays.length === 0) continue;
+      splineByArea.set(p.area, chainSplines(groupWays, p.area));
+    }
+    for (const p of pieces) {
+      const sp = splineByArea.get(p.area);
+      if (!sp) continue;
+      p.spline = sp.filter((s) => s.cl === p.cl).map((s) => ({
+        pt: s.pt,
+        nx: s.nx,
+        ny: s.ny,
+        leftM: s.leftM,
+        rightM: s.rightM,
+      }));
+    }
     // PER-PIECE lane width: each piece splits its OWN measured width
     // evenly among its units (traffic + parking lanes), so the layout
     // follows the local road width and every piece fills its road exactly
