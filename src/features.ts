@@ -65,10 +65,12 @@ export interface LineFeature {
    * span the lanes flowing into it: all of them on a one-way road, only
    * the forward lanes on a bidirectional road.
    */
-  /** clipped stop line polyline in quantized coords: the shared boundary
-   * between the entering road area and the junction area, restricted to the
-   * lanes flowing into the signal */
-  stopLineQ?: Q[][];
+  /** clipped stop line polylines in quantized coords, ONE PER traffic_signals
+   * node on the piece (a road between two signalized junctions carries two):
+   * the shared boundary between the entering road area and the junction area
+   * that CONTAINS the signal node, restricted to the lanes flowing into
+   * that signal */
+  stopLinesQ?: Q[][][];
   /** number of lanes forward (same direction of travel, centerlines only) */
   lanesFwd?: number;
   /** oneway=yes / -1 / roundabout: all lanes travel in one direction */

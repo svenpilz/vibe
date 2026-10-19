@@ -1238,19 +1238,19 @@ function drawLaneMarkings(cl: LineFeature) {
   // stop line: the shared boundary polyline between the entering road
   // area and the junction area (not necessarily orthogonal to the road),
   // already clipped to the lanes flowing into the signal
-  if (cl.stopLineQ && cl.stopLineQ.length >= 2) {
+  if (cl.stopLinesQ) {
     ctx.strokeStyle = "#e8e8e8";
     ctx.setLineDash([]);
     ctx.lineWidth = Math.max(2, 0.4 * px);
-    ctx.beginPath();
-    ctx.moveTo(lonToX(cl.stopLineQ[0][0] / Q), latToY(cl.stopLineQ[0][1] / Q));
-    for (let i = 1; i < cl.stopLineQ.length; i++) {
-      ctx.lineTo(
-        lonToX(cl.stopLineQ[i][0] / Q),
-        latToY(cl.stopLineQ[i][1] / Q),
-      );
+    for (const line of cl.stopLinesQ) {
+      if (line.length < 2) continue;
+      ctx.beginPath();
+      ctx.moveTo(lonToX(line[0][0] / Q), latToY(line[0][1] / Q));
+      for (let i = 1; i < line.length; i++) {
+        ctx.lineTo(lonToX(line[i][0] / Q), latToY(line[i][1] / Q));
+      }
+      ctx.stroke();
     }
-    ctx.stroke();
     ctx.lineWidth = lineW;
   }
 }

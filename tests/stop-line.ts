@@ -102,22 +102,22 @@ const byName = (name: string) => lm.filter((m) => m.name === name);
 const a = byName("A-Straße")[0];
 check(
   "one-way END: stop line present",
-  a?.stopLineQ !== undefined && a.stopLineQ.length >= 2,
+  a?.stopLinesQ !== undefined && a.stopLinesQ.length >= 1 && a.stopLinesQ.every((l) => l.length >= 2),
 );
 
 const b = byName("B-Straße")[0];
-check("one-way START: no stop line", b?.stopLineQ === undefined);
+check("one-way START: no stop line", b?.stopLinesQ === undefined);
 
 const c = byName("C-Straße")[0];
 check(
   "bidirectional END: stop line present",
-  c?.stopLineQ !== undefined && c.stopLineQ.length >= 2,
+  c?.stopLinesQ !== undefined && c.stopLinesQ.length >= 1 && c.stopLinesQ.every((l) => l.length >= 2),
 );
 
 const d = byName("D-Straße")[0];
 check(
   "bidirectional START: stop line present",
-  d?.stopLineQ !== undefined && d.stopLineQ.length >= 2,
+  d?.stopLinesQ !== undefined && d.stopLinesQ.length >= 1 && d.stopLinesQ.every((l) => l.length >= 2),
 );
 
 if (failures > 0) {
@@ -153,9 +153,9 @@ if (failures > 0) {
   );
   check(
     "signal inside junction: stop line present on the entering piece",
-    e2 !== undefined && e2.stopLineQ !== undefined && e2.stopLineQ.length >= 2,
+    e2 !== undefined && e2.stopLinesQ !== undefined && e2.stopLinesQ.length >= 1 && e2.stopLinesQ.every((l) => l.length >= 2),
   );
-  if (e2?.stopLineQ) {
+  if (e2?.stopLinesQ) {
     // coords are raw units in this harness: the mouth vertex is at 76000,
     // the signal node at 80000 - the stop line must sit at the mouth
     check(
@@ -197,7 +197,7 @@ if (failures > 0) {
   );
   check(
     "parking: stop line present",
-    f !== undefined && f.stopLineQ !== undefined && f.stopLineQ.length >= 2,
+    f !== undefined && f.stopLinesQ !== undefined && f.stopLinesQ.length >= 1 && f.stopLinesQ.every((l) => l.length >= 2),
   );
 }
 
@@ -239,7 +239,7 @@ if (failures > 0) {
   );
   check(
     "direction tag: stop line present",
-    g !== undefined && g.stopLineQ !== undefined && g.stopLineQ.length >= 2,
+    g !== undefined && g.stopLinesQ !== undefined && g.stopLinesQ.length >= 1 && g.stopLinesQ.every((l) => l.length >= 2),
   );
 
   // one-way road, backward-facing signal: no traffic stops -> no line
@@ -270,7 +270,7 @@ if (failures > 0) {
   );
   check(
     "direction=backward on one-way: no stop line",
-    h === undefined || h.stopLineQ === undefined,
+    h === undefined || h.stopLinesQ === undefined,
   );
 }
 
@@ -366,13 +366,13 @@ if (failures > 0) {
   const k = res3.laneMarkings.find((m) => m.name === "K-Stra\u00dfe");
   check(
     "two junctions: stop line present",
-    k !== undefined && k.stopLineQ !== undefined && k.stopLineQ.length >= 2,
+    k !== undefined && k.stopLinesQ !== undefined && k.stopLinesQ.length >= 1 && k.stopLinesQ.every((l) => l.length >= 2),
   );
-  if (k?.stopLineQ) {
+  if (k?.stopLinesQ) {
     // every stop line point must lie at the NEAR junction mouth
     // (x = 160000), never at the far end (x = 150200)
     const maxAbsDev = Math.max(
-      ...k.stopLineQ.map((p) => Math.abs(p[0] - 160000)),
+      ...k.stopLinesQ.flat().map((p) => Math.abs(p[0] - 160000)),
     );
     check(
       "two junctions: stop line at the signal's junction end",
@@ -413,9 +413,9 @@ if (failures > 0) {
   });
   const res4 = extractFeatures(data);
   const l = res4.laneMarkings.find((m) => m.name === "L-Stra\u00dfe");
-  if (l?.stopLineQ) {
+  if (l?.stopLinesQ) {
     const maxAbsDev2 = Math.max(
-      ...l.stopLineQ.map((p) => Math.abs(p[0] - 175000)),
+      ...l.stopLinesQ.flat().map((p) => Math.abs(p[0] - 175000)),
     );
     check(
       "two junctions (no-lanes): stop line at the signal's junction end",
@@ -487,18 +487,78 @@ if (failures > 0) {
   const m = res5.laneMarkings.find((x) => x.name === "M-Stra\u00dfe");
   check(
     "multi-chain junction: stop line present",
-    m !== undefined && m.stopLineQ !== undefined && m.stopLineQ.length >= 2,
+    m !== undefined && m.stopLinesQ !== undefined && m.stopLinesQ.length >= 1 && m.stopLinesQ.every((l) => l.length >= 2),
   );
-  if (m?.stopLineQ) {
+  if (m?.stopLinesQ) {
     // the stop line must sit at the signal's mouth (x=194500), never
     // reach the mid-road chains (x=189000 / 190500)
     const maxAbsDev = Math.max(
-      ...m.stopLineQ.map((p) => Math.abs(p[0] - 194500)),
+      ...m.stopLinesQ.flat().map((p) => Math.abs(p[0] - 194500)),
     );
     check(
       "multi-chain junction: stop line only at the signal's mouth",
       maxAbsDev < 200,
       `max deviation from x=194500: ${maxAbsDev}`,
+    );
+  }
+}
+// a road with traffic_signals at BOTH ends (two signalized junctions): the
+// piece must carry TWO stop lines - one per signal node, each on the end
+// where its own signal stands
+{
+  const sa = node(210000, 0, { highway: "traffic_signals" });
+  const sb = node(220000, 0, { highway: "traffic_signals" });
+  way([sa, node(215000, 0), sb], {
+    highway: "tertiary",
+    surface: "asphalt",
+    lanes: "2",
+    name: "N-Stra\u00dfe",
+  });
+  // junction at the left end (contains signal sa)
+  const nja = node(208500, -450),
+    njb = node(210000, -450),
+    njc = node(210000, 450),
+    njd = node(208500, 450);
+  way([nja, njb, njc, njd, nja], {
+    "area:highway": "tertiary",
+    junction: "yes",
+  });
+  // road area between the two junctions
+  const nra = node(210000, -450),
+    nrb = node(220000, -450),
+    nrc = node(220000, 450),
+    nrd = node(210000, 450);
+  way([nra, nrb, nrc, nrd, nra], {
+    "area:highway": "tertiary",
+    surface: "asphalt",
+  });
+  // junction at the right end (contains signal sb)
+  const nka = node(220000, -450),
+    nkb = node(221500, -450),
+    nkc = node(221500, 450),
+    nkd = node(220000, 450);
+  way([nka, nkb, nkc, nkd, nka], {
+    "area:highway": "tertiary",
+    junction: "yes",
+  });
+  const res6 = extractFeatures(data);
+  const q = res6.laneMarkings.find((x) => x.name === "N-Stra\u00dfe");
+  check(
+    "signals at both ends: TWO stop lines on the piece",
+    q !== undefined && q.stopLinesQ !== undefined && q.stopLinesQ.length === 2,
+    `stopLinesQ=${q?.stopLinesQ?.length ?? 0}`,
+  );
+  if (q?.stopLinesQ?.length === 2) {
+    // one stop line at each mouth (x=210000 and x=220000)
+    const ends = q.stopLinesQ.map(
+      (line) => line.reduce((s, pt) => s + pt[0], 0) / line.length,
+    );
+    const nearLeft = ends.some((x) => Math.abs(x - 210000) < 200);
+    const nearRight = ends.some((x) => Math.abs(x - 220000) < 200);
+    check(
+      "signals at both ends: one stop line per end, at its own signal",
+      nearLeft && nearRight,
+      `centroids=${JSON.stringify(ends)}`,
     );
   }
 }

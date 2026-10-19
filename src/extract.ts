@@ -1278,21 +1278,31 @@ export function extractFeatures(
     }
     return best;
   };
-  // the ONE boundary chain that carries the stop line: the chain
-  // CONTAINING the traffic_signals node itself (the node or its immediate
-  // surroundings lie on/at the road-junction mouth); among several, the
-  // chain nearest to the node. Never the flattened boundary - a junction
-  // touching the road area at both ends would put the stop line on the
-  // wrong end
-  const stopLineChain = (
+  // the boundary chain that carries the stop line: among a junction's
+  // shared chains, the one nearest the traffic_signals node. Never the
+  // flattened boundary - a junction touching the road area at both ends
+  // would put the stop line on the wrong end
+  // like stopLineChain, but the chain must lie within maxD2 (squared) of
+  // the signal node - a signal far from every shared chain does not sit
+  // at this intersection and gets no stop line from it
+  const stopLineChainNear = (
     road: AreaFeature,
     junction: AreaFeature,
     sigQ: number[],
+    maxD2: number,
   ): number[][] | null => {
     const chains = sharedBoundaryQ(road, junction, 10);
     let best: number[][] | null = null;
     let bestD = Infinity;
     for (const chain of chains) {
+      // a cut exactly at a ring vertex can yield a degenerate chain whose
+      // points all coincide - it draws nothing and must never win the
+      // pick over a real chain at the same place
+      let distinct = 0;
+      for (const pt of chain) {
+        if (pt[0] !== chain[0][0] || pt[1] !== chain[0][1]) distinct++;
+      }
+      if (distinct === 0) continue;
       let d = Infinity;
       for (const pt of chain) {
         const dd = (pt[0] - sigQ[0]) ** 2 + (pt[1] - sigQ[1]) ** 2;
@@ -1303,6 +1313,7 @@ export function extractFeatures(
         best = chain;
       }
     }
+    if (best === null || bestD > maxD2) return null;
     return best;
   };
   for (const [cl, sigs] of stopLineResolved) {
@@ -1310,10 +1321,11 @@ export function extractFeatures(
     for (const sl of sigs) {
       const ja = findJunction(sl.area, cl.coords[sl.sigIdx]);
       if (!ja) continue;
-      const line = stopLineChain(
+      const line = stopLineChainNear(
         sl.area,
         ja,
         cl.coords[sl.sigIdx],
+        100000000,
       );
       if (!line || line.length < 2) continue;
       let minX = Infinity,
@@ -1850,8 +1862,10 @@ export function extractFeatures(
       // vertex of THIS piece's area is reached - the stop line goes there,
       // at the mouth of the junction on the entering carriageway
       // signals resolved to this piece's area section carry their stop
-      // line here; other areas' stop lines belong to their own pieces
-      const stopLine = (stopLineResolved.get(p.cl) ?? []).find(
+      // lines here - ONE PER SIGNAL NODE (a road between two signalized
+      // junctions carries two); other areas' stop lines belong to their
+      // own pieces
+      const pieceSignals = (stopLineResolved.get(p.cl) ?? []).filter(
         (sl) => sl.area === p.area,
       );
       let laneLeftM: number;
@@ -1890,60 +1904,56 @@ export function extractFeatures(
       const maxLeft = p.leftM - parkLeft;
       if (laneLeftM < minLeft) laneLeftM = minLeft;
       if (laneLeftM > maxLeft) laneLeftM = maxLeft;
-      // which lanes flow INTO the signalized node decides the lateral
-      // clip of the stop line boundary (forward = right half of the
-      // block, backward = left half, one-way = the full boundary)
-      // which direction does the signal FACE? traffic_signals:direction on
-      // the node wins (forward = along the way, backward = against); a
-      // one-way way flows in its own direction only, so a backward-facing
-      // signal on it is ignored
-      let effectiveSide = stopLine?.side;
-      if (stopLine?.sigDir) {
-        if (stopLine.sigDir === "forward") effectiveSide = "end";
-        else if (stopLine.sigDir === "backward") {
+      // stop line geometry, ONE PER SIGNAL NODE on this piece: start at
+      // the signal node, find the intersection (junction area) at it, and
+      // take the shared-boundary chain that CONTAINS the node - the
+      // intersection alone shapes the stop line, laterally clipped to
+      // the lanes flowing into that signal (forward = right half of the
+      // block, backward = left half; one-way: the full boundary)
+      const stopLinesQ: Q[][][] = [];
+      for (const sl of pieceSignals) {
+        // which direction does the signal FACE? traffic_signals:direction
+        // on the node wins (forward = along the way, backward = against);
+        // a one-way way flows in its own direction only, so a
+        // backward-facing signal on it is ignored
+        let effectiveSide: "start" | "mid" | "end" | undefined = sl.side;
+        if (sl.sigDir) {
+        if (sl.sigDir === "forward") effectiveSide = "end";
+        else if (sl.sigDir === "backward") {
           // a backward-facing signal stops the backward lanes; on a
           // one-way road nothing flows backward -> no stop line
           effectiveSide = bidirectional ? "start" : undefined;
         }
         // "both" keeps the node-position side (mid stays full width)
       }
-      // a one-way road at its START flows AWAY from the signal: the stop
-      // line belongs to the opposite carriageway, not here
-      if (stopLine && !bidirectional && effectiveSide === "start") {
-        effectiveSide = undefined;
-      }
-      // stop line geometry: the shared boundary polyline between this
-      // piece's road area and the adjacent junction area, laterally
-      // clipped to the lanes flowing into the signal (forward = right
-      // half of the block, backward = left half; one-way: the full
-      // boundary)
-      let stopLineQ: Q[][] | undefined;
-      if (stopLine && effectiveSide) {
-        const ja = findJunctionForStopLine(
-          p.area,
-          p.cl.coords[stopLine.sigIdx],
-        );
-        if (ja) {
-          // only the chain containing the signal node - a junction
-          // touching the road area at both ends must never contribute
-          // its far-end chain
-          const boundary = stopLineChain(
-            p.area,
-            ja,
-            p.cl.coords[stopLine.sigIdx],
-          );
-          if (boundary && boundary.length >= 2) {
-            const clipHalf = bidirectional && effectiveSide !== "mid";
-            const fwdSide = effectiveSide === "end";
-            stopLineQ = clipBoundaryToLanes(
-              boundary,
-              p.cl,
-              laneLeftM,
-              laneW,
-              clipHalf ? (fwdSide ? "right" : "left") : undefined,
-            ) as Q[][];
-          }
+        // a one-way road at its START flows AWAY from the signal: the
+        // stop line belongs to the opposite carriageway, not here
+        if (!bidirectional && effectiveSide === "start") {
+          effectiveSide = undefined;
         }
+        if (!effectiveSide) continue;
+        const sigQ = p.cl.coords[sl.sigIdx];
+        // the intersection AT the signal node: the junction area containing
+        // the node itself; among junctions sharing a boundary with this
+        // piece's area, the one whose shared chain is nearest to the node
+        const ja = findJunctionForStopLine(p.area, sigQ);
+        if (!ja) continue;
+        // only the chain containing the signal node - a junction touching
+        // the road area at several places must never contribute a far
+        // chain; if no chain lies within ~100 m of the node, the signal
+        // does not sit at this intersection at all
+        const boundary = stopLineChainNear(p.area, ja, sigQ, 100000000);
+        if (!boundary || boundary.length < 2) continue;
+        const clipHalf = bidirectional && effectiveSide !== "mid";
+        const fwdSide = effectiveSide === "end";
+        const clipped = clipBoundaryToLanes(
+          boundary,
+          p.cl,
+          laneLeftM,
+          laneW,
+          clipHalf ? (fwdSide ? "right" : "left") : undefined,
+        ) as Q[][];
+        if (clipped.length >= 2) stopLinesQ.push(clipped);
       }
       laneMarkings.push({
         ...p.cl,
@@ -1957,7 +1967,7 @@ export function extractFeatures(
         roadRightM: p.rightM,
         lanesFwd: fwd,
         areaIds: [p.area.id],
-        stopLineQ,
+        stopLinesQ: stopLinesQ.length > 0 ? stopLinesQ : undefined,
       });
     }
   }
