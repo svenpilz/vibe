@@ -65,11 +65,10 @@ export interface LineFeature {
    * span the lanes flowing into it: all of them on a one-way road, only
    * the forward lanes on a bidirectional road.
    */
-  stopLineAtQ?: Q[];
-  /** stop line edge offset in meters (negative = left of the centerline) */
-  stopLineFromM?: number;
-  /** stop line other edge offset in meters (negative = left) */
-  stopLineToM?: number;
+  /** clipped stop line polyline in quantized coords: the shared boundary
+   * between the entering road area and the junction area, restricted to the
+   * lanes flowing into the signal */
+  stopLineQ?: Q[][];
   /** number of lanes forward (same direction of travel, centerlines only) */
   lanesFwd?: number;
   /** oneway=yes / -1 / roundabout: all lanes travel in one direction */
@@ -221,12 +220,10 @@ export interface StopLineFeature {
   id: string;
   layer: number;
   level?: number;
-  /** position on the way [lonQ, latQ] */
-  atQ: Q[];
-  /** unit direction of the way at the position (screen-space heading) */
-  dir: [number, number];
-  /** half width in meters: the line spans from -width/2 to +width/2 along the normal */
-  widthM: number;
+  /** clipped stop line polyline in quantized coords (shared boundary of
+   * the entering road area and the junction area, restricted to the
+   * stopping direction) */
+  line: Q[][];
   bbox: [number, number, number, number];
 }
 

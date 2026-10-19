@@ -196,12 +196,18 @@ from the node's position on the way:
   stop there;
 - **mid-way**: both directions stop, full width.
 
-The stop line is a solid white bar perpendicular to the centerline. The signal node
-often sits inside the junction area, which produces no markings — the position is
-therefore **walked** from the signal node along the way (towards the stopping traffic)
-to the first vertex inside the entering road's area section: the stop line lands at
-the junction mouth on the entering carriageway and is clipped to that area like the
-other markings.
+The stop line follows the **shared boundary** between the entering road area and the
+junction area — the polyline where the two polygons meet, which is generally **not
+orthogonal to the road** and may consist of several segments. A boundary edge belongs
+to the stop line when it lies inside (or on) the road polygon; junction ring edges are
+cut at the road boundary where they cross it, so partially overlapping polygons (a
+wider junction meeting a narrower road) work too. For **bidirectional** roads the
+boundary is laterally clipped to the stopping direction's half: forward-facing
+signals stop at the right half (forward lanes), backward-facing at the left half —
+edges crossing the direction border are split at the crossing point. The signal node
+often sits inside the junction area, which produces no markings — the piece whose
+road area the signal connects to carries the stop line (resolved by walking from the
+signal node along the way towards the stopping traffic).
 
 **Drawing.** Lane boundaries are continuous offset curves of the centerline using
 averaged vertex normals and **Chaikin corner-cutting** (two iterations), laid out from

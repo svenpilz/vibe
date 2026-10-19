@@ -651,23 +651,17 @@ function draw() {
     for (const sl of sls2) {
       if (!onLayer(sl)) continue;
       const px2 = pxPerMeter();
-      // position in screen coords
-      const sx = lonToX(sl.atQ[0] / Q),
-        sy = latToY(sl.atQ[1] / Q);
-      // dir is a unit vector in quantized lon/lat space; to screen space:
-      // x grows with lon, y grows DOWN as lat grows -> mirror dy
-      const dirX = sl.dir[0],
-        dirY = -sl.dir[1];
-      // right-hand normal in screen space
-      const nx = -dirY,
-        ny = dirX;
-      const half = (sl.widthM / 2) * px2;
+      // the shared boundary polyline between the entering road area and
+      // the junction area
+      if (!sl.line || sl.line.length < 2) continue;
       ctx.strokeStyle = "#e8e8e8";
       ctx.setLineDash([]);
       ctx.lineWidth = Math.max(2, 0.4 * px2);
       ctx.beginPath();
-      ctx.moveTo(sx + nx * half, sy + ny * half);
-      ctx.lineTo(sx - nx * half, sy - ny * half);
+      ctx.moveTo(lonToX(sl.line[0][0] / Q), latToY(sl.line[0][1] / Q));
+      for (let i = 1; i < sl.line.length; i++) {
+        ctx.lineTo(lonToX(sl.line[i][0] / Q), latToY(sl.line[i][1] / Q));
+      }
       ctx.stroke();
     }
 
@@ -1241,36 +1235,23 @@ function drawLaneMarkings(cl: LineFeature) {
     ctx.stroke();
     if (!solid) ctx.setLineDash([]);
   }
-  // stop line: solid bar perpendicular to the centerline at the
-  // highway=traffic_signals node, spanning the lanes flowing into it
-  if (
-    cl.stopLineAtQ &&
-    cl.stopLineFromM !== undefined &&
-    cl.stopLineToM !== undefined
-  ) {
-    // exact centerline vertex of the signal node
-    const si = base.findIndex(
-      (_, i) =>
-        cl.coords[i][0] === cl.stopLineAtQ![0] &&
-        cl.coords[i][1] === cl.stopLineAtQ![1],
-    );
-    if (si >= 0) {
-      // offsets follow the boundary convention: screen position =
-      // vertex + rightNormal * offset * px, offset = -(meters left)
-      const n = normals[si];
-      const x1 = base[si][0] + n[0] * cl.stopLineFromM * px;
-      const y1 = base[si][1] + n[1] * cl.stopLineFromM * px;
-      const x2 = base[si][0] + n[0] * cl.stopLineToM * px;
-      const y2 = base[si][1] + n[1] * cl.stopLineToM * px;
-      ctx.strokeStyle = "#e8e8e8";
-      ctx.setLineDash([]);
-      ctx.lineWidth = Math.max(2, 0.4 * px);
-      ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(x2, y2);
-      ctx.stroke();
-      ctx.lineWidth = lineW;
+  // stop line: the shared boundary polyline between the entering road
+  // area and the junction area (not necessarily orthogonal to the road),
+  // already clipped to the lanes flowing into the signal
+  if (cl.stopLineQ && cl.stopLineQ.length >= 2) {
+    ctx.strokeStyle = "#e8e8e8";
+    ctx.setLineDash([]);
+    ctx.lineWidth = Math.max(2, 0.4 * px);
+    ctx.beginPath();
+    ctx.moveTo(lonToX(cl.stopLineQ[0][0] / Q), latToY(cl.stopLineQ[0][1] / Q));
+    for (let i = 1; i < cl.stopLineQ.length; i++) {
+      ctx.lineTo(
+        lonToX(cl.stopLineQ[i][0] / Q),
+        latToY(cl.stopLineQ[i][1] / Q),
+      );
     }
+    ctx.stroke();
+    ctx.lineWidth = lineW;
   }
 }
 

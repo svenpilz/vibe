@@ -163,6 +163,92 @@ function distToSegQ2(px: number, py: number, a: number[], b: number[]): number {
  * nodes with the area ring; their vertices lie exactly on the boundary,
  * where the strict test is ambiguous.
  */
+function segIntersect(
+  p1: number[],
+  p2: number[],
+  p3: number[],
+  p4: number[],
+): number[] | null {
+  const d1x = p2[0] - p1[0],
+    d1y = p2[1] - p1[1];
+  const d2x = p4[0] - p3[0],
+    d2y = p4[1] - p3[1];
+  const denom = d1x * d2y - d1y * d2x;
+  if (denom === 0) return null;
+  const t = ((p3[0] - p1[0]) * d2y - (p3[1] - p1[1]) * d2x) / denom;
+  const u = ((p3[0] - p1[0]) * d1y - (p3[1] - p1[1]) * d1x) / denom;
+  if (t < 0 || t > 1 || u < 0 || u > 1) return null;
+  return [p1[0] + t * d1x, p1[1] + t * d1y];
+}
+
+/**
+ * The shared boundary between the entering road area and the junction
+ * area, as one or more polylines: the parts of the JUNCTION ring that lie
+ * inside (or on) the road polygon, with ring edges cut at the road
+ * boundary where they enter/leave. Handles partially overlapping polygons
+ * (a wider junction meeting a narrower road: the boundary follows the
+ * road's edge inside the junction).
+ */
+function sharedBoundaryQ(
+  road: AreaFeature,
+  junction: AreaFeature,
+  tolQ: number,
+): number[][] {
+  const out: number[][] = [];
+  for (const jRing of junction.outer) {
+    const inside = jRing.map(
+      (pt) => pointOnAreaBoundaryQ(pt, road, tolQ) || pointInAreaQ(pt, road),
+    );
+    let chain: number[][] = [];
+    const flush = () => {
+      if (chain.length >= 2) out.push(...chain);
+      chain = [];
+    };
+    for (let i = 0; i < jRing.length; i++) {
+      const j = (i + 1) % jRing.length;
+      const a = jRing[i],
+        b = jRing[j];
+      if (inside[i] && inside[j]) {
+        if (chain.length === 0) chain.push(a);
+        chain.push(b);
+        continue;
+      }
+      // edge crosses the road boundary: cut at every road-ring
+      // intersection, keep the sub-segments whose midpoint is in the road
+      const cuts: { t: number; pt: number[] }[] = [];
+      for (const rRing of road.outer) {
+        for (let k = 1; k < rRing.length; k++) {
+          const ip = segIntersect(a, b, rRing[k - 1], rRing[k]);
+          if (ip) {
+            const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+            const t =
+              len === 0 ? 0 : Math.hypot(ip[0] - a[0], ip[1] - a[1]) / len;
+            cuts.push({ t, pt: ip });
+          }
+        }
+      }
+      cuts.sort((c1, c2) => c1.t - c2.t);
+      const pts = [a, ...cuts.map((c) => c.pt), b];
+      for (let q = 1; q < pts.length; q++) {
+        const mid = [
+          (pts[q - 1][0] + pts[q][0]) / 2,
+          (pts[q - 1][1] + pts[q][1]) / 2,
+        ];
+        const midInside =
+          pointInAreaQ(mid, road) || pointOnAreaBoundaryQ(mid, road, tolQ);
+        if (midInside) {
+          if (chain.length === 0) chain.push(pts[q - 1]);
+          chain.push(pts[q]);
+        } else {
+          flush();
+        }
+      }
+    }
+    flush();
+  }
+  return out;
+}
+
 function pointOnAreaBoundaryQ(
   pt: number[],
   area: AreaFeature,
@@ -1145,52 +1231,45 @@ export function extractFeatures(
       }
     }
   }
-  // standalone stop lines: car ways WITHOUT drawn lane markings (no
-  // lanes=* or lane_markings=no) still stop at signals - measure their
-  // road width at the resolved position and emit a stop line spanning
-  // the full width (one-way: all traffic stops; the width is the road's)
+  // stop line geometry: the STOP LINE follows the shared boundary
+  // between the entering road area and the adjacent junction area - the
+  // polyline where the two polygons meet, which is generally NOT
+  // orthogonal to the road. For ways WITHOUT drawn lane markings (no
+  // lanes=*, lane_markings=no) the boundary is the whole stop line; for
+  // bidirectional lane-bearing ways it is laterally clipped to the
+  // stopping direction's half (forward = right half, backward = left)
+  const junctionAreaList = areas.filter((a) => a.junction);
+  const findJunction = (road: AreaFeature): AreaFeature | null => {
+    for (const ja of junctionAreaList) {
+      if (!bboxOverlap(ja.bbox, road.bbox)) continue;
+      if (sharedBoundaryQ(road, ja, 10).length >= 2) return ja;
+    }
+    return null;
+  };
   for (const [cl, sigs] of stopLineResolved) {
     if (laneCandidates.includes(cl)) continue;
     for (const sl of sigs) {
-      const bi = sl.idx;
-      const a = cl.coords[Math.max(0, bi - 1)];
-      const b = cl.coords[Math.min(cl.coords.length - 1, bi + 1)];
-      const dx = b[0] - a[0],
-        dy = b[1] - a[1];
-      const l = Math.hypot(dx, dy);
-      if (l === 0) continue;
-      const dir: [number, number] = [dx / l, dy / l];
-      const nx = -dy / l,
-        ny = dx / l;
-      const pt = cl.coords[bi];
-      const mPerLon =
-        (111_320 * Math.cos(((pt[1] / 1e7) * Math.PI) / 180)) / 1e7;
-      const mPerLat = 111_320 / 1e7;
-      const area = sl.area;
-      const [minX, minY, maxX, maxY] = area.bbox;
-      const maxRay = Math.hypot(maxX - minX, maxY - minY) + 1000;
-      const left = rayExitInArea(pt, [nx, ny], area, maxRay);
-      const right = rayExitInArea(pt, [-nx, -ny], area, maxRay);
-      if (left === null || right === null) continue;
-      const leftM = Math.hypot(nx * left * mPerLon, ny * left * mPerLat);
-      const rightM = Math.hypot(nx * left * mPerLon, ny * left * mPerLat);
-      void rightM;
-      const widthM =
-        leftM + Math.hypot(nx * right * mPerLon, ny * right * mPerLat);
+      const ja = findJunction(sl.area);
+      if (!ja) continue;
+      const line = sharedBoundaryQ(sl.area, ja, 10);
+      if (line.length < 2) continue;
+      let minX = Infinity,
+        minY = Infinity,
+        maxX = -Infinity,
+        maxY = -Infinity;
+      for (const pt of line) {
+        if (pt[0] < minX) minX = pt[0];
+        if (pt[0] > maxX) maxX = pt[0];
+        if (pt[1] < minY) minY = pt[1];
+        if (pt[1] > maxY) maxY = pt[1];
+      }
       stopLines.push({
         type: "stopline",
         id: cl.id,
         layer: cl.layer,
         level: cl.level,
-        atQ: pt,
-        dir,
-        widthM,
-        bbox: [
-          pt[0] - Math.round(widthM / mPerLon),
-          pt[1] - Math.round(widthM / mPerLat),
-          pt[0] + Math.round(widthM / mPerLon),
-          pt[1] + Math.round(widthM / mPerLat),
-        ],
+        line: line as Q[][],
+        bbox: [minX, minY, maxX, maxY],
       });
     }
   }
@@ -1589,6 +1668,92 @@ export function extractFeatures(
         laneWShared = () => w;
       }
     }
+    // junction adjacency + lane clipping for the stop line boundary
+    const junctionAreasStop = areas.filter((a) => a.junction);
+    const findJunctionForStopLine = (road: AreaFeature): AreaFeature | null => {
+      for (const ja of junctionAreasStop) {
+        if (!bboxOverlap(ja.bbox, road.bbox)) continue;
+        if (sharedBoundaryQ(road, ja, 10).length >= 2) return ja;
+      }
+      return null;
+    };
+    /**
+     * Clip the shared-boundary polyline to the stopping half of the road:
+     * project each boundary point onto the way's normal at its nearest
+     * way vertex; keep the points whose lateral offset falls in the
+     * requested half (right = forward lanes, left = backward lanes of a
+     * bidirectional block). Without a half, the full boundary passes.
+     */
+    const clipBoundaryToLanes = (
+      boundary: number[][],
+      cl: LineFeature,
+      laneLeftM: number,
+      laneW: number,
+      half: "left" | "right" | undefined,
+    ): number[][] => {
+      if (!half) return boundary;
+      // lateral midline of the block in meters-left convention:
+      // block spans laneLeftM (left edge) .. laneLeftM - lanes*laneW
+      const blockRight = laneLeftM - cl.lanes! * laneW;
+      const mid = (laneLeftM + blockRight) / 2;
+      // lateral meters-left of a point: project onto the normal of the
+      // nearest way segment (positive = left of the way)
+      const leftMOf = (pt: number[]): number => {
+        let bi = 0,
+          bd = Infinity;
+        for (let i = 0; i < cl.coords.length; i++) {
+          const d =
+            (pt[0] - cl.coords[i][0]) ** 2 + (pt[1] - cl.coords[i][1]) ** 2;
+          if (d < bd) {
+            bd = d;
+            bi = i;
+          }
+        }
+        const a = cl.coords[Math.max(0, bi - 1)];
+        const b = cl.coords[Math.min(cl.coords.length - 1, bi + 1)];
+        const dx = b[0] - a[0],
+          dy = b[1] - a[1];
+        const l = Math.hypot(dx, dy);
+        if (l === 0) return 0;
+        const nx = -dy / l,
+          ny = dx / l;
+        const vx = pt[0] - cl.coords[bi][0],
+          vy = pt[1] - cl.coords[bi][1];
+        const latQ = vx * nx + vy * ny;
+        const mPerLon =
+          (111_320 * Math.cos(((pt[1] / 1e7) * Math.PI) / 180)) / 1e7;
+        const mPerLat = 111_320 / 1e7;
+        return Math.hypot(nx * mPerLon, ny * mPerLat) * latQ;
+      };
+      const inHalf = (pt: number[]): boolean => {
+        const lm = leftMOf(pt);
+        return half === "right" ? lm <= mid : lm >= mid;
+      };
+      // walk the polyline: keep in-half points and SPLIT edges that cross
+      // the midline at the crossing point, so the half boundary is closed
+      const out: number[][] = [];
+      for (let i = 0; i < boundary.length; i++) {
+        const pt = boundary[i];
+        if (inHalf(pt)) {
+          out.push(pt);
+        }
+        // edge to the next point: if it crosses the midline, add the
+        // intersection
+        if (i + 1 < boundary.length) {
+          const nx2 = boundary[i + 1];
+          const s0 = leftMOf(pt) - mid,
+            s1 = leftMOf(nx2) - mid;
+          if (s0 > 0 !== s1 > 0 && s0 !== 0 && s1 !== 0) {
+            const t = s0 / (s0 - s1);
+            out.push([
+              Math.round(pt[0] + (nx2[0] - pt[0]) * t),
+              Math.round(pt[1] + (nx2[1] - pt[1]) * t),
+            ]);
+          }
+        }
+      }
+      return out;
+    };
     for (const p of pieces) {
       const fwd = fwdOf(p.cl);
       const laneW = laneWShared(p);
@@ -1641,15 +1806,9 @@ export function extractFeatures(
       const maxLeft = p.leftM - parkLeft;
       if (laneLeftM < minLeft) laneLeftM = minLeft;
       if (laneLeftM > maxLeft) laneLeftM = maxLeft;
-      // stop line: the lanes flowing INTO the signalized node, as
-      // offsets from the centerline (left positive). Forward lanes run in
-      // the way direction and stop at an END signal; backward lanes
-      // (numbered from the right) stop at a START signal; both at a MID
-      // signal. A one-way road at its START flows away: no stop line.
-      const laneBlockLeft = laneLeftM;
-      const laneBlockRight = laneLeftM - p.cl.lanes! * laneW;
-      let stopFrom = 0,
-        stopTo = 0;
+      // which lanes flow INTO the signalized node decides the lateral
+      // clip of the stop line boundary (forward = right half of the
+      // block, backward = left half, one-way = the full boundary)
       // which direction does the signal FACE? traffic_signals:direction on
       // the node wins (forward = along the way, backward = against); a
       // one-way way flows in its own direction only, so a backward-facing
@@ -1664,32 +1823,32 @@ export function extractFeatures(
         }
         // "both" keeps the node-position side (mid stays full width)
       }
-      // forward lanes occupy the block's RIGHT half (from the right edge
-      // up to the direction border), backward lanes its LEFT half -
-      // right-hand traffic keeps right of the border
-      const fwdEdge = laneBlockRight + fwd * laneW;
+      // a one-way road at its START flows AWAY from the signal: the stop
+      // line belongs to the opposite carriageway, not here
+      if (stopLine && !bidirectional && effectiveSide === "start") {
+        effectiveSide = undefined;
+      }
+      // stop line geometry: the shared boundary polyline between this
+      // piece's road area and the adjacent junction area, laterally
+      // clipped to the lanes flowing into the signal (forward = right
+      // half of the block, backward = left half; one-way: the full
+      // boundary)
+      let stopLineQ: Q[][] | undefined;
       if (stopLine && effectiveSide) {
-        if (effectiveSide === "end") {
-          // forward lanes: from the border down to the RIGHT edge,
-          // extended through the RIGHT parking strip (the stopping
-          // direction's parking lanes stop too); a one-way road stops
-          // with ALL its lanes - full width including both strips
-          stopFrom = bidirectional
-            ? fwdEdge
-            : p.cl.parkingLeft
-              ? p.leftM
-              : laneBlockLeft;
-          stopTo = p.cl.parkingRight ? -p.rightM : laneBlockRight;
-        } else if (effectiveSide === "start") {
-          if (bidirectional) {
-            // backward lanes: from the LEFT edge down to the border,
-            // extended through the LEFT parking strip
-            stopFrom = p.cl.parkingLeft ? p.leftM : laneBlockLeft;
-            stopTo = fwdEdge;
+        const ja = findJunctionForStopLine(p.area);
+        if (ja) {
+          const boundary = sharedBoundaryQ(p.area, ja, 10);
+          if (boundary.length >= 2) {
+            const clipHalf = bidirectional && effectiveSide !== "mid";
+            const fwdSide = effectiveSide === "end";
+            stopLineQ = clipBoundaryToLanes(
+              boundary,
+              p.cl,
+              laneLeftM,
+              laneW,
+              clipHalf ? (fwdSide ? "right" : "left") : undefined,
+            ) as Q[][];
           }
-        } else {
-          stopFrom = p.cl.parkingLeft ? p.leftM : laneBlockLeft;
-          stopTo = p.cl.parkingRight ? -p.rightM : laneBlockRight;
         }
       }
       laneMarkings.push({
@@ -1704,15 +1863,7 @@ export function extractFeatures(
         roadRightM: p.rightM,
         lanesFwd: fwd,
         areaIds: [p.area.id],
-        ...(stopLine && Math.abs(stopFrom - stopTo) > 0.01
-          ? {
-              stopLineAtQ: p.cl.coords[stopLine.idx] as unknown as Q[],
-              // offset convention: negative = left of the centerline
-              // (main.ts); stopFrom/stopTo span the stopping lanes
-              stopLineFromM: -stopFrom,
-              stopLineToM: -stopTo,
-            }
-          : {}),
+        stopLineQ,
       });
     }
   }
