@@ -1254,10 +1254,6 @@ export function extractFeatures(
     road: AreaFeature,
     sigQ: number[] | undefined,
   ): AreaFeature | null => {
-    if (sigQ) {
-      for (const ja of junctionAreaList)
-        if (pointInAreaTolQ2(sigQ, ja)) return ja;
-    }
     let best: AreaFeature | null = null;
     let bestD = Infinity;
     for (const ja of junctionAreaList) {
@@ -1749,10 +1745,6 @@ export function extractFeatures(
       road: AreaFeature,
       sigQ: number[] | undefined,
     ): AreaFeature | null => {
-      if (sigQ) {
-        for (const ja of junctionAreasStop)
-          if (pointInAreaTolQ2(sigQ, ja)) return ja;
-      }
       let best: AreaFeature | null = null;
       let bestD = Infinity;
       for (const ja of junctionAreasStop) {

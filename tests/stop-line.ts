@@ -562,4 +562,116 @@ if (failures > 0) {
     );
   }
 }
+// TWO CONNECTED junction areas (side by side, sharing an edge): the
+// signal sits inside junction A, but the road area shares its mouth
+// with the NEIGHBOURING junction B. The containment shortcut used to
+// pick A (no shared chain with the road -> line dropped or wrong); the
+// pick must go by the nearest shared chain - junction B's mouth at the
+// signal
+{
+  const sc = node(240000, 0, { highway: "traffic_signals" });
+  way([node(230000, 0), node(235000, 0), sc], {
+    highway: "tertiary",
+    surface: "asphalt",
+    lanes: "2",
+    name: "O-Stra\u00dfe",
+    oneway: "yes",
+  });
+  const ora = node(234550, -450),
+    orb = node(240450, -450),
+    orc = node(240450, 450),
+    ord = node(234550, 450);
+  way([ora, orb, orc, ord, ora], {
+    "area:highway": "tertiary",
+    surface: "asphalt",
+  });
+  // junction B: adjacent to the road's right mouth, NOT containing the
+  // signal node (which sits 500 further right)
+  const ojb_a = node(240450, -450),
+    ojb_b = node(241500, -450),
+    ojb_c = node(241500, 450),
+    ojb_d = node(240450, 450);
+  way([ojb_a, ojb_b, ojb_c, ojb_d, ojb_a], {
+    "area:highway": "tertiary",
+    junction: "yes",
+  });
+  // junction A: adjacent to B, CONTAINS the signal node, but shares NO
+  // boundary with the road area (a connected second intersection)
+  const oja_a = node(241500, -450),
+    oja_b = node(243000, -450),
+    oja_c = node(243000, 450),
+    oja_d = node(241500, 450);
+  way([oja_a, oja_b, oja_c, oja_d, oja_a], {
+    "area:highway": "tertiary",
+    junction: "yes",
+  });
+  const res7 = extractFeatures(data);
+  const o = res7.laneMarkings.find((x) => x.name === "O-Stra\u00dfe");
+  check(
+    "connected junctions: stop line present",
+    o !== undefined && o.stopLinesQ !== undefined && o.stopLinesQ.length >= 1,
+    `stopLinesQ=${o?.stopLinesQ?.length ?? 0}`,
+  );
+  if (o?.stopLinesQ?.length) {
+    const maxAbsDev = Math.max(
+      ...o.stopLinesQ.flat().map((pt) => Math.abs(pt[0] - 240450)),
+    );
+    check(
+      "connected junctions: stop line at the road's mouth (junction B)",
+      maxAbsDev < 200,
+      `max deviation from x=240450: ${maxAbsDev}`,
+    );
+  }
+}
+// Y-JUNCTION: the road meets the common stem of a fork whose two legs
+// are separate junction areas (or one Y-shaped one). The signal sits in
+// the stem; the stop line must follow the chain at the stem's mouth,
+// never a chain on a fork leg
+{
+  const sy = node(260000, 0, { highway: "traffic_signals" });
+  way([node(250000, 0), node(255000, 0), sy], {
+    highway: "tertiary",
+    surface: "asphalt",
+    lanes: "2",
+    name: "P-Stra\u00dfe",
+    oneway: "yes",
+  });
+  const yra = node(254550, -450),
+    yrb = node(260000, -450),
+    yrc = node(260000, 450),
+    yrd = node(254550, 450);
+  way([yra, yrb, yrc, yrd, yra], {
+    "area:highway": "tertiary",
+    surface: "asphalt",
+  });
+  // Y-shaped junction: wide head containing the signal, narrowing to a
+  // stem that meets the road mouth at x=260000
+  const yja = node(260000, -450),
+    yjb = node(261200, -900),
+    yjc = node(263000, -900),
+    yjd = node(263000, 900),
+    yje = node(261200, 900),
+    yjf = node(260000, 450);
+  way([yja, yjb, yjc, yjd, yje, yjf, yja], {
+    "area:highway": "tertiary",
+    junction: "yes",
+  });
+  const res8 = extractFeatures(data);
+  const y = res8.laneMarkings.find((x) => x.name === "P-Stra\u00dfe");
+  check(
+    "Y-junction: stop line present",
+    y !== undefined && y.stopLinesQ !== undefined && y.stopLinesQ.length >= 1,
+    `stopLinesQ=${y?.stopLinesQ?.length ?? 0}`,
+  );
+  if (y?.stopLinesQ?.length) {
+    const maxAbsDev = Math.max(
+      ...y.stopLinesQ.flat().map((pt) => Math.abs(pt[0] - 260000)),
+    );
+    check(
+      "Y-junction: stop line at the stem mouth",
+      maxAbsDev < 200,
+      `max deviation from x=260000: ${maxAbsDev}`,
+    );
+  }
+}
 console.log("all stop line tests passed");
