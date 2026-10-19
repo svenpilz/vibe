@@ -2531,6 +2531,22 @@ export function extractFeatures(
         : p.leftM - parkLeft;
       if (laneLeftM < minLeft) laneLeftM = minLeft;
       if (laneLeftM > maxLeft) laneLeftM = maxLeft;
+      // the piece's CONTINUITY ANCHOR, in the renderer's offset convention
+      // (meters from the mapped centerline, positive = RIGHT, like the
+      // boundary offsets -leftM + k*laneW): the lateral offset that must
+      // not change between pieces — the direction border on bidirectional
+      // roads, the stable traffic edge (or centerline) on one-way roads.
+      // The renderer scales the block into each sample's local span
+      // AROUND this offset, so boundaries stay continuous across piece
+      // seams (the anchor is group-shared) while the width follows the
+      // local road
+      const anchorOffsetM = bidirectional
+        ? -laneLeftM + fwd * laneW
+        : anchorKind === "left"
+          ? -laneLeftM
+          : anchorKind === "right"
+            ? -laneLeftM + p.cl.lanes! * laneW
+            : 0;
       // stop line geometry, ONE PER SIGNAL NODE on this piece: start at
       // the signal node, find the intersection (junction area) at it, and
       // take the shared-boundary chain that CONTAINS the node - the
@@ -2594,6 +2610,7 @@ export function extractFeatures(
         roadRightM: fitRightM(p),
         spline: p.spline,
         lanesFwd: fwd,
+        laneAnchorM: anchorOffsetM,
         areaIds: [p.area.id],
         stopLinesQ: stopLinesQ.length > 0 ? stopLinesQ : undefined,
       });

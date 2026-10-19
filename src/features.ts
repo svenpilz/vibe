@@ -81,6 +81,12 @@ export interface LineFeature {
   stopLinesQ?: Q[][][];
   /** number of lanes forward (same direction of travel, centerlines only) */
   lanesFwd?: number;
+  /** continuity anchor of the piece (markings only), in meters relative to the
+   *  mapped centerline, meters-LEFT-positive: the lateral offset that MUST NOT
+   *  change between pieces — the direction border on bidirectional roads, the
+   *  stable road edge (or centerline) on one-way roads. The renderer keeps this
+   *  offset fixed while rescaling the block into the local measured span. */
+  laneAnchorM?: number;
   /** oneway=yes / -1 / roundabout: all lanes travel in one direction */
   oneway?: boolean;
   /** parking:lane:left/both consumes the outer left width unit */

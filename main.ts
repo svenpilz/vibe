@@ -1242,25 +1242,38 @@ function drawLaneMarkings(cl: LineFeature) {
       })()
     : null;
   // meters-left convention: block spans laneLeftM (left edge) down to
-  // laneLeftM - lanes*laneW (right edge); per sample the block is
-  // rescaled into the LOCAL measured span so boundaries sit at the same
-  // FRACTION of the local width (lane k of N) — the road can genuinely
-  // widen/narrow along the piece (dual carriageway at a junction mouth,
-  // way 288689072), and a piece-constant block would overflow the road
-  // there. The per-sample edges come Hampel-smoothed from the extractor,
-  // so dents (platforms, cutouts) are already gone
+  // laneLeftM - lanes*laneW (right edge). Per sample the block's WIDTH
+  // follows the local measured span — the road can genuinely widen/narrow
+  // along the piece (dual carriageway at a junction mouth, way 288689072),
+  // and a piece-constant block would overflow the road there — but the
+  // rescaling keeps the piece's CONTINUITY ANCHOR (laneAnchorM: the
+  // direction border, or the stable edge on one-way roads) at its fixed
+  // offset: boundaries scale around the anchor, so they stay continuous
+  // across piece seams and never jump where the mapper jogged the way.
+  // The per-sample edges come Hampel-smoothed from the extractor, so
+  // dents (platforms, cutouts) are already gone
+  const anchorM = cl.laneAnchorM ?? 0;
   const localOffsetM = (i: number, offM: number): number => {
     if (!hasSpline) return offM;
     const s = sp![i];
-    // fraction of the block width at this boundary (0=left edge, 1=right)
-    const frac = 1 - (offM + leftM) / (total * cl.laneW!);
     const units =
       total + (cl.parkingLeft ? 1 : 0) + (cl.parkingRight ? 1 : 0);
     const w = (s.leftM + s.rightM) / units;
+    const blockW = total * w;
     const parkL = cl.parkingLeft ? w : 0;
     const leftEdge = s.leftM - parkL;
-    const blockW = total * w;
-    return -(leftEdge - frac * blockW);
+    // fraction of the block at the boundary and at the anchor
+    // (0=left edge, 1=right edge; offsets are right-positive:
+    // off = leftM_block + (frac-1)*blockW  <=>  frac = (off - leftOff + blockW)/blockW)
+    const drawnW = total * cl.laneW!;
+    const frac = (offM - leftM + drawnW) / drawnW;
+    const anchorFrac = (anchorM - leftM + drawnW) / drawnW;
+    // local block: same fractions, scaled width; the ANCHOR keeps its
+    // world offset, so the local block shifts to accommodate the local
+    // width while the anchor line stays put
+    const anchorOffLocal = anchorM;
+    const leftOffLocal = anchorOffLocal + (1 - anchorFrac) * blockW;
+    return leftOffLocal + (frac - 1) * blockW;
   };
   const drawOffsetLine = (
     offAt: (i: number) => number,
