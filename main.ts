@@ -1282,7 +1282,12 @@ function drawLaneMarkings(cl: LineFeature) {
   // rectangle per line-segment (its own samples' positions and normals,
   // its fitted edges), making the underlying road model visible
   const linear = laneSmoothness === "linear";
-  if (laneSmoothness === "rects" && hasSpline && sp) {
+  if (laneSmoothness === "rects") {
+    // the fitted-model view draws ONLY the fitted rectangles; pieces
+    // without fitted rectangles (degenerate fits) draw nothing - falling
+    // through to the normal markings would draw lane lines in the
+    // rectangle view
+    if (hasSpline && sp) {
     // group the samples per segment; each segment's rectangle spans its
     // first to last sample, offset by the segment's fitted edges
     ctx.strokeStyle = "#e8e8e8";
@@ -1329,6 +1334,7 @@ function drawLaneMarkings(cl: LineFeature) {
         ctx.stroke();
       }
       i0 = i1;
+    }
     }
     return;
   }

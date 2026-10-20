@@ -1964,11 +1964,48 @@ export function extractFeatures(
       const B2 = lerp(A2, A3, tk1, tk3, tt);
       return lerp(B1, B2, tk1, tk2, tt);
     };
+    // CORNER OVERSHOOT CLAMP: the chordal Catmull-Rom rounds corners but
+    // OVERSHOOTS them - at a sharp corner between segments of very
+    // different lengths the curve leaves the road by up to meters (a
+    // 90-degree corner between a 30 m and a 60 m segment bulges ~2.4 m
+    // outside). Lane markings are offset curves of the centerline, so
+    // the base curve must stay ON the road: an evaluated point further
+    // than OVERSHOOT_M meters off the chain polyline is projected back
+    // onto it. The tolerance keeps the intended rounding (decimeters)
+    // while eliminating the bulges that doubled markings near corners
+    // and drew them past the road edge
+    // mv and ptAtRaw are in METRIC working coordinates, so distances are
+    // already meters - compare directly against the tolerance
+    const OVERSHOOT_M = 0.4;
+    const projectIfOffChain = (raw: number[]): number[] => {
+      let best: number[] | null = null;
+      let bestD2 = Infinity;
+      for (let i = 1; i < mv.length; i++) {
+        const ax = mv[i - 1][0],
+          ay = mv[i - 1][1],
+          bx = mv[i][0],
+          by = mv[i][1];
+        const dx = bx - ax,
+          dy = by - ay;
+        const len2 = dx * dx + dy * dy;
+        let f = len2 > 0 ? ((raw[0] - ax) * dx + (raw[1] - ay) * dy) / len2 : 0;
+        f = Math.max(0, Math.min(1, f));
+        const qx = ax + dx * f,
+          qy = ay + dy * f;
+        const d2 = (raw[0] - qx) ** 2 + (raw[1] - qy) ** 2;
+        if (d2 < bestD2) {
+          bestD2 = d2;
+          best = [qx, qy];
+        }
+      }
+      if (best && bestD2 > OVERSHOOT_M * OVERSHOOT_M) return best;
+      return raw;
+    };
     const ptAt = (t: number): { p: number[]; d: number[] } => {
-      const p = ptAtRaw(t);
+      const p = projectIfOffChain(ptAtRaw(t));
       const e = Math.min(0.25, Math.max(1e-6, (cum[cum.length - 1] || 1) * 1e-4));
-      const pa = ptAtRaw(Math.max(0, t - e));
-      const pb = ptAtRaw(Math.min(cum[cum.length - 1], t + e));
+      const pa = projectIfOffChain(ptAtRaw(Math.max(0, t - e)));
+      const pb = projectIfOffChain(ptAtRaw(Math.min(cum[cum.length - 1], t + e)));
       return {
         p,
         d: [pb[0] - pa[0], pb[1] - pa[1]],
