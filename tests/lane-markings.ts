@@ -178,11 +178,14 @@ check(
     near(C[0].laneW!, (900 * mPerLat) / 4, 1e-4),
   `A:${A[0].laneW} C:${C[0].laneW}`,
 );
+// B is the group's only 2+1 piece: with the per-split anchor it keeps
+// its OWN natural middle line (the median of its split's positions),
+// so its lanes fill its own road evenly (13/3) instead of being
+// displaced by a foreign split's anchor
 check(
-  "asymmetric piece's unit width is capped by its tighter side",
-  B[0].laneW! <= (1300 * mPerLat) / 3 + 1e-4 &&
-    near(B[0].laneW!, (650 * mPerLat) / 2, 1e-4),
-  `B:${B[0].laneW} (right side 2 fwd lanes over ${(650 * mPerLat).toFixed(2)} m)`,
+  "asymmetric-split piece keeps its own middle line and fills evenly",
+  near(B[0].laneW!, (1300 * mPerLat) / 3, 1e-4),
+  `B:${B[0].laneW} expected:${((1300 * mPerLat) / 3).toFixed(4)}`,
 );
 check(
   "a different road keeps its own lane width",

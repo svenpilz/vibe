@@ -1407,8 +1407,15 @@ function drawLaneMarkings(cl: LineFeature) {
     // distance from the centerline, negative = left side
     const offPx = (-leftM + k * cl.laneW!) * px;
     // solid only between opposite directions: exists when some (but not
-    // all) lanes run forward — a one-way road has no solid separator
-    const solid = fwd > 0 && fwd < total && k === fwd;
+    // all) lanes run forward — a one-way road has no solid separator.
+    // RIGHT-HAND TRAFFIC: the forward lanes keep RIGHT of the border, so
+    // the border sits BWD lanes counted from the LEFT (k counts
+    // boundaries from the block's left edge; fwd counts from the right).
+    // For symmetric splits (2+2, 1+1) bwd == fwd and the two coincide;
+    // for asymmetric splits (way 396518419: 2 fwd + 1 bwd) the border
+    // is at k = bwd = total - fwd, NOT k = fwd — drawing it at k = fwd
+    // put the middle line between the two FORWARD lanes
+    const solid = fwd > 0 && fwd < total && k === total - fwd;
     if (hasSpline)
       drawOffsetLine(
         (i) => localOffsetM(i, -leftM + k * cl.laneW!) * px,
