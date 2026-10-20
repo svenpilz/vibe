@@ -163,16 +163,26 @@ const mPerLon = mPerLat * Math.cos(((LAT / 1e7) * Math.PI) / 180);
 // the pieces' traffic-lane widths): lanes are evenly sized along the
 // road — the dominant continuity property. A single narrow piece (more
 // parking units, C) must not shrink the whole road (the old minimum did)
-// PER-PIECE unit width: every piece's width units split ITS OWN fitted
-// road width evenly (README =5) - the grid fills the road on every
-// piece; a group-wide shared width would leave the 6-unit and 4-unit
-// pieces mismatched (way 4536810 regression)
+// PER-PIECE unit width, CAPPED PER SIDE: every piece's width units
+// split its OWN fitted road width evenly (README 5 - the grid fills
+// the road), capped so each side's units fit between the shared
+// middle line and that side's road edge. A and C are symmetric around
+// the anchor and fill exactly; B (3 lanes, 2+1) is asymmetric around
+// the shared middle line: its two forward lanes must fit the right
+// half, so its unit width is capped by the right side's span - the
+// middle line stays continuous with A and C (the continuity the
+// anchor guarantees) at the cost of unpainted verge on the looser side
 check(
-  "every piece splits its own fitted width evenly over its units",
+  "symmetric pieces split their own fitted width evenly over their units",
   near(A[0].laneW!, (900 * mPerLat) / 2, 1e-4) &&
-    near(B[0].laneW!, (1300 * mPerLat) / 3, 1e-4) &&
     near(C[0].laneW!, (900 * mPerLat) / 4, 1e-4),
-  `A:${A[0].laneW} B:${B[0].laneW} C:${C[0].laneW}`,
+  `A:${A[0].laneW} C:${C[0].laneW}`,
+);
+check(
+  "asymmetric piece's unit width is capped by its tighter side",
+  B[0].laneW! <= (1300 * mPerLat) / 3 + 1e-4 &&
+    near(B[0].laneW!, (650 * mPerLat) / 2, 1e-4),
+  `B:${B[0].laneW} (right side 2 fwd lanes over ${(650 * mPerLat).toFixed(2)} m)`,
 );
 check(
   "a different road keeps its own lane width",

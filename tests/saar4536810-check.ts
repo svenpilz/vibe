@@ -74,25 +74,45 @@ if (w && n) {
     p.lanes! + (p.parkingLeft ? 1 : 0) + (p.parkingRight ? 1 : 0);
   // the piece's unit width splits its OWN fitted width: the traffic
   // block + parking strips fill the fitted road exactly
-  const fillOf = (p: LineFeature): boolean => {
-    const u = units(p);
+  // PER-SIDE FILL: with the shared middle line at the group anchor (the
+  // median of the pieces' natural border positions - between the two
+  // pieces' naturals), each piece's unit width is its even split CAPPED
+  // by its tighter side; the tighter side fills exactly, the looser
+  // side keeps the same unit width and leaves a verge. The parking bays
+  // are exactly one unit wide - the property this regression guards
+  // (they were crushed to ~half a unit when the block was placed
+  // without per-side capping)
+  const sideFill = (p: LineFeature, tag: string): boolean => {
+    const fwd = p.lanesFwd ?? Math.ceil(p.lanes! / 2);
     const lw = p.laneW!;
-    const blk = p.lanes! * lw;
-    const parkL = p.parkingLeft ? lw : 0;
-    const parkR = p.parkingRight ? lw : 0;
-    const total = blk + parkL + parkR;
-    const road = p.roadLeftM! + p.roadRightM!;
-    return Math.abs(total - road) < 0.05 * road;
+    const border = -p.laneLeftM! + fwd * lw;
+    const unitsL = (p.parkingLeft ? 1 : 0) + (p.lanes! - fwd);
+    const unitsR = (p.parkingRight ? 1 : 0) + fwd;
+    const spanL = p.roadLeftM! + border;
+    const spanR = p.roadRightM! - border;
+    const perL = spanL / unitsL;
+    const perR = spanR / unitsR;
+    // the unit width equals the tighter side's natural width
+    const tighter = Math.min(perL, perR);
+    if (Math.abs(lw - tighter) > 0.05) return false;
+    // the tighter side fills exactly: units*lw == span
+    if (Math.abs(unitsL * lw - spanL) > 0.1 && Math.abs(unitsR * lw - spanR) > 0.1)
+      return false;
+    // the parking bay(s) are exactly one unit wide
+    if (p.parkingLeft && Math.abs(spanL - unitsL * lw) > 0.1 && perL < perR)
+      return false;
+    void tag;
+    return true;
   };
   check(
-    "w4536810: unit grid fills its fitted width (incl. parking lanes)",
-    fillOf(w),
-    `units:${units(w)} total:${(w.lanes! * w.laneW! + (w.parkingLeft ? w.laneW! : 0) + (w.parkingRight ? w.laneW! : 0)).toFixed(2)} road:${(w.roadLeftM! + w.roadRightM!).toFixed(2)}`,
+    "w4536810: unit width capped by the tighter side (bays full width)",
+    sideFill(w, "w4536810"),
+    `laneW:${w.laneW!.toFixed(3)}`,
   );
   check(
-    "w1436394163: unit grid fills its fitted width (incl. parking lane)",
-    fillOf(n),
-    `units:${units(n)} total:${(n.lanes! * n.laneW! + (n.parkingLeft ? n.laneW! : 0) + (n.parkingRight ? n.laneW! : 0)).toFixed(2)} road:${(n.roadLeftM! + n.roadRightM!).toFixed(2)}`,
+    "w1436394163: unit width capped by the tighter side (bay full width)",
+    sideFill(n, "w1436394163"),
+    `laneW:${n.laneW!.toFixed(3)}`,
   );
   // the fitted rectangles see the parking units: 6-unit piece and
   // 5-unit piece differ in unit width (the rectangle widths follow the

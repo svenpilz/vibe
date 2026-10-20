@@ -2749,7 +2749,7 @@ export function extractFeatures(
     };
     for (const p of pieces) {
       const fwd = fwdOf(p.cl);
-      const laneW = laneWShared(p);
+      let laneW = laneWShared(p);
       // the stop line belongs to the piece whose area section contains
       // the signal node (within ~3 m tolerance)
       // the signal node itself often sits inside the JUNCTION area, which
@@ -2770,27 +2770,49 @@ export function extractFeatures(
       if (fwd > 0 && fwd < p.cl.lanes!) {
         // bidirectional, right-hand traffic: forward lanes keep RIGHT of
         // the direction border (the middle line, solid), backward lanes
-        // LEFT; the parking units sit outside the traffic block, at the
-        // fitted road edges. The anchor offset is PARKING-AWARE: the
-        // natural border position of a piece is its fitted RIGHT road
-        // edge minus its right parking unit and fwd lane widths (all at
-        // the piece's own unit width) - pieces whose parking sides differ
-        // still align, because the middle line depends only on the LANE
-        // configuration (README 5). The anchor is PARKING-AWARE: the
-        // natural border position of a piece is its fitted RIGHT road
-        // edge minus its right parking unit and fwd lane widths (all at
-        // the piece's own unit width) - the border depends only on the
-        // lane configuration, so pieces whose parking sides differ still
-        // align on the same continuous middle line (median of the
-        // naturals). The traffic block extends bwd*laneW left and
-        // fwd*laneW right of the border; the parking strips sit between
-        // the block's outer boundaries and the piece's fitted road edges
-        // - where the anchor differs from a piece's natural position the
-        // piece's parking strips absorb the difference (they are the
-        // flexible units; the traffic lanes keep the shared offset). The
-        // renderer draws the solid border at k = fwd, i.e. at
-        // -laneLeftM + fwd*laneW = anchor
-        laneLeftM = -anchorOf(p) + fwd * laneW;
+        // LEFT. UNFOLD FROM THE MIDDLE LINE (README 5): the middle line
+        // keeps the group's shared anchor offset, and each TAGGED side's
+        // units fill EXACTLY the space between the middle line and that
+        // side's fitted road edge - all lanes have EQUAL width, so a
+        // parking bay is exactly one lane wide and the traffic lanes
+        // take the rest of the side. The piece's unit width follows from
+        // its two sides' unit counts and spans (they may differ, e.g. a
+        // piece with parking on one side only, or a bus platform denting
+        // one boundary); an UNTAGGED side has no units - its space stays
+        // unpainted (no parking bay there). The renderer draws the
+        // solid border at k = fwd, i.e. at -laneLeftM + fwd*laneW
+        const anchor = anchorOf(p);
+        const parkL = p.cl.parkingLeft ? 1 : 0;
+        const parkR = p.cl.parkingRight ? 1 : 0;
+        const unitsL = parkL + (p.cl.lanes! - fwd);
+        const unitsR = parkR + fwd;
+        const spanL = fitLeftM(p) + anchor;
+        const spanR = fitRightM(p) - anchor;
+        // the unit width starts as the piece's EVEN SPLIT (all units over
+        // the full fitted span - the available width distributed evenly
+        // over all lanes, README 5) and is then CAPPED per side: each
+        // side must fit its own units between the middle line and its
+        // road edge, so a side whose natural width is smaller (a
+        // bus-platform dent, an asymmetric lane split around the shared
+        // middle line) binds the unit width. The tighter side fills
+        // exactly - its parking bay is exactly one unit wide, never
+        // squeezed - and the looser side keeps the same unit width,
+        // leaving its leftover unpainted (no parking tag there, or a
+        // wider verge)
+        const evenSplit =
+          (fitLeftM(p) + fitRightM(p)) / (unitsL + unitsR);
+        const perL = unitsL > 0 ? spanL / unitsL : Infinity;
+        const perR = unitsR > 0 ? spanR / unitsR : Infinity;
+        const unitW = Math.min(evenSplit, perL, perR);
+        // re-space the traffic block at the piece's unit width: backward
+        // lanes occupy [anchor - bwd*unitW, anchor], forward lanes
+        // [anchor, anchor + fwd*unitW]; laneLeftM is the block's LEFT
+        // edge in meters-left. The piece's lane width BECOMES unitW so
+        // every drawn boundary (-laneLeftM + k*laneW) sits on the unit
+        // grid: the solid border lands exactly on the anchor
+        laneW = unitW;
+        // laneLeftM (meters-LEFT) from -laneLeftM + fwd*laneW = anchor
+        laneLeftM = fwd * unitW - anchor;
         bidirectional = true;
       } else if (anchorKind === "left") {
         // lanes added on the right: the LEFT edge is continuous, the
