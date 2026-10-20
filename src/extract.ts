@@ -1484,6 +1484,10 @@ export function extractFeatures(
      *  markings layout uses */
     rawLeftM?: number;
     rawRightM?: number;
+    /** the owning way was traversed REVERSED by the chain: the sample's
+     *  values are in the WAY's frame, so the piece's sample array must be
+     *  reversed to match the renderer's array-order normals */
+    rev?: boolean;
   }
   interface MarkingSample {
     area: AreaFeature;
@@ -2121,12 +2125,20 @@ export function extractFeatures(
     // normal and left/right split; flip them back so every consumer sees
     // the sample in the OWNING WAY's own orientation (left/right must
     // match the way's tags: parking:left etc.)
+    // orient flips each sample's left/right split into the OWNING WAY's
+    // own convention (the chain may traverse the way reversed) and
+    // stamps it REVERSED; the per-piece slicing reverses the sample
+    // ARRAY for reversed ways - the renderer derives its normals from
+    // array order, so a piece whose array runs against its way's
+    // direction would render the whole lane block MIRRORED
+    // (parking:left on the right side, the solid border displaced)
     const orient = (
       s: SplineSampleInfo & { cl: LineFeature },
     ): SplineSampleInfo & { cl: LineFeature } =>
       revByOrig.get(s.cl)
         ? {
             ...s,
+            rev: true,
             nx: -s.nx,
             ny: -s.ny,
             leftM: s.rightM,
@@ -2134,7 +2146,7 @@ export function extractFeatures(
             rawLeftM: s.rawRightM,
             rawRightM: s.rawLeftM,
           }
-        : s;
+        : { ...s, rev: false };
     if (raw.length < 3) return raw.map(orient);
     // ---- pass 2: re-center on the geometric midline ----
     // The mapped centerline can be SHIFTED by the mapper (jogging the way
@@ -2328,7 +2340,7 @@ export function extractFeatures(
         rightM: rights[i] as number,
       }),
     );
-    return repaired;
+    return repaired.map(orient);
   };
 
   for (const ways of groups.values()) {
@@ -2367,18 +2379,29 @@ export function extractFeatures(
         hi = i;
       }
       if (lo < 0) continue;
-      p.spline = sp.slice(lo, hi + 1).map((s) => ({
-        pt: s.pt,
-        nx: s.nx,
-        ny: s.ny,
-        leftM: s.leftM,
-        rightM: s.rightM,
-        seg: s.seg,
-        fitLeftM: s.fitLeftM,
-        fitRightM: s.fitRightM,
-        rawLeftM: s.rawLeftM,
-        rawRightM: s.rawRightM,
-      }));
+      {
+        // REVERSED ways: the samples' values are already in the WAY's
+        // own frame (orient flipped them), but they are ordered along
+        // the CHAIN - reverse the array so it runs along the way,
+        // matching the frame the renderer's array-order normals assume
+        // (otherwise the whole lane block renders MIRRORED:
+        // parking:left on the right side)
+        const slice = sp.slice(lo, hi + 1);
+        const ordered = slice[0]?.rev ? slice.slice().reverse() : slice;
+        p.spline = ordered.map((s) => ({
+          pt: s.pt,
+          nx: s.nx,
+          ny: s.ny,
+          leftM: s.leftM,
+          rightM: s.rightM,
+          seg: s.seg,
+          fitLeftM: s.fitLeftM,
+          fitRightM: s.fitRightM,
+          rawLeftM: s.rawLeftM,
+          rawRightM: s.rawRightM,
+          rev: s.rev,
+        }));
+      }
     }
     // FIT THE ROAD MODEL PER LINE-SEGMENT: the chained polyline is a
     // string of line-segments; each gets its own extruded rectangle with
