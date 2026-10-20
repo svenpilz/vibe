@@ -136,16 +136,16 @@ Continuity across the pieces of one road:
   count changes mid-road (way 4536810, 6 units over 14.9 m chaining
   into 5 units over 15.1 m) a shared width fills neither piece.
 - **Bidirectional roads** carry the solid direction border (the **middle
-  line**) at the natural fill position of each piece's unit grid — from
-  the fitted right road edge inward: the right parking unit, then the
-  forward lanes. Pieces of the same lane **and parking** configuration
-  share the median of their natural border positions (the fitted
-  rectangle is shifted laterally to align them — differently sized
-  rectangles align on their middle line); pieces whose parking layout
-  differs have their middle line at a different natural place, because
-  the parking units push the traffic block off the road center —
-  aligning across parking layouts would leave the roads unfilled. Lane
-  separators between lanes of the same direction are drawn dashed.
+  line**) at ONE shared offset along the whole road — the median of the
+  pieces' parking-aware natural border positions (each piece's fitted
+  right road edge minus its right parking unit and fwd lane widths, at
+  the piece's own unit width). The middle line is CONTINUOUS within the
+  highway area; pieces whose parking layout or unit count differs keep
+  the shared offset, and their PARKING STRIPS absorb the difference
+  between their natural border position and the anchor (the strips are
+  the flexible units — a strip follows the locally available space,
+  the traffic lanes keep the shared offset). Lane separators between
+  lanes of the same direction are drawn dashed.
 - **One-way roads** have no border; the block anchors on the road edge that
   did **not** move where the road grows, so the outermost lane continues
   across lane-count changes (in the unfolded domain, the flattened corner

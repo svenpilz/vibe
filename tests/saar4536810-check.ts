@@ -102,32 +102,42 @@ if (w && n) {
     Math.abs(w.laneW! - n.laneW!) > 0.2,
     `w:${w.laneW!.toFixed(3)} n:${n.laneW!.toFixed(3)}`,
   );
-  // the middle line (solid border) sits at each piece's NATURAL fill
-  // position: from the fitted RIGHT road edge inward — right parking
-  // unit, then the forward lanes. The two pieces have DIFFERENT parking
-  // layouts (parking:both vs parking:left) and different unit counts, so
-  // their middle lines sit at different offsets — that is the aligned
-  // reading of differently sized rectangles: each grid fills its own
-  // rectangle, and the middle line lands where the lane configuration
-  // puts it. (Aligning the two offsets would unfill both roads.)
+  // the middle line (solid border) is CONTINUOUS across the road group:
+  // both pieces draw it at the SAME offset (the median of their
+  // parking-aware natural positions). The two pieces have different
+  // parking layouts and unit counts, so each piece's parking strips
+  // absorb the difference between its natural border position and the
+  // shared anchor (a strip may be wider or narrower than one traffic
+  // unit, but never more than one unit off, and never negative)
   const borderOf = (p: LineFeature): number =>
     -p.laneLeftM! + (p.lanesFwd ?? Math.ceil(p.lanes! / 2)) * p.laneW!;
-  const naturalBorderOf = (p: LineFeature): number => {
-    const fwd = p.lanesFwd ?? Math.ceil(p.lanes! / 2);
-    return (
-      p.roadRightM! - (p.parkingRight ? p.laneW! : 0) - fwd * p.laneW!
+  check(
+    "middle line continuous across the road group (shared anchor)",
+    Math.abs(borderOf(w) - borderOf(n)) < 0.05,
+    `w:${borderOf(w).toFixed(3)} n:${borderOf(n).toFixed(3)}`,
+  );
+  for (const [p, tag] of [[w, "w4536810"], [n, "w1436394163"]] as [LineFeature, string][]) {
+    const lw = p.laneW!;
+    const leftBlk = p.laneLeftM!;
+    const rightBlk = leftBlk - p.lanes! * lw;
+    const stripL = p.roadLeftM! - leftBlk;
+    const stripR = rightBlk + p.roadRightM!;
+    const parkSide = (side: "L" | "R"): boolean => {
+      const strip = side === "L" ? stripL : stripR;
+      if (side === "L" ? !p.parkingLeft : !p.parkingRight) return true;
+      return strip >= -0.05 && strip <= lw * 2 + 0.05;
+    };
+    check(
+      `${tag}: parking strips absorb the anchor difference (0..2 units, never negative)`,
+      parkSide("L") && parkSide("R"),
+      `L:${stripL.toFixed(2)} R:${stripR.toFixed(2)} unit:${lw.toFixed(2)}`,
     );
-  };
-  check(
-    "middle line at its natural fill position on w4536810 (grid fills the rectangle)",
-    Math.abs(borderOf(w) - naturalBorderOf(w)) < 0.05,
-    `drawn:${borderOf(w).toFixed(3)} natural:${naturalBorderOf(w).toFixed(3)}`,
-  );
-  check(
-    "middle line at its natural fill position on w1436394163",
-    Math.abs(borderOf(n) - naturalBorderOf(n)) < 0.05,
-    `drawn:${borderOf(n).toFixed(3)} natural:${naturalBorderOf(n).toFixed(3)}`,
-  );
+    check(
+      `${tag}: traffic lanes at the piece's own unit width`,
+      Math.abs((leftBlk - rightBlk) - p.lanes! * lw) < 1e-6,
+      `block:${(leftBlk - rightBlk).toFixed(3)} expected:${(p.lanes! * lw).toFixed(3)}`,
+    );
+  }
 }
 
 if (failures > 0) {

@@ -2527,38 +2527,25 @@ export function extractFeatures(
       // keeps RIGHT of the direction border, oncoming traffic LEFT.
       // UNFOLDED ALIGNMENT: straightening the mapped centerline makes
       // the chain of fitted segment rectangles a 1-D strip, and the
-      // middle line is continuous exactly when the rectangles of the
-      // SAME DIRECTION SPLIT draw it at the SAME offset. Pieces with a
-      // different split (2+2 vs 2+1) have their middle line at a
-      // different natural place — aligning them would bend the line —
-      // so each split gets its own anchor: the median of the PIECE-level
-      // natural border positions of that split. The natural position is
-      // computed from the piece's own fitted rectangle (its fitted right
-      // edge minus its right parking unit and fwd lane widths, all at
-      // the piece's own unit width — the "align differently sized
-      // rectangles" reading: the border keeps its offset while the
-      // unit grid fills each rectangle)
-      // the middle line's natural place depends on the LANE configuration
-      // AND the parking layout (the parking units push the traffic block
-      // off the road center): pieces align with pieces of the SAME unit
-      // configuration - fwd+bwd lanes and parking sides - whose middle
-      // line sits at the same place; averaging across different parking
-      // layouts would shift whole lane blocks off the road
-      const splitOf = (p: MarkingSample & { cl: LineFeature }): string =>
-        `${fwdOf(p.cl)}+${p.cl.lanes! - fwdOf(p.cl)}|${p.cl.parkingLeft ? "pL" : ""}${p.cl.parkingRight ? "pR" : ""}`;
-      const anchorsBySplit = new Map<string, number[]>();
+      // ONE MIDDLE-LINE ANCHOR for the whole road group: the middle
+      // line must be CONTINUOUS within the highway area (README 5), so
+      // every bidirectional piece draws its solid border at the SAME
+      // offset - the median of the pieces' PARKING-AWARE natural border
+      // positions (each piece's fitted right road edge minus its right
+      // parking unit and fwd lane widths, all at the piece's OWN unit
+      // width). The median follows the majority configuration; a piece
+      // whose parking layout differs keeps the shared offset anyway -
+      // its parking strips absorb the difference (a parking strip's
+      // width follows the locally available space, the TRAFFIC lanes
+      // stay put: that is what keeps the middle line one continuous
+      // line along the whole road)
+      const anchorPos: number[] = [];
       for (const p of borderPieces) {
         const park = p.cl.parkingRight ? laneWOf(p) : 0;
-        const pos = fitRightM(p) - park - fwdOf(p.cl) * laneWOf(p);
-        const key = splitOf(p);
-        const arr = anchorsBySplit.get(key);
-        if (arr) arr.push(pos);
-        else anchorsBySplit.set(key, [pos]);
+        anchorPos.push(fitRightM(p) - park - fwdOf(p.cl) * laneWOf(p));
       }
-      const anchorMBySplit = new Map<string, number>();
-      for (const [key, xs] of anchorsBySplit)
-        anchorMBySplit.set(key, median(xs));
-      anchorOf = (p) => anchorMBySplit.get(splitOf(p)) ?? 0;
+      const anchorM = median(anchorPos);
+      anchorOf = () => anchorM;
     } else {
       // which side does the road GROW on along the group? Compare the
       // pieces' measured edges: when the lane count rises from one piece
@@ -2740,28 +2727,20 @@ export function extractFeatures(
         // edge minus its right parking unit and fwd lane widths (all at
         // the piece's own unit width) - pieces whose parking sides differ
         // still align, because the middle line depends only on the LANE
-        // configuration (README 5). MIDDLE-LINE ALIGNMENT: the fitted
-        // rectangle is OPTIMIZED - shifted laterally by
-        // anchor - natural - so its natural middle line lands on the
-        // split's shared anchor; the differently sized rectangles of the
-        // same direction split align on one continuous middle line, and
-        // the unit grid FILLS each shifted rectangle exactly (every
-        // parking strip exactly one unit wide). The renderer draws the
-        // solid border at k = fwd, i.e. at -laneLeftM + fwd*laneW
-        const natural =
-          fitRightM(p) - (p.cl.parkingRight ? laneW : 0) - fwd * laneW;
-        const shift = anchorOf(p) - natural;
-        // apply the shift to the fitted rectangle at BOTH levels: the
-        // per-segment rectangles (the samples - what the rects mode
-        // draws and what the renderer clamps into) and the piece-level
-        // road rectangle (what the layout below consumes), so the unit
-        // grid FILLS the shifted rectangle exactly
-        for (const s of p.spline ?? []) {
-          if (s.fitLeftM !== undefined) s.fitLeftM -= shift;
-          if (s.fitRightM !== undefined) s.fitRightM += shift;
-        }
-        if (p.roadFitLeftM !== undefined) p.roadFitLeftM -= shift;
-        if (p.roadFitRightM !== undefined) p.roadFitRightM += shift;
+        // configuration (README 5). The anchor is PARKING-AWARE: the
+        // natural border position of a piece is its fitted RIGHT road
+        // edge minus its right parking unit and fwd lane widths (all at
+        // the piece's own unit width) - the border depends only on the
+        // lane configuration, so pieces whose parking sides differ still
+        // align on the same continuous middle line (median of the
+        // naturals). The traffic block extends bwd*laneW left and
+        // fwd*laneW right of the border; the parking strips sit between
+        // the block's outer boundaries and the piece's fitted road edges
+        // - where the anchor differs from a piece's natural position the
+        // piece's parking strips absorb the difference (they are the
+        // flexible units; the traffic lanes keep the shared offset). The
+        // renderer draws the solid border at k = fwd, i.e. at
+        // -laneLeftM + fwd*laneW = anchor
         laneLeftM = -anchorOf(p) + fwd * laneW;
         bidirectional = true;
       } else if (anchorKind === "left") {
