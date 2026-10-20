@@ -1892,52 +1892,65 @@ export function extractFeatures(
       while (k < cum.length - 1 && cum[k] < t) k++;
       return k - 1;
     };
-    const ptAt = (t: number): { p: number[]; d: number[] } => {
+    // CHORDAL (knot-aware) Catmull-Rom via Barry–Goldman: the knots are
+    // the VERTEX ARC LENGTHS (cum). The uniform-parameter Catmull-Rom
+    // overshoots badly where consecutive chain segments differ in length
+    // (a 36 m way segment followed by a 3.6 m one makes the curve LOOP —
+    // points evaluate past the chord, even behind the segment start),
+    // which showed up as twisted "X" rectangles: a segment's samples
+    // nearly coincide while their normals point opposite. Dividing by
+    // the true knot spacing keeps the curve inside a reasonable envelope
+    // of its control points — no loops
+    const ptAtRaw = (t: number): number[] => {
       let k = 1;
       while (k < cum.length - 1 && cum[k] < t) k++;
-      const t0 = cum[k - 1],
-        t1 = cum[k];
-      const f = t1 - t0 > 0 ? (t - t0) / (t1 - t0) : 0;
-      const P = (idx: number): number[] =>
+      const k1 = Math.max(0, k - 1),
+        k2 = Math.min(cum.length - 1, k);
+      const tk0 = cum[Math.max(0, k1 - 1)],
+        tk1 = cum[k1],
+        tk2 = cum[k2],
+        tk3 = cum[Math.min(cum.length - 1, k2 + 1)];
+      const pv = (idx: number): number[] =>
         idx < 0
-          ? [2 * mv[0][0] - mv[1][0], 2 * mv[0][1] - mv[1][1]]
+          ? [
+              2 * mv[0][0] - mv[1][0],
+              2 * mv[0][1] - mv[1][1],
+            ]
           : idx > mv.length - 1
             ? [
                 2 * mv[mv.length - 1][0] - mv[mv.length - 2][0],
                 2 * mv[mv.length - 1][1] - mv[mv.length - 2][1],
               ]
             : mv[idx];
-      const p0 = P(k - 2),
-        p1 = P(k - 1),
-        p2 = P(k),
-        p3 = P(k + 1);
-      const f2 = f * f,
-        f3 = f2 * f;
-      const px =
-        0.5 *
-        (2 * p1[0] +
-          (-p0[0] + p2[0]) * f +
-          (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * f2 +
-          (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * f3);
-      const py =
-        0.5 *
-        (2 * p1[1] +
-          (-p0[1] + p2[1]) * f +
-          (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * f2 +
-          (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * f3);
-      const dx =
-        0.5 *
-        (-p0[0] +
-          p2[0] +
-          2 * (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * f +
-          3 * (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * f2);
-      const dy =
-        0.5 *
-        (-p0[1] +
-          p2[1] +
-          2 * (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * f +
-          3 * (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * f2);
-      return { p: [px, py], d: [dx, dy] };
+      const p0 = pv(k1 - 1),
+        p1 = pv(k1),
+        p2 = pv(k2),
+        p3 = pv(k2 + 1);
+      const dt = Math.max(1e-9, tk2 - tk1);
+      const tt = Math.min(Math.max(t, tk1), tk2);
+      const lerp = (a: number[], b: number[], ta: number, tb: number, x: number): number[] =>
+        tb - ta <= 0
+          ? [...a]
+          : [
+              a[0] + ((b[0] - a[0]) * (x - ta)) / (tb - ta),
+              a[1] + ((b[1] - a[1]) * (x - ta)) / (tb - ta),
+            ];
+      const A1 = lerp(p0, p1, tk0, tk1, tt);
+      const A2 = lerp(p1, p2, tk1, tk2, tt);
+      const A3 = lerp(p2, p3, tk2, tk3, tt);
+      const B1 = lerp(A1, A2, tk0, tk2, tt);
+      const B2 = lerp(A2, A3, tk1, tk3, tt);
+      return lerp(B1, B2, tk1, tk2, tt);
+    };
+    const ptAt = (t: number): { p: number[]; d: number[] } => {
+      const p = ptAtRaw(t);
+      const e = Math.min(0.25, Math.max(1e-6, (cum[cum.length - 1] || 1) * 1e-4));
+      const pa = ptAtRaw(Math.max(0, t - e));
+      const pb = ptAtRaw(Math.min(cum[cum.length - 1], t + e));
+      return {
+        p,
+        d: [pb[0] - pa[0], pb[1] - pa[1]],
+      };
     };
     const [minX, minY, maxX, maxY] = area.bbox;
     const maxRay = Math.hypot(maxX - minX, maxY - minY) + 1000;

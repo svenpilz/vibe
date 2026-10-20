@@ -260,6 +260,83 @@ for (const p of lm) {
   );
 }
 
+// ---- NO TWISTED RECTANGLES: every segment's rendered quad must be a
+// simple polygon — its left/right edge polylines may not cross each
+// other or the end caps (a bowtie renders as an "X"). The quads are
+// reconstructed exactly as the "fitted rectangles" mode draws them:
+// first/last sample position, averaged screen normals, fitted edges
+{
+  const cross2 = (p: number[], q: number[], r: number[]) =>
+    (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+  const segInt = (a: number[], b: number[], c: number[], d: number[]) => {
+    const d1 = cross2(a, b, c),
+      d2 = cross2(a, b, d),
+      d3 = cross2(c, d, a),
+      d4 = cross2(c, d, b);
+    return d1 * d2 < 0 && d3 * d4 < 0;
+  };
+  const mPerLonR = 1e-7 * 111320 * Math.cos(52.475 * (Math.PI / 180));
+  const mPerLatR = 1e-7 * 111320;
+  let bowties = 0;
+  let detail = "";
+  for (const p of lm) {
+    const sp = p.spline ?? [];
+    if (sp.length < 2) continue;
+    const pts = sp.map((s) => [s.pt[0] * mPerLonR, s.pt[1] * mPerLatR]);
+    const normals = pts.map((_, i) => {
+      let nx = 0,
+        ny = 0;
+      for (const [j, k] of [
+        [i - 1, i],
+        [i, i + 1],
+      ] as [number, number][]) {
+        if (j < 0 || k > pts.length - 1) continue;
+        const dx = pts[k][0] - pts[j][0],
+          dy = pts[k][1] - pts[j][1];
+        const l = Math.hypot(dx, dy);
+        if (l > 0) {
+          nx += dy / l;
+          ny += -dx / l;
+        }
+      }
+      const l = Math.hypot(nx, ny);
+      return l > 0 ? [nx / l, ny / l] : [0, 0];
+    });
+    let i0 = 0;
+    while (i0 < sp.length) {
+      const g = sp[i0].seg ?? 0;
+      let i1 = i0 + 1;
+      while (i1 < sp.length && (sp[i1].seg ?? 0) === g) i1++;
+      const fl = sp[i0].fitLeftM,
+        fr = sp[i0].fitRightM;
+      if (fl !== undefined && fr !== undefined && fl > 0 && fr > 0) {
+        const A = pts[i0],
+          B = pts[i1 - 1];
+        const nA = normals[i0],
+          nB = normals[i1 - 1];
+        const aL = [A[0] - nA[0] * fl, A[1] - nA[1] * fl];
+        const aR = [A[0] + nA[0] * fr, A[1] + nA[1] * fr];
+        const bL = [B[0] - nB[0] * fl, B[1] - nB[1] * fl];
+        const bR = [B[0] + nB[0] * fr, B[1] + nB[1] * fr];
+        if (
+          segInt(aL, bL, bR, aR) ||
+          segInt(aR, bR, aL, bL) ||
+          segInt(aL, aR, bL, bR)
+        ) {
+          bowties++;
+          detail = `${p.id} seg${g}`;
+        }
+      }
+      i0 = i1;
+    }
+  }
+  check(
+    "no twisted rectangles (no segment quad self-intersects)",
+    bowties === 0,
+    `${bowties} bowties, first:${detail}`,
+  );
+}
+
 if (failures > 0) {
   console.error(`${failures} rubens regression test(s) failed`);
   process.exit(1);
