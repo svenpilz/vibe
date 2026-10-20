@@ -1296,6 +1296,15 @@ function drawLaneMarkings(cl: LineFeature) {
       const a = sp[i0],
         b = sp[i1 - 1];
       if (!a || !b) continue;
+      // DEGENERATE groups: a chain segment lying entirely OUTSIDE the
+      // area (leading into the junction) owns only its seam-vertex
+      // sample — its "rectangle" collapses into a transverse stroke
+      // across the road, visually closing the strip into a box. A
+      // rectangle needs a tangential extent: skip single-sample groups
+      if (i1 - i0 < 2) {
+        i0 = i1;
+        continue;
+      }
       const fl = a.fitLeftM,
         fr = a.fitRightM;
       if (fl !== undefined && fr !== undefined && fl > 0 && fr > 0) {
