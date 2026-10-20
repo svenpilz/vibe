@@ -358,15 +358,38 @@ console.log("all rubens regression tests passed");
     bidir.length === lm.length,
     `bidir:${bidir.length} of ${lm.length}`,
   );
-  // border offset from the mapped centerline, per piece
+  // border offset from the mapped centerline, per piece. The middle
+  // line is continuous among pieces of the SAME lane+parking
+  // configuration (their unit grids fill their roads the same way);
+  // pieces whose parking layout differs have their middle line at a
+  // different natural place - the parking units push the traffic block
+  // off the road center, and aligning across parking layouts would
+  // leave the road unfilled
   const offs = bidir.map(
     (p) => -p.laneLeftM! + (p.lanesFwd ?? 1) * p.laneW!,
   );
-  const spread = Math.max(...offs.map((o) => Math.abs(o - offs[0])));
+  const cfgOf = (p: (typeof lm)[number]) =>
+    `${p.lanesFwd ?? 1}+${p.lanes! - (p.lanesFwd ?? 1)}|${p.parkingLeft ? "pL" : ""}${p.parkingRight ? "pR" : ""}`;
+  const byCfg = new Map<string, number[]>();
+  bidir.forEach((p, i) => {
+    const k = cfgOf(p);
+    const arr = byCfg.get(k) ?? [];
+    arr.push(offs[i]);
+    byCfg.set(k, arr);
+  });
+  let maxSpread = 0;
+  let spreadDetail = "";
+  for (const [k, xs] of byCfg) {
+    const sp = Math.max(...xs.map((o) => Math.abs(o - xs[0])));
+    if (sp > maxSpread) {
+      maxSpread = sp;
+      spreadDetail = `${k}:${xs.map((o) => o.toFixed(3)).join(" ")}`;
+    }
+  }
   check(
-    "border offset uniform across pieces (continuous center line)",
-    spread < 0.05,
-    `offsets:${offs.map((o) => o.toFixed(3)).join(" ")} spread:${spread.toFixed(3)}`,
+    "middle line continuous per lane+parking configuration",
+    maxSpread < 0.05,
+    `worst:${spreadDetail} spread:${maxSpread.toFixed(3)}`,
   );
   // the fitted rectangle must agree with the MEASURED area midline: the
   // mapper may jog the centerline where parking sides change, but the
@@ -384,6 +407,8 @@ console.log("all rubens regression tests passed");
       .map((s) => (s.leftM - s.rightM) / 2)
       .sort((a, b) => a - b);
     const med = midOffs[Math.floor(midOffs.length / 2)];
+    // the piece road rectangle (roadLeftM/roadRightM) before the
+    // middle-line alignment shift follows the measured midline
     const shift = (p.roadLeftM! - p.roadRightM!) / 2;
     check(
       `piece ${p.id}: fit follows the measured area midline (< 0.35 m)`,

@@ -102,15 +102,31 @@ if (w && n) {
     Math.abs(w.laneW! - n.laneW!) > 0.2,
     `w:${w.laneW!.toFixed(3)} n:${n.laneW!.toFixed(3)}`,
   );
-  // the middle line (solid border) stays at the same offset on both
-  // pieces — same direction split (2+2), aligned differently sized
-  // rectangles
+  // the middle line (solid border) sits at each piece's NATURAL fill
+  // position: from the fitted RIGHT road edge inward — right parking
+  // unit, then the forward lanes. The two pieces have DIFFERENT parking
+  // layouts (parking:both vs parking:left) and different unit counts, so
+  // their middle lines sit at different offsets — that is the aligned
+  // reading of differently sized rectangles: each grid fills its own
+  // rectangle, and the middle line lands where the lane configuration
+  // puts it. (Aligning the two offsets would unfill both roads.)
   const borderOf = (p: LineFeature): number =>
     -p.laneLeftM! + (p.lanesFwd ?? Math.ceil(p.lanes! / 2)) * p.laneW!;
+  const naturalBorderOf = (p: LineFeature): number => {
+    const fwd = p.lanesFwd ?? Math.ceil(p.lanes! / 2);
+    return (
+      p.roadRightM! - (p.parkingRight ? p.laneW! : 0) - fwd * p.laneW!
+    );
+  };
   check(
-    "middle line aligned across the differently sized rectangles (same 2+2 split)",
-    Math.abs(borderOf(w) - borderOf(n)) < 0.05,
-    `w:${borderOf(w).toFixed(3)} n:${borderOf(n).toFixed(3)}`,
+    "middle line at its natural fill position on w4536810 (grid fills the rectangle)",
+    Math.abs(borderOf(w) - naturalBorderOf(w)) < 0.05,
+    `drawn:${borderOf(w).toFixed(3)} natural:${naturalBorderOf(w).toFixed(3)}`,
+  );
+  check(
+    "middle line at its natural fill position on w1436394163",
+    Math.abs(borderOf(n) - naturalBorderOf(n)) < 0.05,
+    `drawn:${borderOf(n).toFixed(3)} natural:${naturalBorderOf(n).toFixed(3)}`,
   );
 }
 

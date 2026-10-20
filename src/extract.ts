@@ -166,6 +166,12 @@ function lateralIntervalInArea(
 function fitRoadRectangle(
   samples: { leftM: number; rightM: number }[],
   units: number,
+  /** fraction of per-sample coverages trimmed from EACH end of the
+   *  sorted list before summing — the robustness knob. 0.15 (default):
+   *  minority dents inside one segment are dropped. Higher (0.35) for
+   *  the PIECE-level road fit: a platform denting a third of a short
+   *  piece's samples must not drag the piece rectangle sideways */
+  trimFrac = 0.15,
 ): { w: number; s: number } {
   const ivs: [number, number][] = samples.map((s) => [-s.rightM, s.leftM]);
   const overlap = (i: number, lo: number, hi: number): number =>
@@ -189,7 +195,7 @@ function fitRoadRectangle(
   // inflate its width, platform dents shrink it. Dropping the top and
   // bottom per-sample coverages makes the MAJORITY cross-section decide,
   // which is the robust reading of an inconsistent OSM area
-  const trim = Math.max(0, Math.floor(ivs.length * 0.15));
+  const trim = Math.max(0, Math.floor(ivs.length * trimFrac));
   const scoreOf = (per: number[]): number => {
     const s = [...per].sort((a, b) => a - b);
     let sum = 0;
@@ -202,12 +208,22 @@ function fitRoadRectangle(
     for (const [lo, hi] of ivs) {
       cands.push(lo + h, hi - h, (lo + hi) / 2);
     }
+    // TIE TOLERANCE: when the block is NARROWER than the road (fewer
+    // units than the area holds), a whole PLATEAU of shifts achieves
+    // (near-)full coverage, and the plateau candidates' scores differ
+    // only by the samples' tiny span variations — an absolute epsilon
+    // would let a plateau EDGE win by a hair, wedging the rectangle
+    // against one road side (seen as absurdly shifted per-segment
+    // rectangles). A tolerance of ~1 cm per (untrimmed) sample treats
+    // near-equal coverage as a tie, and the measured-area midline
+    // preference centers the rectangle instead
+    const tie = 0.01 * ivs.length;
     let best = { s: 0, v: -Infinity };
     for (const s of cands) {
       const per = ivs.map((_, i) => overlap(i, s - h, s + h));
       const v = 2 * scoreOf(per) - units * w * (ivs.length - 2 * trim);
-      if (v > best.v + 1e-6) best = { s, v };
-      else if (v > best.v - 1e-6 && Math.abs(s - midPref) < Math.abs(best.s - midPref))
+      if (v > best.v + tie) best = { s, v };
+      else if (v > best.v - tie && Math.abs(s - midPref) < Math.abs(best.s - midPref))
         best = { s, v: Math.max(best.v, v) };
     }
     return best;
@@ -1477,6 +1493,12 @@ export function extractFeatures(
      *  measured road edges and the fitted edges of the per-segment road-model
      *  rectangles (fitLeftM/fitRightM) */
     spline?: SplineSampleInfo[];
+    /** the piece's ROAD-WIDE fitted rectangle (dent-robust, trimmed
+     *  objective over all samples) — the piece-level layout quantities
+     *  (lane width, anchors) derive from it, while the per-segment fits
+     *  stay honest (dents show as smaller rectangles in the rects mode) */
+    roadFitLeftM?: number;
+    roadFitRightM?: number;
   }
   const samplesOf = new Map<LineFeature, MarkingSample[]>();
   for (const cl of laneCandidates) {
@@ -2370,12 +2392,15 @@ export function extractFeatures(
           rightM: s.rawRightM ?? s.rightM,
         }));
       const roadFit = (() => {
-        const { w, s: shift } = fitRoadRectangle(rawOf(sp), units);
+        const { w, s: shift } = fitRoadRectangle(rawOf(sp), units, 0.35);
         if (!(w > 0) || !isFinite(w) || !isFinite(shift)) return null;
-        return {
+        const fit = {
           fl: shift + (units * w) / 2,
           fr: (units * w) / 2 - shift,
         };
+        p.roadFitLeftM = fit.fl;
+        p.roadFitRightM = fit.fr;
+        return fit;
       })();
       const dentMask: boolean[] = new Array(sp.length).fill(false);
       if (roadFit) {
@@ -2433,18 +2458,18 @@ export function extractFeatures(
     // rectangle edges — the piece-level quantities the group layout keys
     // off (anchors, clamps). Pieces without any fitted sample keep their
     // measured edges
-    const fitLeftM = (p: MarkingSample & { cl: LineFeature }): number => {
-      const xs = (p.spline ?? []).filter((s) => s.fitLeftM !== undefined);
-      return xs.length > 0 ? median(xs.map((s) => s.fitLeftM!)) : p.leftM;
-    };
-    const fitRightM = (p: MarkingSample & { cl: LineFeature }): number => {
-      const xs = (p.spline ?? []).filter((s) => s.fitRightM !== undefined);
-      return xs.length > 0 ? median(xs.map((s) => s.fitRightM!)) : p.rightM;
-    };
+    const fitLeftM = (p: MarkingSample & { cl: LineFeature }): number =>
+      p.roadFitLeftM ?? p.leftM;
+    const fitRightM = (p: MarkingSample & { cl: LineFeature }): number =>
+      p.roadFitRightM ?? p.rightM;
     // fitted unit width of the piece's road-model rectangles (falling
     // back to the even split of its measured width when no segment fit
     // succeeded); the layout is the FIT, not the boundary measurement
     const laneWOf = (p: MarkingSample & { cl: LineFeature }): number => {
+      // the road-wide fit is dent-robust; per-segment medians would
+      // follow a dent spanning whole segments
+      if (p.roadFitLeftM !== undefined && p.roadFitRightM !== undefined)
+        return (p.roadFitLeftM + p.roadFitRightM) / unitsOf(p);
       const xs = (p.spline ?? []).filter(
         (s) => s.fitLeftM !== undefined && s.fitRightM !== undefined,
       );
@@ -2513,13 +2538,18 @@ export function extractFeatures(
       // the piece's own unit width — the "align differently sized
       // rectangles" reading: the border keeps its offset while the
       // unit grid fills each rectangle)
+      // the middle line's natural place depends on the LANE configuration
+      // AND the parking layout (the parking units push the traffic block
+      // off the road center): pieces align with pieces of the SAME unit
+      // configuration - fwd+bwd lanes and parking sides - whose middle
+      // line sits at the same place; averaging across different parking
+      // layouts would shift whole lane blocks off the road
       const splitOf = (p: MarkingSample & { cl: LineFeature }): string =>
-        `${fwdOf(p.cl)}+${p.cl.lanes! - fwdOf(p.cl)}`;
+        `${fwdOf(p.cl)}+${p.cl.lanes! - fwdOf(p.cl)}|${p.cl.parkingLeft ? "pL" : ""}${p.cl.parkingRight ? "pR" : ""}`;
       const anchorsBySplit = new Map<string, number[]>();
       for (const p of borderPieces) {
-        const park = p.cl.parkingRight ? 1 : 0;
-        const unitsW = laneWOf(p);
-        const pos = fitRightM(p) - park * unitsW - fwdOf(p.cl) * unitsW;
+        const park = p.cl.parkingRight ? laneWOf(p) : 0;
+        const pos = fitRightM(p) - park - fwdOf(p.cl) * laneWOf(p);
         const key = splitOf(p);
         const arr = anchorsBySplit.get(key);
         if (arr) arr.push(pos);
@@ -2702,15 +2732,36 @@ export function extractFeatures(
       let laneLeftM: number;
       let bidirectional = false;
       if (fwd > 0 && fwd < p.cl.lanes!) {
-        // bidirectional: the direction border (the middle line, solid)
-        // sits at its split's shared anchor offset, meters RIGHT of the
-        // mapped centerline. The renderer draws the solid boundary at
-        // k = fwd, i.e. at -laneLeftM + fwd*laneW, so the block's left
-        // edge follows from the anchor: laneLeftM = fwd*laneW - anchor.
-        // Pieces of the SAME split keep the border at the same offset
-        // (aligned differently sized rectangles); each piece's unit
-        // grid fills its own fitted rectangle (parking units outside
-        // the traffic block, at the fitted road edges)
+        // bidirectional, right-hand traffic: forward lanes keep RIGHT of
+        // the direction border (the middle line, solid), backward lanes
+        // LEFT; the parking units sit outside the traffic block, at the
+        // fitted road edges. The anchor offset is PARKING-AWARE: the
+        // natural border position of a piece is its fitted RIGHT road
+        // edge minus its right parking unit and fwd lane widths (all at
+        // the piece's own unit width) - pieces whose parking sides differ
+        // still align, because the middle line depends only on the LANE
+        // configuration (README 5). MIDDLE-LINE ALIGNMENT: the fitted
+        // rectangle is OPTIMIZED - shifted laterally by
+        // anchor - natural - so its natural middle line lands on the
+        // split's shared anchor; the differently sized rectangles of the
+        // same direction split align on one continuous middle line, and
+        // the unit grid FILLS each shifted rectangle exactly (every
+        // parking strip exactly one unit wide). The renderer draws the
+        // solid border at k = fwd, i.e. at -laneLeftM + fwd*laneW
+        const natural =
+          fitRightM(p) - (p.cl.parkingRight ? laneW : 0) - fwd * laneW;
+        const shift = anchorOf(p) - natural;
+        // apply the shift to the fitted rectangle at BOTH levels: the
+        // per-segment rectangles (the samples - what the rects mode
+        // draws and what the renderer clamps into) and the piece-level
+        // road rectangle (what the layout below consumes), so the unit
+        // grid FILLS the shifted rectangle exactly
+        for (const s of p.spline ?? []) {
+          if (s.fitLeftM !== undefined) s.fitLeftM -= shift;
+          if (s.fitRightM !== undefined) s.fitRightM += shift;
+        }
+        if (p.roadFitLeftM !== undefined) p.roadFitLeftM -= shift;
+        if (p.roadFitRightM !== undefined) p.roadFitRightM += shift;
         laneLeftM = -anchorOf(p) + fwd * laneW;
         bidirectional = true;
       } else if (anchorKind === "left") {
