@@ -1295,18 +1295,22 @@ function drawLaneMarkings(cl: LineFeature) {
       while (i1 < sp.length && (sp[i1].seg ?? 0) === g) i1++;
       const a = sp[i0],
         b = sp[i1 - 1];
+      if (!a || !b) continue;
       const fl = a.fitLeftM,
         fr = a.fitRightM;
-      if (fl !== undefined && fr !== undefined) {
+      if (fl !== undefined && fr !== undefined && fl > 0 && fr > 0) {
         const ax = lonToX(a.pt[0] / Q),
           ay = latToY(a.pt[1] / Q);
         const bx = lonToX(b.pt[0] / Q),
           by = latToY(b.pt[1] / Q);
-        // meters-left convention: +offset = left of the centerline
-        const aL = [ax + splineNormals![i0][0] * fl * px, ay + splineNormals![i0][1] * fl * px];
-        const aR = [ax - splineNormals![i0][0] * fr * px, ay - splineNormals![i0][1] * fr * px];
-        const bL = [bx + splineNormals![i1 - 1][0] * fl * px, by + splineNormals![i1 - 1][1] * fl * px];
-        const bR = [bx - splineNormals![i1 - 1][0] * fr * px, by - splineNormals![i1 - 1][1] * fr * px];
+        // the spline normal points RIGHT of travel in screen space:
+        // the LEFT edge is -normal*fitLeftM, the RIGHT edge
+        // +normal*fitRightM (the same right-positive convention as the
+        // lane boundary offsets)
+        const aL = [ax - splineNormals![i0][0] * fl * px, ay - splineNormals![i0][1] * fl * px];
+        const aR = [ax + splineNormals![i0][0] * fr * px, ay + splineNormals![i0][1] * fr * px];
+        const bL = [bx - splineNormals![i1 - 1][0] * fl * px, by - splineNormals![i1 - 1][1] * fl * px];
+        const bR = [bx + splineNormals![i1 - 1][0] * fr * px, by + splineNormals![i1 - 1][1] * fr * px];
         ctx.beginPath();
         ctx.moveTo(aL[0], aL[1]);
         ctx.lineTo(bL[0], bL[1]);

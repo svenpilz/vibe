@@ -69,6 +69,10 @@ export interface LineFeature {
     /** fitted road edges of the segment's rectangle (meters, same convention as leftM/rightM) */
     fitLeftM?: number;
     fitRightM?: number;
+    /** raw measured edges before the dent repair (meters) — the honest
+     *  geometry the rectangle fit consumed */
+    rawLeftM?: number;
+    rawRightM?: number;
   }[];
   /**
    * Stop line (markings only): the centerline flows from a non-junction

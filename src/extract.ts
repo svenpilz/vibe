@@ -1462,6 +1462,12 @@ export function extractFeatures(
     /** fitted edges of the segment's road-model rectangle, meters */
     fitLeftM?: number;
     fitRightM?: number;
+    /** RAW measured edges before the outlier/dent repair — the honest
+     *  geometry the rectangle fit consumes (dents show as smaller
+     *  fitted rectangles); leftM/rightM stay the repaired values the
+     *  markings layout uses */
+    rawLeftM?: number;
+    rawRightM?: number;
   }
   interface MarkingSample {
     area: AreaFeature;
@@ -1974,17 +1980,23 @@ export function extractFeatures(
       const n = Math.max(4, Math.min(40, Math.round(len / 4)));
       for (let s = 0; s <= n; s++) {
         const isEnd = s === 0 || s === n;
-        // interior samples: uniform arc length; endpoints: nudge EPS
-        // towards the segment interior so a shared vertex on the area
-        // boundary measures into THIS segment's side of it
+        // interior samples: uniform arc length; endpoints: the EXACT
+        // shared vertex (both adjacent segments reference the SAME point,
+        // so their rectangles meet there — no tangential gap); the
+        // MEASUREMENT ray is nudged EPS into THIS segment so a vertex on
+        // the area boundary measures into this segment's side, but the
+        // recorded pt stays the vertex itself
         let t: number;
+        let measureT: number;
         if (isEnd) {
           const eps = Math.min(EPS_M, len / 4);
-          t = s === 0 ? t0 + eps : t1 - eps;
+          t = s === 0 ? t0 : t1;
+          measureT = s === 0 ? t0 + eps : t1 - eps;
         } else {
           t = t0 + (len * s) / n;
+          measureT = t;
         }
-        const { p, d } = ptAt(t);
+        const { p, d } = ptAt(measureT);
         const dl = Math.hypot(d[0], d[1]);
         if (dl === 0) continue;
         const nx = -d[1] / dl,
@@ -2003,8 +2015,14 @@ export function extractFeatures(
         if (!pointInAreaQ(nudged, area)) continue;
         const m2 = measureAt(nudged, nx, ny);
         if (!m2) continue;
+        // the recorded sample point: the exact arc-length position t
+        // (the shared vertex at the ends), not the nudged measure point
+        const pv = ptAt(t).p;
         raw.push({
-          pt: [Math.round(nudged[0]), Math.round(nudged[1])],
+          pt: [
+            Math.round(pv[0] / (1e-7 * 111_320 * cosLat)),
+            Math.round(pv[1] / (1e-7 * 111_320)),
+          ],
           nx,
           ny,
           leftM: m2[0],
@@ -2028,6 +2046,8 @@ export function extractFeatures(
             ny: -s.ny,
             leftM: s.rightM,
             rightM: s.leftM,
+            rawLeftM: s.rawRightM,
+            rawRightM: s.rawLeftM,
           }
         : s;
     if (raw.length < 3) return raw.map(orient);
@@ -2144,7 +2164,15 @@ export function extractFeatures(
     }));
     // keep the ORIGINAL sample positions (the drawn curve) but with the
     // re-centered, smoothed edges
-    const final = smoothed;
+    const final = smoothed.map((s) => ({
+      ...s,
+      // RAW edges: the honest measured geometry, preserved before the
+      // outlier/dent repair below — the per-segment rectangle fits
+      // consume these, so dents show as SMALLER fitted rectangles while
+      // the repaired leftM/rightM keep the markings layout clean
+      rawLeftM: s.leftM,
+      rawRightM: s.rightM,
+    }));
     // per-side outlier repair (boundary tips / junction mouths truncate
     // one side); interior outliers interpolate, end runs truncate.
     // The reference is a ROBUST LINEAR TREND of the measured WIDTH along
@@ -2208,13 +2236,14 @@ export function extractFeatures(
     };
     fill(lefts);
     fill(rights);
-    return kept.map((s, i) =>
+    const repaired = kept.map((s, i) =>
       orient({
         ...s,
         leftM: lefts[i] as number,
         rightM: rights[i] as number,
       }),
     );
+    return repaired;
   };
 
   for (const ways of groups.values()) {
@@ -2238,11 +2267,13 @@ export function extractFeatures(
     for (const p of pieces) {
       const sp = splineByArea.get(p.area);
       if (!sp) continue;
-      // CONTIGUOUS index range of the spline samples owned by this way;
-      // the samples of the neighboring ways (same area) pad the range by
-      // one sample on each side so the drawn boundary MEETS the neighbor
-      // piece's — without the padding, a one-sample gap (~4 m) would open
-      // at every way seam inside one area
+      // CONTIGUOUS index range of the spline samples owned by this way —
+      // STRICTLY its own range, no neighbour padding: adjacent ways
+      // share the seam VERTEX sample (each segment owns its endpoints),
+      // so the drawn boundaries meet there and the per-segment
+      // rectangles tile the road without overlapping tangentially;
+      // padded ranges would double-draw the neighbour's stretch and
+      // produce degenerate one-sample rectangle groups at the seams
       let lo = -1,
         hi = -1;
       for (let i = 0; i < sp.length; i++) {
@@ -2251,11 +2282,7 @@ export function extractFeatures(
         hi = i;
       }
       if (lo < 0) continue;
-      const pad = (i: number): boolean =>
-        i >= 0 && i < sp.length && sp[i].cl !== p.cl;
-      const from = pad(lo - 1) ? lo - 1 : lo;
-      const to = pad(hi + 1) ? hi + 1 : hi;
-      p.spline = sp.slice(from, to + 1).map((s) => ({
+      p.spline = sp.slice(lo, hi + 1).map((s) => ({
         pt: s.pt,
         nx: s.nx,
         ny: s.ny,
@@ -2264,6 +2291,8 @@ export function extractFeatures(
         seg: s.seg,
         fitLeftM: s.fitLeftM,
         fitRightM: s.fitRightM,
+        rawLeftM: s.rawLeftM,
+        rawRightM: s.rawRightM,
       }));
     }
     // FIT THE ROAD MODEL PER LINE-SEGMENT: the chained polyline is a
@@ -2318,8 +2347,17 @@ export function extractFeatures(
       // platform denting a few of many cross-sections) as noise — the
       // robust reading of the piece as a whole, and the reference the
       // per-segment fits are reconciled with below
+      // the fits consume the RAW measured edges — the honest geometry;
+      // the repaired leftM/rightM only serve the markings layout
+      const rawOf = (
+        xs: { leftM: number; rightM: number; rawLeftM?: number; rawRightM?: number }[],
+      ) =>
+        xs.map((s) => ({
+          leftM: s.rawLeftM ?? s.leftM,
+          rightM: s.rawRightM ?? s.rightM,
+        }));
       const roadFit = (() => {
-        const { w, s: shift } = fitRoadRectangle(sp, units);
+        const { w, s: shift } = fitRoadRectangle(rawOf(sp), units);
         if (!(w > 0) || !isFinite(w) || !isFinite(shift)) return null;
         return {
           fl: shift + (units * w) / 2,
@@ -2346,26 +2384,29 @@ export function extractFeatures(
           }
         }
       }
-      // PASS 2 — the FINAL per-segment fits: each segment on its OWN
-      // samples, dented samples excluded — the tangential extents stay
-      // disjoint (no overlap), genuine drift survives (drift samples
-      // are never masked), dents drop out of the fit
+      // PASS 2 — the FINAL per-segment fits: each segment HONESTLY on
+      // its OWN samples (dented ones included — a dent genuinely makes
+      // those segments' road narrower, so their rectangle is SMALLER,
+      // which the "fitted rectangles" mode shows; the trimmed
+      // objective already ignores minority dents inside one segment).
+      // The tangential extents stay disjoint: segment k's rectangle
+      // ends at the shared vertex, k+1's starts there
       for (const { i0, i1 } of segRanges) {
-        const own = sp.slice(i0, i1);
-        const good = own.filter((_, k) => !dentMask[i0 + k]);
-        const grp = good.length >= 1 ? good : own;
-        const { w, s: shift } = fitRoadRectangle(grp, units);
+        const grp = sp.slice(i0, i1);
+        const { w, s: shift } = fitRoadRectangle(rawOf(grp), units);
         if (!(w > 0) || !isFinite(w) || !isFinite(shift)) continue;
         const fl = shift + (units * w) / 2;
         const fr = (units * w) / 2 - shift;
         for (let i = i0; i < i1; i++) {
           sp[i].fitLeftM = fl;
           sp[i].fitRightM = fr;
-          // repair the dented samples to their segment's fitted edge
+          // repair the dented samples' MEASURED values to their
+          // segment's fitted edge — the markings layout consumes the
+          // measured span; the fit itself stays the honest one
           if (dentMask[i]) {
-            if (fl - sp[i].leftM > 0.6 && fr - sp[i].rightM < 0.5)
+            if (roadFit && roadFit.fl - sp[i].leftM > 0.6 && fr - sp[i].rightM < 0.5)
               sp[i].leftM = fl;
-            else if (fr - sp[i].rightM > 0.6 && fl - sp[i].leftM < 0.5)
+            else if (roadFit && roadFit.fr - sp[i].rightM > 0.6 && fl - sp[i].leftM < 0.5)
               sp[i].rightM = fr;
           }
         }

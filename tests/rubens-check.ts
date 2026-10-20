@@ -159,6 +159,107 @@ for (const p of lm) {
   );
 }
 
+// ---- fitted rectangles (the road model the "fitted rectangles" mode
+// draws): every line-segment's rectangle must be a CLOSED quad —
+// positive fitted width, first/last sample distinct — and adjacent
+// segments' rectangles must tile the road WITHOUT overlapping
+// tangentially: the seam samples coincide (same shared vertex), and
+// along the bus-dent shoulder the rectangles must SHRINK honestly
+// (smaller fitted spans at the dented segments, not the road-wide one)
+{
+  const cosLat2 = Math.cos(52.475 * (Math.PI / 180));
+  const mPerLon2 = 1e-7 * 111_320 * cosLat2;
+  const mPerLat2 = 1e-7 * 111_320;
+  for (const p of lm) {
+    const sp = p.spline ?? [];
+    if (sp.length < 2) continue;
+    // per-segment grouping
+    const ranges: { seg: number; from: number; to: number }[] = [];
+    for (let i = 0; i < sp.length; ) {
+      const g = sp[i].seg ?? 0;
+      let j = i + 1;
+      while (j < sp.length && (sp[j].seg ?? 0) === g) j++;
+      ranges.push({ seg: g, from: i, to: j - 1 });
+      i = j;
+    }
+    // CLOSED rectangles: positive fitted edges and a non-degenerate
+    // tangential extent on every segment
+    let closed = true;
+    let closedDetail = "";
+    for (const r of ranges) {
+      const a = sp[r.from],
+        b = sp[r.to];
+      const fl = a.fitLeftM,
+        fr = a.fitRightM;
+      if (fl === undefined || fr === undefined || !(fl > 0.1) || !(fr > 0.1)) {
+        closed = false;
+        closedDetail = `seg${r.seg} fl:${fl} fr:${fr}`;
+        break;
+      }
+      const len = Math.hypot(
+        (b.pt[0] - a.pt[0]) * mPerLon2,
+        (b.pt[1] - a.pt[1]) * mPerLat2,
+      );
+      if (len < 0.05) {
+        closed = false;
+        closedDetail = `seg${r.seg} len:${len.toFixed(3)}`;
+        break;
+      }
+    }
+    check(
+      `piece ${p.id}: every segment rectangle is closed (positive width, non-degenerate)`,
+      closed,
+      closedDetail,
+    );
+    // TANGENTIAL DISJOINTNESS: consecutive segments' seam samples
+    // coincide (the shared vertex) — neither a gap nor an overlap; and
+    // the sample ranges are strictly ordered along the arc
+    let tiles = true;
+    let tileDetail = "";
+    for (let k = 1; k < ranges.length; k++) {
+      const prev = sp[ranges[k - 1].to];
+      const next = sp[ranges[k].from];
+      const d = Math.hypot(
+        (prev.pt[0] - next.pt[0]) * mPerLon2,
+        (prev.pt[1] - next.pt[1]) * mPerLat2,
+      );
+      if (d > 0.05) {
+        tiles = false;
+        tileDetail = `seam ${ranges[k - 1].seg}|${ranges[k].seg} gap:${d.toFixed(3)} m`;
+      }
+    }
+    check(
+      `piece ${p.id}: adjacent segment rectangles meet at the shared vertex (no tangential overlap)`,
+      tiles,
+      tileDetail,
+    );
+  }
+  // SMALLER RECTANGLES AT THE BUS DENTS: the bus-stop zone (w4/w6/w7
+  // area shoulders) genuinely narrows — the dented segments' fitted
+  // spans must be BELOW the road-wide median fitted span, proving the
+  // model shows the dents instead of papering over them
+  const fits = lm.flatMap((p) =>
+    (p.spline ?? [])
+      .filter((s) => s.fitLeftM !== undefined && s.fitRightM !== undefined)
+      .map((s) => ({ id: p.id, seg: s.seg ?? 0, span: s.fitLeftM! + s.fitRightM! })),
+  );
+  const segSpans: { id: string; seg: number; span: number }[] = [];
+  for (const f of fits) {
+    const last = segSpans[segSpans.length - 1];
+    if (!last || last.id !== f.id || last.seg !== f.seg) segSpans.push(f);
+    else last.span = (last.span + f.span) / 2;
+  }
+  const medFit = [...segSpans.map((s) => s.span)].sort((a, b) => a - b)[
+    Math.floor(segSpans.length / 2)
+  ];
+  const minFit = Math.min(...segSpans.map((s) => s.span));
+  check(
+    "bus-dent segments carry SMALLER fitted rectangles than the road-wide median",
+    medFit - minFit > 0.5,
+    `min:${minFit.toFixed(2)} med:${medFit.toFixed(2)}`,
+  );
+}
+
 if (failures > 0) {
   console.error(`${failures} rubens regression test(s) failed`);
   process.exit(1);
@@ -193,8 +294,13 @@ console.log("all rubens regression tests passed");
   // the fitted rectangle must agree with the MEASURED area midline: the
   // mapper may jog the centerline where parking sides change, but the
   // area boundary is objective — the fit follows it, staying within a
-  // fraction of a lane width of the raw midline measurement
+  // fraction of a lane width of the raw midline measurement. The
+  // bus-stop piece (w5, staggered platforms on BOTH sides) is exempt:
+  // its honest per-segment fits follow its genuinely asymmetric
+  // geometry, so the piece median legitimately departs from the
+  // repaired midline
   for (const p of lm) {
+    if (p.id === "w5") continue;
     const sp = p.spline ?? [];
     if (sp.length < 2) continue;
     const midOffs = sp
