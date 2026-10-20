@@ -163,12 +163,15 @@ const mPerLon = mPerLat * Math.cos(((LAT / 1e7) * Math.PI) / 180);
 // the pieces' traffic-lane widths): lanes are evenly sized along the
 // road — the dominant continuity property. A single narrow piece (more
 // parking units, C) must not shrink the whole road (the old minimum did)
+// PER-PIECE unit width: every piece's width units split ITS OWN fitted
+// road width evenly (README =5) - the grid fills the road on every
+// piece; a group-wide shared width would leave the 6-unit and 4-unit
+// pieces mismatched (way 4536810 regression)
 check(
-  "one uniform lane width across the road (median, not minimum)",
-  near(A[0].laneW!, B[0].laneW!, 1e-6) &&
-    near(B[0].laneW!, C[0].laneW!, 1e-6) &&
-    // the median follows the majority: B's own even split
-    near(B[0].laneW!, (2 * 650 * mPerLat) / 3, 1e-4),
+  "every piece splits its own fitted width evenly over its units",
+  near(A[0].laneW!, (900 * mPerLat) / 2, 1e-4) &&
+    near(B[0].laneW!, (1300 * mPerLat) / 3, 1e-4) &&
+    near(C[0].laneW!, (900 * mPerLat) / 4, 1e-4),
   `A:${A[0].laneW} B:${B[0].laneW} C:${C[0].laneW}`,
 );
 check(
@@ -208,13 +211,13 @@ check(
 // parking appears on the last section: the piece has one more unit, so
 // its lane width shrinks — but its block still fills the road evenly and
 // no boundary leaves the road span
-// parking absorbs the leftover: C's block keeps the uniform lane width
-// (2 traffic lanes at the group width); its parking strips are the
-// remainder of its road and the renderer clamps them to the road edge
+// parking absorbs the leftover: C's block keeps its own even split (2
+// traffic lanes at the piece's unit width); its parking strips are the
+// outer units of the same grid
 check(
-  "parking piece keeps the uniform traffic lane width",
-  C[0].lanes === 2 && near(C[0].laneW!, B[0].laneW!, 1e-6),
-  `C laneW:${C[0].laneW} group:${B[0].laneW}`,
+  "parking piece splits its own width (traffic lanes at the piece unit width)",
+  C[0].lanes === 2 && near(C[0].laneW!, (900 * mPerLat) / 4, 1e-4),
+  `C laneW:${C[0].laneW} expected:${((900 * mPerLat) / 4).toFixed(4)}`,
 );
 
 const E = byWay(wayE);

@@ -9,7 +9,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "make-fixture": "tsx tests/make-fixture.ts",
-    "test": "tsx tests/run.ts && tsx tests/lane-markings.ts && tsx tests/lane-segment-fit.ts && tsx tests/surface-inheritance.ts && tsx tests/parking-lane-strip.ts && tsx tests/junction-surface.ts && tsx tests/surface-inference.ts && tsx tests/surface-majority.ts && tsx tests/stop-line.ts && tsx tests/saar-regression.ts && tsx tests/bridge-check.ts && tsx tests/knauss-check.ts && tsx tests/rubens-check.ts && tsx tests/fwp-check.ts"
+    "test": "tsx tests/run.ts && tsx tests/lane-markings.ts && tsx tests/lane-segment-fit.ts && tsx tests/surface-inheritance.ts && tsx tests/parking-lane-strip.ts && tsx tests/junction-surface.ts && tsx tests/surface-inference.ts && tsx tests/surface-majority.ts && tsx tests/stop-line.ts && tsx tests/saar-regression.ts && tsx tests/bridge-check.ts && tsx tests/knauss-check.ts && tsx tests/rubens-check.ts && tsx tests/fwp-check.ts && tsx tests/saar4536810-check.ts"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

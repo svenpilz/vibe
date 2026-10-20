@@ -130,16 +130,19 @@ the layout: per sample the road is the fitted rectangle, immune to boundary
 dents, and a laterally drifting true center (slanted area) is followed
 segment-by-segment.
 Continuity across the pieces of one road:
-- **One uniform lane width** per road group: the **median** of the pieces'
-  fitted traffic-lane widths — lanes are evenly sized along the whole road,
-  and a single narrow piece (a fork-mouth clip, an extra parking unit)
-  cannot shrink the rest (the minimum did).
+- **Per-piece unit width**: every piece's width units split its OWN fitted
+  road width evenly — the grid fills the road on every piece. A group-wide
+  shared width cannot: where the unit count changes mid-road (way 4536810,
+  6 units over 14.9 m chaining into 5 units over 15.1 m) a shared width
+  fills neither piece.
 - **Bidirectional roads** carry the solid direction border (the **middle
-  line**) at one shared offset — the median of the **segment-level** natural
-  border positions: straightening the mapped centerline (unfolding the
-  rectangle chain) makes aligning the middle lines a one-dimensional offset,
-  and the median offset keeps the middle line continuous within the highway
-  area over the whole road. Lane separators between lanes of the same
+  line**) at one shared offset per **direction split**: straightening the
+  mapped centerline (unfolding the rectangle chain) makes aligning the
+  middle lines a one-dimensional offset, and pieces of the same split
+  (e.g. 2+2) share the median of their natural border positions — the
+  differently sized rectangles align on their middle line. Pieces of a
+  different split (e.g. 2+1) have their middle line elsewhere and align
+  among themselves. Lane separators between lanes of the same
   direction are drawn dashed.
 - **One-way roads** have no border; the block anchors on the road edge that
   did **not** move where the road grows, so the outermost lane continues

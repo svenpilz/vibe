@@ -2487,54 +2487,48 @@ export function extractFeatures(
     // one-way roads: which side of the road the block is anchored on
     // ("left" | "right" | "center"), decided by where the road grows
     let anchorKind: "left" | "right" | "center" = "left";
-    // ONE through-lane width across the whole road group — the MEDIAN of
-    // the pieces' traffic-lane widths (each piece's fitted road width
-    // minus its parking units, split over its lanes). The median follows
-    // the majority road: a single narrow piece (a way clipped short at a
-    // fork mouth, way 288689072, or a piece with more parking units than
-    // its neighbors, way 4536810) must not shrink the lanes of the whole
-    // road — the min did exactly that. Every lane boundary sits at
-    // anchor + k*laneW, so markings are continuous across pieces even
-    // where parking sides change; each piece's parking strips absorb its
-    // remaining width, and the renderer clamps boundaries into the local
-    // road span where a piece is genuinely narrower
-    const groupLaneW = median(pieces.map(trafficLaneWOf));
-    const laneWShared: (p: MarkingSample & { cl: LineFeature }) => number =
-      () => groupLaneW;
+    // PER-PIECE unit width: every piece's width units (traffic lanes +
+    // parking) split ITS OWN fitted road width evenly — the available
+    // width is distributed over all lanes (README §5), so the grid
+    // FILLS the road on every piece. A group-wide shared width cannot
+    // do that where the unit count changes mid-road (way 4536810: 6
+    // units over 14.9 m -> 2.49 m/unit, chained with a 5-unit piece
+    // over 15.1 m -> 3.03 m/unit — the old shared median 2.75 filled
+    // neither). Continuity across the pieces comes from the ANCHOR
+    // below, not from a shared width
+    const laneWShared = trafficLaneWOf;
     if (anchorBorder) {
       // right-hand traffic: traffic in the way's (forward) direction
-      // keeps RIGHT of the direction border, oncoming traffic LEFT. The
-      // border sits fwd lanes from the RIGHT ROAD edge - not the traffic
-      // edge, so parking strips on the right do not shift the border;
-      // pieces whose right parking differs still align. UNFOLDED
-      // ALIGNMENT: straightening the mapped centerline makes the chain
-      // of fitted segment rectangles a 1-D strip, and the middle line
-      // is continuous exactly when every segment draws it at the SAME
-      // offset - the median of the SEGMENT-level natural border
-      // positions (each sample of a border piece contributes its fitted
-      // right edge minus its parking unit and fwd lane widths)
-      const segAnchors: number[] = [];
+      // keeps RIGHT of the direction border, oncoming traffic LEFT.
+      // UNFOLDED ALIGNMENT: straightening the mapped centerline makes
+      // the chain of fitted segment rectangles a 1-D strip, and the
+      // middle line is continuous exactly when the rectangles of the
+      // SAME DIRECTION SPLIT draw it at the SAME offset. Pieces with a
+      // different split (2+2 vs 2+1) have their middle line at a
+      // different natural place — aligning them would bend the line —
+      // so each split gets its own anchor: the median of the PIECE-level
+      // natural border positions of that split. The natural position is
+      // computed from the piece's own fitted rectangle (its fitted right
+      // edge minus its right parking unit and fwd lane widths, all at
+      // the piece's own unit width — the "align differently sized
+      // rectangles" reading: the border keeps its offset while the
+      // unit grid fills each rectangle)
+      const splitOf = (p: MarkingSample & { cl: LineFeature }): string =>
+        `${fwdOf(p.cl)}+${p.cl.lanes! - fwdOf(p.cl)}`;
+      const anchorsBySplit = new Map<string, number[]>();
       for (const p of borderPieces) {
         const park = p.cl.parkingRight ? 1 : 0;
-        for (const s of p.spline ?? []) {
-          if (s.fitRightM === undefined) continue;
-          const unitsW =
-            s.fitLeftM !== undefined
-              ? (s.fitLeftM + s.fitRightM) / unitsOf(p)
-              : laneWOf(p);
-          segAnchors.push(s.fitRightM - park * unitsW - fwdOf(p.cl) * unitsW);
-        }
+        const unitsW = laneWOf(p);
+        const pos = fitRightM(p) - park * unitsW - fwdOf(p.cl) * unitsW;
+        const key = splitOf(p);
+        const arr = anchorsBySplit.get(key);
+        if (arr) arr.push(pos);
+        else anchorsBySplit.set(key, [pos]);
       }
-      const anchorM =
-        segAnchors.length > 0
-          ? median(segAnchors)
-          : median(
-              borderPieces.map((p) => {
-                const park = p.cl.parkingRight ? laneWOf(p) : 0;
-                return fitRightM(p) - park - fwdOf(p.cl) * laneWOf(p);
-              }),
-            );
-      anchorOf = () => anchorM;
+      const anchorMBySplit = new Map<string, number>();
+      for (const [key, xs] of anchorsBySplit)
+        anchorMBySplit.set(key, median(xs));
+      anchorOf = (p) => anchorMBySplit.get(splitOf(p)) ?? 0;
     } else {
       // which side does the road GROW on along the group? Compare the
       // pieces' measured edges: when the lane count rises from one piece
@@ -2708,14 +2702,15 @@ export function extractFeatures(
       let laneLeftM: number;
       let bidirectional = false;
       if (fwd > 0 && fwd < p.cl.lanes!) {
-        // bidirectional, right-hand traffic: the anchor is the direction
-        // border (fwd lanes from the right traffic edge); forward lanes
-        // occupy the right half (from the border to the right edge),
-        // backward lanes the left half. laneLeftM is the block's LEFT
-        // edge = border + fwd*laneW (meters-LEFT-positive: the border is
-        // anchorM meters right of the centerline, so its left-positive
-        // value is -anchorM). The border keeps its shared offset; the
-        // clamp below treats the piece WITHOUT the parking reservation
+        // bidirectional: the direction border (the middle line, solid)
+        // sits at its split's shared anchor offset, meters RIGHT of the
+        // mapped centerline. The renderer draws the solid boundary at
+        // k = fwd, i.e. at -laneLeftM + fwd*laneW, so the block's left
+        // edge follows from the anchor: laneLeftM = fwd*laneW - anchor.
+        // Pieces of the SAME split keep the border at the same offset
+        // (aligned differently sized rectangles); each piece's unit
+        // grid fills its own fitted rectangle (parking units outside
+        // the traffic block, at the fitted road edges)
         laneLeftM = -anchorOf(p) + fwd * laneW;
         bidirectional = true;
       } else if (anchorKind === "left") {
