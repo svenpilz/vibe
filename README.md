@@ -112,28 +112,45 @@ per ray cast — they are the result of fitting an extruded **road model** to
 the highway area. For each (way, area) piece a densified centerline spline is
 sampled (~4 m), and at each sample the lateral cross-section through the area
 is probed from the sample point outwards (bounded metric steps + binary
-refinement, so narrow boundary features cannot be jumped). The piece's model
-is a **rectangle centered on the mapped centerline** (mappers place
-carriageway centerlines well; a fitted lateral shift would displace whole
-lane blocks off the true road) of its width units (traffic lanes + parking
-strips), extruded along the centerline with normal offsetting for curves.
-Its width is the largest even unit width whose centered block stays inside
-the highway area over a trimmed majority of the cross-sections — minority
-dents (bus platforms) and widenings (junction mouths) are both ignored.
+refinement, so narrow boundary features cannot be jumped). The chained
+centerline is a **string of line-segments**, and the road model is fitted
+**per line-segment**: each segment gets its own rectangle of the piece's width
+units (traffic lanes + parking strips), **tangentially limited by the
+segment** and laterally positioned to maximize the covered highway area minus
+the spill outside it (a trimmed majority objective — minority dents (bus
+platforms) and widenings (junction mouths) are both ignored). For a straight
+road the best fit is the sub-rectangle of the area from the segment's start to
+its end; a slanted area (parallelogram) still fits — the rectangle may partly
+leave the area — and because the segment bounds it tangentially, each fit is
+well-defined and optimal. The fitted edges **replace the measured span** for
+the layout: per sample the road is the fitted rectangle, immune to boundary
+dents, and a laterally drifting true center (slanted area) is followed
+segment-by-segment.
 Continuity across the pieces of one road:
 - **One uniform lane width** per road group: the **median** of the pieces'
   fitted traffic-lane widths — lanes are evenly sized along the whole road,
   and a single narrow piece (a fork-mouth clip, an extra parking unit)
   cannot shrink the rest (the minimum did).
-- **Bidirectional roads** carry the solid direction border at one shared
-  offset (median of the pieces' natural border positions): the center line
-  is one continuous line over the whole road.
+- **Bidirectional roads** carry the solid direction border (the **middle
+  line**) at one shared offset — the median of the **segment-level** natural
+  border positions: straightening the mapped centerline (unfolding the
+  rectangle chain) makes aligning the middle lines a one-dimensional offset,
+  and the median offset keeps the middle line continuous within the highway
+  area over the whole road. Lane separators between lanes of the same
+  direction are drawn dashed.
 - **One-way roads** have no border; the block anchors on the road edge that
   did **not** move where the road grows, so the outermost lane continues
-  across lane-count changes.
+  across lane-count changes (in the unfolded domain, the flattened corner
+  vertices of adjacent rectangles coincide on the continuous side).
 - Each piece's **parking strips absorb its leftover width**; the renderer
-  clamps every boundary into the local measured road span, so markings never
+  clamps every boundary into the local fitted road span, so markings never
   overlap the area boundary even where the road narrows below the block.
+
+**Smoothness.** Two lane-marking rendering modes (panel selector):
+- **smooth (spline)** — the offset samples are interpolated and Chaikin-
+  smoothed into flowing curves (default);
+- **piece-wise linear** — the same offset samples are drawn as a crisp
+  polyline without interpolation, showing the extracted model exactly.
 
 **Parking lanes.** A parking lane consumes road width but does not count as a traffic
 lane. It is recognised from three taggings:

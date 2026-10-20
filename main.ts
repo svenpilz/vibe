@@ -53,6 +53,11 @@ let laneMarkingIndex: Indexed<LineFeature> | null = null;
 
 let stopLineIndex: Indexed<StopLineFeature> | null = null;
 
+/** lane marking smoothness: "spline" interpolates the offset samples
+ *  (Chaikin-smoothed flowing curves), "linear" draws them piece-wise
+ *  linear — the crisp extracted polyline without interpolation */
+let laneSmoothness: "spline" | "linear" = "spline";
+
 const layers = {
   areas: true,
   buildings: true,
@@ -1247,24 +1252,31 @@ function drawLaneMarkings(cl: LineFeature) {
   // so every traffic boundary is a PIECE-CONSTANT offset extruded along
   // the spline normals (curve handling); rescaling per sample would vary
   // the lane width along the road. The extractor's clamp keeps the block
-  // inside each piece's measured span, and where the road is wider than
+  // inside each piece's fitted span, and where the road is wider than
   // the block the parking strips (drawn at the block's outer edges)
   // absorb the remaining width
   const localOffsetM = (i: number, offM: number): number => {
     if (!hasSpline) return offM;
     // never paint outside the highway area: clamp the boundary into this
-    // sample's measured road span (meters-right convention: the left road
-    // edge sits at +s.leftM, the right at -s.rightM). Lane widths stay
-    // even everywhere the road is wide enough; only where the road
-    // genuinely narrows below the block does the outer boundary follow
-    // the road edge instead of overlapping it
+    // sample's FITTED road span when the segment fit produced one (the
+    // robust rectangle the area describes, immune to boundary dents),
+    // else its measured span. Lane widths stay even everywhere the road
+    // is wide enough; only where the road genuinely narrows below the
+    // block does the outer boundary follow the road edge
     const s = sp![i];
     const MARGIN = 0.15;
+    const leftEdge = s.fitLeftM ?? s.leftM;
+    const rightEdge = s.fitRightM ?? s.rightM;
     return Math.max(
-      -(s.rightM - MARGIN),
-      Math.min(s.leftM - MARGIN, offM),
+      -(rightEdge - MARGIN),
+      Math.min(leftEdge - MARGIN, offM),
     );
   };
+  // SMOOTHNESS MODES: "spline" interpolates the offset samples with
+  // Chaikin smoothing (the default — flowing curves), "linear" draws
+  // the piece-wise linear polyline through the same offset samples
+  // exactly as extracted — crisp segments, no interpolation
+  const linear = laneSmoothness === "linear";
   const drawOffsetLine = (
     offAt: (i: number) => number,
     solid: boolean,
@@ -1280,7 +1292,11 @@ function drawLaneMarkings(cl: LineFeature) {
             p[0] + normals[i][0] * offAt(i),
             p[1] + normals[i][1] * offAt(i),
           ]);
-    const smooth = chaikin(pts, 2);
+    // SMOOTHNESS MODES: "spline" interpolates the offset samples with
+    // Chaikin smoothing (the default — flowing curves), "linear" draws
+    // the piece-wise linear polyline through the same offset samples
+    // exactly as extracted — crisp segments, no interpolation
+    const smooth = linear ? pts : chaikin(pts, 2);
     ctx.strokeStyle = "#e8e8e8";
     if (!solid)
       ctx.setLineDash([Math.max(3, 1.2 * px), Math.max(2, 1.0 * px)]);
@@ -2087,6 +2103,26 @@ function buildLayerPanel() {
   wrap.appendChild(levelSelect);
 
   updateSelectors();
+
+  // lane marking smoothness selector: piece-wise linear vs interpolating
+  const smoothSelect = document.createElement("select");
+  smoothSelect.id = "laneSmoothSelect";
+  smoothSelect.style.cssText = SELECT_STYLE;
+  for (const [value, label] of [
+    ["spline", "lane markings: smooth (spline)"],
+    ["linear", "lane markings: piece-wise linear"],
+  ] as [string, string][]) {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    smoothSelect.appendChild(opt);
+  }
+  smoothSelect.value = laneSmoothness;
+  smoothSelect.addEventListener("change", () => {
+    laneSmoothness = smoothSelect.value as "spline" | "linear";
+    requestDraw();
+  });
+  wrap.appendChild(smoothSelect);
 
   const defs: { key: keyof typeof layers; label: string; swatch: string }[] = [
     { key: "areas", label: "highway areas (surface fill)", swatch: "#6d6055" },

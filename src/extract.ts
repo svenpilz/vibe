@@ -1457,16 +1457,19 @@ export function extractFeatures(
     /** measured distance to the left/right area edge, meters */
     leftM: number;
     rightM: number;
+    /** index of the chain line-segment the sample projects onto */
+    seg?: number;
+    /** fitted edges of the segment's road-model rectangle, meters */
+    fitLeftM?: number;
+    fitRightM?: number;
   }
   interface MarkingSample {
     area: AreaFeature;
     leftM: number;
     rightM: number;
-    /** fitted unit width (m) of the extruded road-model rectangle, when a spline fit succeeded */
-    fitW?: number;
-    /** fitted lateral shift (m, positive = left) of the rectangle center vs the mapped centerline */
-    fitShift?: number;
-    /** densified spline centerline of the piece, sampled ~4 m, with per-sample measured road edges */
+    /** densified spline centerline of the piece, sampled ~4 m, with per-sample
+     *  measured road edges and the fitted edges of the per-segment road-model
+     *  rectangles (fitLeftM/fitRightM) */
     spline?: SplineSampleInfo[];
   }
   const samplesOf = new Map<LineFeature, MarkingSample[]>();
@@ -1873,6 +1876,16 @@ export function extractFeatures(
           Math.hypot(mv[i][0] - mv[i - 1][0], mv[i][1] - mv[i - 1][1]),
       );
     const total = cum[cum.length - 1];
+    // chain line-segment index of an arc-length position: the chain is a
+    // string of line-segments (vertices mv[i-1] -> mv[i] = segment i-1);
+    // every sample records its segment so the road model can be fitted
+    // PER LINE-SEGMENT (tangentially limited by the segment) instead of
+    // one rectangle for the whole piece
+    const segOf = (t: number): number => {
+      let k = 1;
+      while (k < cum.length - 1 && cum[k] < t) k++;
+      return k - 1;
+    };
     const ptAt = (t: number): { p: number[]; d: number[] } => {
       let k = 1;
       while (k < cum.length - 1 && cum[k] < t) k++;
@@ -1969,6 +1982,7 @@ export function extractFeatures(
         ny,
         leftM: m2[0],
         rightM: m2[1],
+        seg: segOf(t),
         cl: ownerAt(t),
       });
     }
@@ -2103,13 +2117,31 @@ export function extractFeatures(
     // re-centered, smoothed edges
     const final = smoothed;
     // per-side outlier repair (boundary tips / junction mouths truncate
-    // one side); interior outliers interpolate, end runs truncate
-    const medL = median2(final.map((s) => s.leftM));
-    const medR = median2(final.map((s) => s.rightM));
+    // one side); interior outliers interpolate, end runs truncate.
+    // The reference is the LOCAL window median (not the piece-wide one):
+    // under the per-segment road-model fit a road may drift laterally
+    // along the area (a slanted parallelogram — the fitted shift grows
+    // linearly), and a global median would misread the whole drifted end
+    // as an outlier run. A window of ~9 samples (~36 m) is wide enough
+    // that a junction-mouth truncation still reads as an outlier, and
+    // narrow enough that genuine drift survives
+    const winMedian = (xs: number[], i: number): number => {
+      const W = 6;
+      const w: number[] = [];
+      for (
+        let j = Math.max(0, i - W);
+        j <= Math.min(xs.length - 1, i + W);
+        j++
+      )
+        w.push(xs[j]);
+      return median2(w);
+    };
+    const medLs = final.map((_, i) => winMedian(final.map((s) => s.leftM), i));
+    const medRs = final.map((_, i) => winMedian(final.map((s) => s.rightM), i));
     const bad = final.map(
-      (s) =>
-        Math.abs(s.leftM - medL) > 0.25 * medL ||
-        Math.abs(s.rightM - medR) > 0.25 * medR,
+      (s, i) =>
+        Math.abs(s.leftM - medLs[i]) > 0.25 * medLs[i] ||
+        Math.abs(s.rightM - medRs[i]) > 0.25 * medRs[i],
     );
     if (!bad.some((b) => b)) return final.map(orient);
     let lo = 0;
@@ -2202,17 +2234,25 @@ export function extractFeatures(
         ny: s.ny,
         leftM: s.leftM,
         rightM: s.rightM,
+        seg: s.seg,
+        fitLeftM: s.fitLeftM,
+        fitRightM: s.fitRightM,
       }));
     }
-    // FIT THE ROAD MODEL per piece: an extruded rectangle with the
-    // piece's units (traffic lanes + parking strips), evenly sized,
-    // centered on the mapped centerline and shifted sideways to maximize
-    // covered highway area minus spill outside it. The fitted rectangle
-    // REPLACES the piece's measured span: the layout no longer follows
-    // boundary dents (bus platforms, cutouts) — one straight extrusion
-    // per piece is the robust shape the OSM area actually describes,
-    // and the lateral shift aligns the mapped centerline with the road's
-    // true center where the mapper jogged it
+    // FIT THE ROAD MODEL PER LINE-SEGMENT: the chained polyline is a
+    // string of line-segments; each gets its own extruded rectangle with
+    // the piece's units (traffic lanes + parking strips), evenly sized,
+    // tangentially limited by the segment and shifted sideways to
+    // maximize covered highway area minus spill outside it. The fit is
+    // the robust reading of the area: a straight road yields the
+    // sub-rectangle of the area from the segment's start to its end (a
+    // parallelogram area still fits, the rectangle may leave the area
+    // where the boundary slants), a boundary dent (bus platform, cutout)
+    // only trims the minority of segments it spans, and the lateral
+    // shift aligns the mapped centerline with the road's true center
+    // where the mapper jogged it. Samples carry their segment's FITTED
+    // edges (fitLeftM/fitRightM), which REPLACE the measured span for
+    // the layout below
     for (const p of pieces) {
       const units =
         p.cl.lanes! +
@@ -2220,31 +2260,59 @@ export function extractFeatures(
         (p.cl.parkingRight ? 1 : 0);
       const sp = p.spline;
       if (!sp || sp.length < 2) continue;
-      const { w, s: shift } = fitRoadRectangle(sp, units);
-      if (!(w > 0) || !isFinite(w) || !isFinite(shift)) continue;
-      p.fitW = w;
-      p.fitShift = shift;
+      // segment indices are monotonic along the spline (samples are
+      // ordered by arc length); group the contiguous sample ranges per
+      // segment and fit each group padded by one neighbouring sample on
+      // each side, so a short segment still sees enough cross-sections
+      // for the trimmed objective
+      let i0 = 0;
+      while (i0 < sp.length) {
+        const g = sp[i0].seg ?? 0;
+        let i1 = i0 + 1;
+        while (i1 < sp.length && (sp[i1].seg ?? 0) === g) i1++;
+        const from = Math.max(0, i0 - 1);
+        const to = Math.min(sp.length - 1, i1);
+        const grp = sp.slice(from, to + 1);
+        if (grp.length >= 1) {
+          const { w, s: shift } = fitRoadRectangle(grp, units);
+          if (w > 0 && isFinite(w) && isFinite(shift)) {
+            const fl = shift + (units * w) / 2;
+            const fr = (units * w) / 2 - shift;
+            for (let i = i0; i < i1; i++) {
+              sp[i].fitLeftM = fl;
+              sp[i].fitRightM = fr;
+            }
+          }
+        }
+        i0 = i1;
+      }
     }
-    // FITTED edges of the piece's road-model rectangle, in the mapped-
-    // centerline meters-left convention (shift + h / h - shift); pieces
-    // without a fit keep their measured edges
-    const fitLeftM = (p: MarkingSample & { cl: LineFeature }): number =>
-      p.fitW !== undefined
-        ? p.fitShift! + (unitsOf(p) * p.fitW) / 2
-        : p.leftM;
-    const fitRightM = (p: MarkingSample & { cl: LineFeature }): number =>
-      p.fitW !== undefined
-        ? (unitsOf(p) * p.fitW) / 2 - p.fitShift!
-        : p.rightM;
     const unitsOf = (p: MarkingSample & { cl: LineFeature }): number =>
       p.cl.lanes! +
       (p.cl.parkingLeft ? 1 : 0) +
       (p.cl.parkingRight ? 1 : 0);
-    // fitted unit width of the piece's road-model rectangle (falling
-    // back to the even split of its measured width when no spline fit
+    // FITTED edges of the piece: the MEDIAN of its samples' fitted
+    // rectangle edges — the piece-level quantities the group layout keys
+    // off (anchors, clamps). Pieces without any fitted sample keep their
+    // measured edges
+    const fitLeftM = (p: MarkingSample & { cl: LineFeature }): number => {
+      const xs = (p.spline ?? []).filter((s) => s.fitLeftM !== undefined);
+      return xs.length > 0 ? median(xs.map((s) => s.fitLeftM!)) : p.leftM;
+    };
+    const fitRightM = (p: MarkingSample & { cl: LineFeature }): number => {
+      const xs = (p.spline ?? []).filter((s) => s.fitRightM !== undefined);
+      return xs.length > 0 ? median(xs.map((s) => s.fitRightM!)) : p.rightM;
+    };
+    // fitted unit width of the piece's road-model rectangles (falling
+    // back to the even split of its measured width when no segment fit
     // succeeded); the layout is the FIT, not the boundary measurement
-    const laneWOf = (p: MarkingSample & { cl: LineFeature }): number =>
-      p.fitW ?? (p.leftM + p.rightM) / unitsOf(p);
+    const laneWOf = (p: MarkingSample & { cl: LineFeature }): number => {
+      const xs = (p.spline ?? []).filter(
+        (s) => s.fitLeftM !== undefined && s.fitRightM !== undefined,
+      );
+      if (xs.length === 0) return (p.leftM + p.rightM) / unitsOf(p);
+      return median(xs.map((s) => (s.fitLeftM! + s.fitRightM!) / unitsOf(p)));
+    };
     // the through-lane width when the parking strips absorb the remaining
     // road width instead of narrowing the traffic lanes: total minus one
     // parking unit per side, split over the traffic lanes
@@ -2300,13 +2368,34 @@ export function extractFeatures(
       // keeps RIGHT of the direction border, oncoming traffic LEFT. The
       // border sits fwd lanes from the RIGHT ROAD edge - not the traffic
       // edge, so parking strips on the right do not shift the border;
-      // pieces whose right parking differs still align
-      const anchorM = median(
-        borderPieces.map((p) => {
-          const park = p.cl.parkingRight ? laneWOf(p) : 0;
-          return fitRightM(p) - park - fwdOf(p.cl) * laneWOf(p);
-        }),
-      );
+      // pieces whose right parking differs still align. UNFOLDED
+      // ALIGNMENT: straightening the mapped centerline makes the chain
+      // of fitted segment rectangles a 1-D strip, and the middle line
+      // is continuous exactly when every segment draws it at the SAME
+      // offset - the median of the SEGMENT-level natural border
+      // positions (each sample of a border piece contributes its fitted
+      // right edge minus its parking unit and fwd lane widths)
+      const segAnchors: number[] = [];
+      for (const p of borderPieces) {
+        const park = p.cl.parkingRight ? 1 : 0;
+        for (const s of p.spline ?? []) {
+          if (s.fitRightM === undefined) continue;
+          const unitsW =
+            s.fitLeftM !== undefined
+              ? (s.fitLeftM + s.fitRightM) / unitsOf(p)
+              : laneWOf(p);
+          segAnchors.push(s.fitRightM - park * unitsW - fwdOf(p.cl) * unitsW);
+        }
+      }
+      const anchorM =
+        segAnchors.length > 0
+          ? median(segAnchors)
+          : median(
+              borderPieces.map((p) => {
+                const park = p.cl.parkingRight ? laneWOf(p) : 0;
+                return fitRightM(p) - park - fwdOf(p.cl) * laneWOf(p);
+              }),
+            );
       anchorOf = () => anchorM;
     } else {
       // which side does the road GROW on along the group? Compare the
@@ -2602,6 +2691,7 @@ export function extractFeatures(
         roadRightM: fitRightM(p),
         spline: p.spline,
         lanesFwd: fwd,
+        laneAnchorKind: bidirectional ? "border" : anchorKind,
         laneAnchorM: anchorOffsetM,
         areaIds: [p.area.id],
         stopLinesQ: stopLinesQ.length > 0 ? stopLinesQ : undefined,

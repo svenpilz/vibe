@@ -64,6 +64,11 @@ export interface LineFeature {
     ny: number;
     leftM: number;
     rightM: number;
+    /** index of the owner-way line-segment the sample projects onto */
+    seg?: number;
+    /** fitted road edges of the segment's rectangle (meters, same convention as leftM/rightM) */
+    fitLeftM?: number;
+    fitRightM?: number;
   }[];
   /**
    * Stop line (markings only): the centerline flows from a non-junction
@@ -81,6 +86,11 @@ export interface LineFeature {
   stopLinesQ?: Q[][][];
   /** number of lanes forward (same direction of travel, centerlines only) */
   lanesFwd?: number;
+  /** which lateral reference the lane block is anchored on (markings only):
+   *  "border" = the solid direction border of a bidirectional road,
+   *  "left"/"right"/"center" = the continuous edge (or the centerline) of a
+   *  one-way road when lanes are added on the right/left/both sides */
+  laneAnchorKind?: "border" | "left" | "right" | "center";
   /** continuity anchor of the piece (markings only), in meters relative to the
    *  mapped centerline, meters-LEFT-positive: the lateral offset that MUST NOT
    *  change between pieces — the direction border on bidirectional roads, the
