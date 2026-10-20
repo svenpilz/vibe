@@ -337,6 +337,64 @@ for (const p of lm) {
   );
 }
 
+// ---- WAY-EXACT SAMPLE OWNERSHIP: every sample of a piece must lie on
+// ITS OWN way's stretch - the old nearest-vertex ownership attributed
+// the second half of a long segment to the NEIGHBOR way, so pieces
+// rendered with the adjacent way's lane configuration (way
+// 1122774352) and formed degenerate one-sample segment groups
+{
+  for (const p of lm) {
+    const cs = p.coords;
+    const sp = p.spline ?? [];
+    let beyond = 0;
+    let detail = "";
+    for (const s of sp) {
+      let best = Infinity;
+      let beyondHere = false;
+      for (let i = 1; i < cs.length; i++) {
+        const dx = cs[i][0] - cs[i - 1][0],
+          dy = cs[i][1] - cs[i - 1][1];
+        const len2 = dx * dx + dy * dy;
+        const f =
+          len2 > 0
+            ? ((s.pt[0] - cs[i - 1][0]) * dx + (s.pt[1] - cs[i - 1][1]) * dy) /
+              len2
+            : 0;
+        const fC = Math.max(0, Math.min(1, f));
+        const qx = cs[i - 1][0] + dx * fC,
+          qy = cs[i - 1][1] + dy * fC;
+        const d = Math.hypot(s.pt[0] - qx, s.pt[1] - qy);
+        if (d < best) {
+          best = d;
+          beyondHere = f < 0 || f > 1;
+        }
+      }
+      if (beyondHere && best > 100) {
+        beyond++;
+        detail = s.pt.map((v) => (v / 1e7).toFixed(6)).join(",");
+      }
+    }
+    check(
+      `piece ${p.id}: all samples lie on the way's own stretch (way-exact ownership)`,
+      beyond === 0,
+      `${beyond} beyond, e.g. ${detail}`,
+    );
+    // no degenerate one-sample segment groups (a seam sample mislabeled
+    // into the next segment)
+    const groups = new Map<number, number>();
+    for (const s of sp) {
+      const g = s.seg ?? 0;
+      groups.set(g, (groups.get(g) ?? 0) + 1);
+    }
+    const degen = [...groups.entries()].filter(([, n]) => n < 2);
+    check(
+      `piece ${p.id}: no degenerate one-sample segment groups`,
+      degen.length === 0,
+      JSON.stringify(degen),
+    );
+  }
+}
+
 if (failures > 0) {
   console.error(`${failures} rubens regression test(s) failed`);
   process.exit(1);

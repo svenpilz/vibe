@@ -1875,27 +1875,36 @@ export function extractFeatures(
     const MY = (latQ: number): number => latQ * 1e-7 * 111_320;
     const mv = verts.map((v) => [MX(v.p[0]), MY(v.p[1])]);
     // vertex -> sample ownership: interpolate along the chain
-    const ownerAt = (t: number): LineFeature => {
-      // arc-length t along the merged metric polyline
-      let acc = 0;
-      for (let i = 1; i < mv.length; i++) {
-        const segLen = Math.hypot(
-          mv[i][0] - mv[i - 1][0],
-          mv[i][1] - mv[i - 1][1],
-        );
-        if (t <= acc + segLen || i === mv.length - 1) {
-          const f = segLen > 0 ? (t - acc) / segLen : 0;
-          const px = mv[i - 1][0] + (mv[i][0] - mv[i - 1][0]) * f;
-          const py = mv[i - 1][1] + (mv[i][1] - mv[i - 1][1]) * f;
-          // nearest vertex decides the owner (way boundaries are vertices)
-          const dPrev = Math.hypot(px - mv[i - 1][0], py - mv[i - 1][1]);
-          const dNext = Math.hypot(px - mv[i][0], py - mv[i][1]);
-          return dPrev <= dNext ? verts[i - 1].cl : verts[i].cl;
-        }
-        acc += segLen;
-      }
-      return verts[verts.length - 1].cl;
-    };
+    // WAY-EXACT sample ownership: the owner of the segment containing
+    // arc-length t is the owner of the segment's START vertex. Seam
+    // vertices (shared between ways) are pre-assigned to the NEXT way
+    // by the vertex dedup above, so the segment after a seam belongs to
+    // the next way and the segment before it to the previous way's
+    // start vertex — ownership switches exactly AT the seam vertices.
+    // The previous nearest-VERTEX rule instead switched ownership at
+    // each segment's midpoint: along a long final segment of a way, the
+    // second half of the segment was attributed to the NEIGHBOR way, so
+    // up to half a way's own stretch rendered with the adjacent way's
+    // lane configuration (Rubensstrasse way 1122774352 drew the wrong
+    // lane count). With the segment-start rule every sample belongs to
+    // the way it actually lies on
+    const cumV: number[] = [0];
+    for (let i = 1; i < mv.length; i++)
+      cumV.push(
+        cumV[i - 1] +
+          Math.hypot(mv[i][0] - mv[i - 1][0], mv[i][1] - mv[i - 1][1]),
+      );
+    // ownership by SEGMENT: the sample's own segment decides its owner
+    // (the segment's start vertex). At a seam vertex both adjacent
+    // segments create a boundary sample at the same position - the
+    // ENDPOINT sample of segment i belongs to segment i's owner (the
+    // way that ENDS at the seam, its last sample), the START sample of
+    // segment i+1 to segment i+1's owner (the way that starts there).
+    // The previous t-only rule could not tell the two apart and pulled
+    // the next way's start sample into this way's piece (a degenerate
+    // one-sample segment group at every seam)
+    const ownerOfSeg = (seg: number): LineFeature =>
+      verts[Math.min(seg, verts.length - 1)].cl;
     // chord-length parametrization and Catmull-Rom over the merged chain
     const cum: number[] = [0];
     for (let i = 1; i < mv.length; i++)
@@ -1910,6 +1919,10 @@ export function extractFeatures(
     // PER LINE-SEGMENT (tangentially limited by the segment) instead of
     // one rectangle for the whole piece
     const segOf = (t: number): number => {
+      // the segment containing t; at a segment boundary (t == cum[k])
+      // the position is segment k-1's ENDPOINT - strict < keeps the
+      // boundary sample with the segment it ends, never with the next
+      // one (which would make a degenerate one-sample group)
       let k = 1;
       while (k < cum.length - 1 && cum[k] < t) k++;
       return k - 1;
@@ -2100,7 +2113,7 @@ export function extractFeatures(
           leftM: m2[0],
           rightM: m2[1],
           seg,
-          cl: ownerAt(t),
+          cl: ownerOfSeg(seg),
         });
       }
     }
@@ -2551,13 +2564,12 @@ export function extractFeatures(
     let anchorKind: "left" | "right" | "center" = "left";
     // PER-PIECE unit width: every piece's width units (traffic lanes +
     // parking) split ITS OWN fitted road width evenly — the available
-    // width is distributed over all lanes (README §5), so the grid
-    // FILLS the road on every piece. A group-wide shared width cannot
-    // do that where the unit count changes mid-road (way 4536810: 6
-    // units over 14.9 m -> 2.49 m/unit, chained with a 5-unit piece
-    // over 15.1 m -> 3.03 m/unit — the old shared median 2.75 filled
-    // neither). Continuity across the pieces comes from the ANCHOR
-    // below, not from a shared width
+    // width is distributed evenly over ALL lanes (README 5), so the
+    // grid fills the road on every piece, and the rectangles see the
+    // parking units (way 4536810: 6 units over 14.9 m -> 2.49 m/unit
+    // next to 5 units over 15.1 m -> 3.02 m/unit). The through lanes
+    // stay continuous through the shared middle-line anchor, not
+    // through a shared width
     const laneWShared = trafficLaneWOf;
     if (anchorBorder) {
       // right-hand traffic: traffic in the way's (forward) direction
