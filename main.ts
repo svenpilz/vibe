@@ -53,10 +53,12 @@ let laneMarkingIndex: Indexed<LineFeature> | null = null;
 
 let stopLineIndex: Indexed<StopLineFeature> | null = null;
 
-/** lane marking smoothness: "spline" interpolates the offset samples
- *  (Chaikin-smoothed flowing curves), "linear" draws them piece-wise
- *  linear — the crisp extracted polyline without interpolation */
-let laneSmoothness: "spline" | "linear" = "spline";
+/** lane marking rendering mode: "spline" interpolates the offset
+ *  samples (Chaikin-smoothed flowing curves), "linear" draws them
+ *  piece-wise linear — the crisp extracted polyline without
+ *  interpolation, "rects" shows the fitted road model itself — the
+ *  per-line-segment rectangles the layout derives from */
+let laneSmoothness: "spline" | "linear" | "rects" = "spline";
 
 const layers = {
   areas: true,
@@ -1272,11 +1274,51 @@ function drawLaneMarkings(cl: LineFeature) {
       Math.min(leftEdge - MARGIN, offM),
     );
   };
-  // SMOOTHNESS MODES: "spline" interpolates the offset samples with
+  // RENDERING MODES: "spline" interpolates the offset samples with
   // Chaikin smoothing (the default — flowing curves), "linear" draws
   // the piece-wise linear polyline through the same offset samples
-  // exactly as extracted — crisp segments, no interpolation
+  // exactly as extracted — crisp segments, no interpolation. "rects"
+  // bypasses the markings and draws the FITTED MODEL: one outlined
+  // rectangle per line-segment (its own samples' positions and normals,
+  // its fitted edges), making the underlying road model visible
   const linear = laneSmoothness === "linear";
+  if (laneSmoothness === "rects" && hasSpline && sp) {
+    // group the samples per segment; each segment's rectangle spans its
+    // first to last sample, offset by the segment's fitted edges
+    ctx.strokeStyle = "#e8e8e8";
+    ctx.setLineDash([]);
+    ctx.lineWidth = Math.max(1, 0.1 * px);
+    let i0 = 0;
+    while (i0 < sp.length) {
+      const g = sp[i0].seg ?? 0;
+      let i1 = i0 + 1;
+      while (i1 < sp.length && (sp[i1].seg ?? 0) === g) i1++;
+      const a = sp[i0],
+        b = sp[i1 - 1];
+      const fl = a.fitLeftM,
+        fr = a.fitRightM;
+      if (fl !== undefined && fr !== undefined) {
+        const ax = lonToX(a.pt[0] / Q),
+          ay = latToY(a.pt[1] / Q);
+        const bx = lonToX(b.pt[0] / Q),
+          by = latToY(b.pt[1] / Q);
+        // meters-left convention: +offset = left of the centerline
+        const aL = [ax + splineNormals![i0][0] * fl * px, ay + splineNormals![i0][1] * fl * px];
+        const aR = [ax - splineNormals![i0][0] * fr * px, ay - splineNormals![i0][1] * fr * px];
+        const bL = [bx + splineNormals![i1 - 1][0] * fl * px, by + splineNormals![i1 - 1][1] * fl * px];
+        const bR = [bx - splineNormals![i1 - 1][0] * fr * px, by - splineNormals![i1 - 1][1] * fr * px];
+        ctx.beginPath();
+        ctx.moveTo(aL[0], aL[1]);
+        ctx.lineTo(bL[0], bL[1]);
+        ctx.lineTo(bR[0], bR[1]);
+        ctx.lineTo(aR[0], aR[1]);
+        ctx.closePath();
+        ctx.stroke();
+      }
+      i0 = i1;
+    }
+    return;
+  }
   const drawOffsetLine = (
     offAt: (i: number) => number,
     solid: boolean,
@@ -2111,6 +2153,7 @@ function buildLayerPanel() {
   for (const [value, label] of [
     ["spline", "lane markings: smooth (spline)"],
     ["linear", "lane markings: piece-wise linear"],
+    ["rects", "lane markings: fitted rectangles (model)"],
   ] as [string, string][]) {
     const opt = document.createElement("option");
     opt.value = value;
@@ -2119,7 +2162,7 @@ function buildLayerPanel() {
   }
   smoothSelect.value = laneSmoothness;
   smoothSelect.addEventListener("change", () => {
-    laneSmoothness = smoothSelect.value as "spline" | "linear";
+    laneSmoothness = smoothSelect.value as "spline" | "linear" | "rects";
     requestDraw();
   });
   wrap.appendChild(smoothSelect);

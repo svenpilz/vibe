@@ -128,6 +128,46 @@ if (p?.spline) {
     mono,
     `shift:${shift.map((x) => x.toFixed(2)).join(" ")}`,
   );
+  // TANGENTIAL NON-OVERLAP: adjacent segments' sample ranges must be
+  // disjoint except for the shared vertex sample — the per-segment
+  // rectangles tile the road without overlapping tangentially. The
+  // chain has 3 segments (4 vertices); a sample of segment k must never
+  // appear again behind a sample of segment k+1 except at the seam
+  const segs = [...new Set(p.spline.map((s) => s.seg))].sort(
+    (a, b) => (a ?? 0) - (b ?? 0),
+  );
+  check(
+    "samples cover every chain line-segment",
+    segs.length === 3,
+    `segments:${segs.join(",")}`,
+  );
+  let ordered = true;
+  for (let i = 1; i < segs.length; i++) {
+    const lastOf = p.spline.filter((s) => s.seg === segs[i - 1]);
+    const firstOf = p.spline.filter((s) => s.seg === segs[i]);
+    const lastPt = lastOf[lastOf.length - 1]?.pt;
+    const firstPt = firstOf[0]?.pt;
+    // the seam samples coincide (same shared vertex)
+    if (!lastPt || !firstPt) {
+      ordered = false;
+      continue;
+    }
+    const seamGap = Math.hypot(
+      (lastPt[0] - firstPt[0]) * 1e-7 * 111320 * Math.cos((52.52 * Math.PI) / 180),
+      (lastPt[1] - firstPt[1]) * 1e-7 * 111320,
+    );
+    if (seamGap > 5) ordered = false;
+  }
+  check(
+    "adjacent segment sample ranges meet at the shared vertex (no tangential gap/overlap)",
+    ordered,
+  );
+  // every sample belongs to exactly one segment: the seg values are
+  // contiguous along the spline (monotone non-decreasing)
+  let monotoneSeg = true;
+  for (let i = 1; i < p.spline.length; i++)
+    if ((p.spline[i].seg ?? 0) < (p.spline[i - 1].seg ?? 0)) monotoneSeg = false;
+  check("segment indices monotone along the spline", monotoneSeg);
 }
 
 if (failures > 0) {

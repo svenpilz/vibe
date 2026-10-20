@@ -122,7 +122,10 @@ platforms) and widenings (junction mouths) are both ignored). For a straight
 road the best fit is the sub-rectangle of the area from the segment's start to
 its end; a slanted area (parallelogram) still fits — the rectangle may partly
 leave the area — and because the segment bounds it tangentially, each fit is
-well-defined and optimal. The fitted edges **replace the measured span** for
+well-defined and optimal. Each segment's samples are its own (its endpoints
+included, shared with the neighbours at the seam vertex), so the fitted
+rectangles **tile the road without overlapping tangentially**. The fitted
+edges **replace the measured span** for
 the layout: per sample the road is the fitted rectangle, immune to boundary
 dents, and a laterally drifting true center (slanted area) is followed
 segment-by-segment.
@@ -146,11 +149,15 @@ Continuity across the pieces of one road:
   clamps every boundary into the local fitted road span, so markings never
   overlap the area boundary even where the road narrows below the block.
 
-**Smoothness.** Two lane-marking rendering modes (panel selector):
+**Rendering modes.** Three lane-marking rendering modes (panel selector):
 - **smooth (spline)** — the offset samples are interpolated and Chaikin-
   smoothed into flowing curves (default);
 - **piece-wise linear** — the same offset samples are drawn as a crisp
-  polyline without interpolation, showing the extracted model exactly.
+  polyline without interpolation;
+- **fitted rectangles** — the markings are replaced by the fitted road
+  model itself: one outlined rectangle per line-segment (its fitted
+  edges, tangentially limited by the segment), making the underlying
+  road model and its segment tiling visible.
 
 **Parking lanes.** A parking lane consumes road width but does not count as a traffic
 lane. It is recognised from three taggings:

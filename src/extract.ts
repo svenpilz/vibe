@@ -1953,38 +1953,66 @@ export function extractFeatures(
       );
     };
     const EPS_M = 0.3;
-    const nSamples = Math.min(120, Math.max(8, Math.round(total / 4)));
+    // PER-SEGMENT sampling: each line-segment owns its own sample — its
+    // cross-sections at ~4 m, always including BOTH endpoints (with the
+    // endpoint samples nudged EPS into the segment so a vertex exactly
+    // on the area boundary still measures). A segment's rectangle is
+    // fitted STRICTLY on its own cross-sections: no neighbour padding,
+    // so adjacent fitted rectangles never overlap tangentially — the
+    // first sample of segment k+1 coincides with the last sample of
+    // segment k (the shared vertex), and no stretch of road is claimed
+    // by two fits
     const raw: (SplineSampleInfo & { cl: LineFeature })[] = [];
-    for (let s = 0; s <= nSamples; s++) {
-      const t = (total * s) / nSamples;
-      const { p, d } = ptAt(t);
-      const dl = Math.hypot(d[0], d[1]);
-      if (dl === 0) continue;
-      const nx = -d[1] / dl,
-        ny = d[0] / dl;
-      const qx = p[0] / (1e-7 * 111_320 * cosLat);
-      const qy = p[1] / (1e-7 * 111_320);
-      const ux = d[0] / dl,
-        uy = d[1] / dl;
-      const mid = ptAt(total / 2).p;
-      const towards =
-        (mid[0] - p[0]) * ux + (mid[1] - p[1]) * uy >= 0 ? 1 : -1;
-      const nudged = [
-        qx + (ux * EPS_M * towards) / (1e-7 * 111_320 * cosLat),
-        qy + (uy * EPS_M * towards) / (1e-7 * 111_320),
-      ];
-      if (!pointInAreaQ(nudged, area)) continue;
-      const m2 = measureAt(nudged, nx, ny);
-      if (!m2) continue;
-      raw.push({
-        pt: [Math.round(nudged[0]), Math.round(nudged[1])],
-        nx,
-        ny,
-        leftM: m2[0],
-        rightM: m2[1],
-        seg: segOf(t),
-        cl: ownerAt(t),
-      });
+    for (let seg = 0; seg < cum.length - 1; seg++) {
+      const t0 = cum[seg],
+        t1 = cum[seg + 1];
+      const len = t1 - t0;
+      if (len <= 0) continue;
+      // a segment must own ENOUGH samples for a robust per-segment fit
+      // (>= 5): a short segment whose own samples all sit inside a
+      // boundary dent would otherwise fit the dent
+      const n = Math.max(4, Math.min(40, Math.round(len / 4)));
+      for (let s = 0; s <= n; s++) {
+        const isEnd = s === 0 || s === n;
+        // interior samples: uniform arc length; endpoints: nudge EPS
+        // towards the segment interior so a shared vertex on the area
+        // boundary measures into THIS segment's side of it
+        let t: number;
+        if (isEnd) {
+          const eps = Math.min(EPS_M, len / 4);
+          t = s === 0 ? t0 + eps : t1 - eps;
+        } else {
+          t = t0 + (len * s) / n;
+        }
+        const { p, d } = ptAt(t);
+        const dl = Math.hypot(d[0], d[1]);
+        if (dl === 0) continue;
+        const nx = -d[1] / dl,
+          ny = d[0] / dl;
+        const qx = p[0] / (1e-7 * 111_320 * cosLat);
+        const qy = p[1] / (1e-7 * 111_320);
+        const ux = d[0] / dl,
+          uy = d[1] / dl;
+        const mid = ptAt(total / 2).p;
+        const towards =
+          (mid[0] - p[0]) * ux + (mid[1] - p[1]) * uy >= 0 ? 1 : -1;
+        const nudged = [
+          qx + (ux * EPS_M * towards) / (1e-7 * 111_320 * cosLat),
+          qy + (uy * EPS_M * towards) / (1e-7 * 111_320),
+        ];
+        if (!pointInAreaQ(nudged, area)) continue;
+        const m2 = measureAt(nudged, nx, ny);
+        if (!m2) continue;
+        raw.push({
+          pt: [Math.round(nudged[0]), Math.round(nudged[1])],
+          nx,
+          ny,
+          leftM: m2[0],
+          rightM: m2[1],
+          seg,
+          cl: ownerAt(t),
+        });
+      }
     }
     // samples of a way the chain traverses REVERSED carry the chain's
     // normal and left/right split; flip them back so every consumer sees
@@ -2068,30 +2096,30 @@ export function extractFeatures(
     // of the chain (junction mouths widen outward for real). Genuine
     // widenings (lane-count changes) span whole windows and their
     // window medians follow them, so they survive
+    // window in ARC LENGTH (~18 m each side), not sample count: under
+    // the per-segment sampling the samples are NOT evenly spaced (short
+    // segments are denser), so a fixed sample count would give short
+    // segments a tiny metric window and let dent shoulders through
+    const arcOf = raw2.map((s) =>
+      Math.hypot(
+        (s.pt[0] - raw2[0].pt[0]) * (1e-7 * 111_320 * cosLat),
+        (s.pt[1] - raw2[0].pt[1]) * (1e-7 * 111_320),
+      ),
+    );
+    const WIN_M = 18;
+    const winIdx = (i: number): number[] => {
+      const out2: number[] = [];
+      for (let j = 0; j < arcOf.length; j++)
+        if (Math.abs(arcOf[j] - arcOf[i]) <= WIN_M) out2.push(j);
+      return out2.length > 0 ? out2 : [i];
+    };
     const smoothSide = (vals: number[], other: number[]): number[] => {
-      const W = 6;
       const out = [...vals];
       for (let i = 0; i < vals.length; i++) {
-        const win: number[] = [];
-        for (
-          let j = Math.max(0, i - W);
-          j <= Math.min(vals.length - 1, i + W);
-          j++
-        )
-          win.push(vals[j]);
-        const med = median2(win);
-        if (med - vals[i] > 1.2 && Math.abs(other[i] - median2(
-          (() => {
-            const w2: number[] = [];
-            for (
-              let j = Math.max(0, i - W);
-              j <= Math.min(other.length - 1, i + W);
-              j++
-            )
-              w2.push(other[j]);
-            return w2;
-          })(),
-        )) < 1.0) {
+        const idx = winIdx(i);
+        const med = median2(idx.map((j) => vals[j]));
+        const medOther = median2(idx.map((j) => other[j]));
+        if (med - vals[i] > 1.2 && Math.abs(other[i] - medOther) < 1.0) {
           // ONE-SIDED inward dent with the other side stable: a mapping
           // artifact (platform, cutout on one boundary) — the true road
           // edge is farther out. When BOTH sides dent together the road
@@ -2099,7 +2127,8 @@ export function extractFeatures(
           out[i] = med;
         } else if (vals[i] - med > 1.2) {
           // outward spike: keep only at the chain ends (mouth widening)
-          if (i > W && i < vals.length - 1 - W) out[i] = med;
+          if (arcOf[i] - arcOf[0] > WIN_M && arcOf[arcOf.length - 1] - arcOf[i] > WIN_M)
+            out[i] = med;
         }
       }
       return out;
@@ -2118,30 +2147,28 @@ export function extractFeatures(
     const final = smoothed;
     // per-side outlier repair (boundary tips / junction mouths truncate
     // one side); interior outliers interpolate, end runs truncate.
-    // The reference is the LOCAL window median (not the piece-wide one):
-    // under the per-segment road-model fit a road may drift laterally
-    // along the area (a slanted parallelogram — the fitted shift grows
-    // linearly), and a global median would misread the whole drifted end
-    // as an outlier run. A window of ~9 samples (~36 m) is wide enough
-    // that a junction-mouth truncation still reads as an outlier, and
-    // narrow enough that genuine drift survives
-    const winMedian = (xs: number[], i: number): number => {
-      const W = 6;
-      const w: number[] = [];
-      for (
-        let j = Math.max(0, i - W);
-        j <= Math.min(xs.length - 1, i + W);
-        j++
-      )
-        w.push(xs[j]);
-      return median2(w);
-    };
-    const medLs = final.map((_, i) => winMedian(final.map((s) => s.leftM), i));
-    const medRs = final.map((_, i) => winMedian(final.map((s) => s.rightM), i));
+    // The reference is a ROBUST LINEAR TREND of the measured WIDTH along
+    // the chain (Theil–Sen), not a piece-wide median: a road may drift
+    // laterally (a slanted parallelogram — the fitted shift grows
+    // linearly) or change width genuinely (a trapezoid area), and a
+    // global median would misread both as outlier runs. Only samples
+    // whose width steps BELOW the trend are artifacts — one-sided
+    // boundary dents (bus platforms, cutouts, boundary tips) narrow the
+    // measured span abruptly; widenings (junction mouths) never flag
+    const widths = final.map((s) => s.leftM + s.rightM);
+    let slope = 0;
+    if (widths.length >= 3) {
+      const slopes: number[] = [];
+      for (let i = 0; i < widths.length; i++)
+        for (let j = i + 1; j < widths.length; j++)
+          slopes.push((widths[j] - widths[i]) / (j - i));
+      slope = median2(slopes);
+    }
+    const base = median2(widths.map((w, i) => w - slope * i));
     const bad = final.map(
       (s, i) =>
-        Math.abs(s.leftM - medLs[i]) > 0.25 * medLs[i] ||
-        Math.abs(s.rightM - medRs[i]) > 0.25 * medRs[i],
+        s.leftM + s.rightM <
+        base + slope * i - Math.max(0.45, 0.08 * (base + slope * i)),
     );
     if (!bad.some((b) => b)) return final.map(orient);
     let lo = 0;
@@ -2261,30 +2288,87 @@ export function extractFeatures(
       const sp = p.spline;
       if (!sp || sp.length < 2) continue;
       // segment indices are monotonic along the spline (samples are
-      // ordered by arc length); group the contiguous sample ranges per
-      // segment and fit each group padded by one neighbouring sample on
-      // each side, so a short segment still sees enough cross-sections
-      // for the trimmed objective
-      let i0 = 0;
-      while (i0 < sp.length) {
-        const g = sp[i0].seg ?? 0;
-        let i1 = i0 + 1;
-        while (i1 < sp.length && (sp[i1].seg ?? 0) === g) i1++;
-        const from = Math.max(0, i0 - 1);
-        const to = Math.min(sp.length - 1, i1);
-        const grp = sp.slice(from, to + 1);
-        if (grp.length >= 1) {
-          const { w, s: shift } = fitRoadRectangle(grp, units);
-          if (w > 0 && isFinite(w) && isFinite(shift)) {
-            const fl = shift + (units * w) / 2;
-            const fr = (units * w) / 2 - shift;
-            for (let i = i0; i < i1; i++) {
-              sp[i].fitLeftM = fl;
-              sp[i].fitRightM = fr;
-            }
+      // ordered by arc length). TWO-PASS FIT, both times tangentially
+      // limited to the segment (adjacent rectangles never overlap —
+      // segment k's ends at the shared vertex, k+1's starts there):
+      // PASS 1 fits each segment with NEIGHBOUR CONTEXT (its samples
+      // plus the adjacent segments') — the context window makes the
+      // trimmed objective robust: a dent spanning a whole short
+      // segment is a minority of the window and gets smoothed away.
+      // PASS 2 re-fits each segment on its OWN samples only, with the
+      // samples the pass-1 rectangle classifies as one-sided dents
+      // (measured edge deep inside the fitted rectangle while the
+      // other side matches) REMOVED — genuine lateral drift
+      // (slanted areas) re-emerges at full strength because the drift
+      // never reads as a dent (both edges move coherently), while
+      // dents stay excluded from the final fit
+      const segRanges: { i0: number; i1: number }[] = [];
+      {
+        let i0 = 0;
+        while (i0 < sp.length) {
+          const g = sp[i0].seg ?? 0;
+          let i1 = i0 + 1;
+          while (i1 < sp.length && (sp[i1].seg ?? 0) === g) i1++;
+          segRanges.push({ i0, i1 });
+          i0 = i1;
+        }
+      }
+      // PASS 0 — the ROAD-WIDE fit: one rectangle over ALL the piece's
+      // samples. Its trimmed objective treats a minority dent (a bus
+      // platform denting a few of many cross-sections) as noise — the
+      // robust reading of the piece as a whole, and the reference the
+      // per-segment fits are reconciled with below
+      const roadFit = (() => {
+        const { w, s: shift } = fitRoadRectangle(sp, units);
+        if (!(w > 0) || !isFinite(w) || !isFinite(shift)) return null;
+        return {
+          fl: shift + (units * w) / 2,
+          fr: (units * w) / 2 - shift,
+        };
+      })();
+      const dentMask: boolean[] = new Array(sp.length).fill(false);
+      if (roadFit) {
+        for (let i = 0; i < sp.length; i++) {
+          // one-sided dent vs the ROAD-WIDE fit: measured edge deep
+          // inside the road rectangle, the other side close, AND the
+          // total width below the road-wide width — the
+          // platform/cutout case the per-segment fits must not follow.
+          // Lateral drift (slanted areas) moves both edges COHERENTLY
+          // at constant width and never flags; widenings point outward
+          // and never flag either
+          const dl = roadFit.fl - sp[i].leftM;
+          const dr = roadFit.fr - sp[i].rightM;
+          const width = sp[i].leftM + sp[i].rightM;
+          const roadWidth = roadFit.fl + roadFit.fr;
+          if (roadWidth - width > 0.6) {
+            if (dl > 0.6 && dr < 0.5) dentMask[i] = true;
+            else if (dr > 0.6 && dl < 0.5) dentMask[i] = true;
           }
         }
-        i0 = i1;
+      }
+      // PASS 2 — the FINAL per-segment fits: each segment on its OWN
+      // samples, dented samples excluded — the tangential extents stay
+      // disjoint (no overlap), genuine drift survives (drift samples
+      // are never masked), dents drop out of the fit
+      for (const { i0, i1 } of segRanges) {
+        const own = sp.slice(i0, i1);
+        const good = own.filter((_, k) => !dentMask[i0 + k]);
+        const grp = good.length >= 1 ? good : own;
+        const { w, s: shift } = fitRoadRectangle(grp, units);
+        if (!(w > 0) || !isFinite(w) || !isFinite(shift)) continue;
+        const fl = shift + (units * w) / 2;
+        const fr = (units * w) / 2 - shift;
+        for (let i = i0; i < i1; i++) {
+          sp[i].fitLeftM = fl;
+          sp[i].fitRightM = fr;
+          // repair the dented samples to their segment's fitted edge
+          if (dentMask[i]) {
+            if (fl - sp[i].leftM > 0.6 && fr - sp[i].rightM < 0.5)
+              sp[i].leftM = fl;
+            else if (fr - sp[i].rightM > 0.6 && fl - sp[i].leftM < 0.5)
+              sp[i].rightM = fr;
+          }
+        }
       }
     }
     const unitsOf = (p: MarkingSample & { cl: LineFeature }): number =>
