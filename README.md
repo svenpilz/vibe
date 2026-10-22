@@ -9,6 +9,12 @@ Geofabrik extract (Berlin, Bavaria, Netherlands, …) or your own `.osm.pbf`.
 
 Live demo: https://svenpilz.github.io/vibe/
 
+## Examples
+
+| Lane markings with different road widths | Footway crossing | Residential area with sidewalks |
+|---|---|---|
+| ![Lane markings with different road widths](examples/lane-markings.png) | ![Footway crossing](examples/crossings.png) | ![Residential area with sidewalks](examples/sidewalk.png) |
+
 ## Usage
 
 ```bash
