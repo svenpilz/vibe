@@ -66,13 +66,11 @@ export interface LineFeature {
     rightM: number;
     /** index of the owner-way line-segment the sample projects onto */
     seg?: number;
-    /** fitted road edges of the segment's rectangle (meters, same convention as leftM/rightM) */
-    fitLeftM?: number;
-    fitRightM?: number;
-    /** raw measured edges before the dent repair (meters) — the honest
-     *  geometry the rectangle fit consumed */
-    rawLeftM?: number;
-    rawRightM?: number;
+    /** lateral offset of the MIDDLE LINE from the mapped centerline at
+     *  this sample (meters, positive = left of the way) — the sample
+     *  point lies ON the middle line, and leftM/rightM are the measured
+     *  half-widths to each side of it */
+    midM?: number;
   }[];
   /**
    * Stop line (markings only): the centerline flows from a non-junction

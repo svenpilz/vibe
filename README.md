@@ -113,62 +113,71 @@ For every centerline (`type=centerline`) with `lanes >= 2`, `lane_markings != no
 runs inside a non-junction highway area, one marking piece is produced **per
 (way, area section)**. Junction areas never contribute pieces.
 
-**Road-model fit (width and centerline).** Lane markings are not measured
-per ray cast — they are the result of fitting an extruded **road model** to
-the highway area. For each (way, area) piece a densified centerline spline is
-sampled (~4 m), and at each sample the lateral cross-section through the area
-is probed from the sample point outwards (bounded metric steps + binary
-refinement, so narrow boundary features cannot be jumped). The chained
-centerline is a **string of line-segments**, and the road model is fitted
-**per line-segment**: each segment gets its own rectangle of the piece's width
-units (traffic lanes + parking strips), **tangentially limited by the
-segment** and laterally positioned to maximize the covered highway area minus
-the spill outside it (a trimmed majority objective — minority dents (bus
-platforms) and widenings (junction mouths) are both ignored). For a straight
-road the best fit is the sub-rectangle of the area from the segment's start to
-its end; a slanted area (parallelogram) still fits — the rectangle may partly
-leave the area — and because the segment bounds it tangentially, each fit is
-well-defined and optimal. Each segment's samples are its own (its endpoints
-included, shared with the neighbours at the seam vertex), so the fitted
-rectangles **tile the road without overlapping tangentially**. The fitted
-edges **replace the measured span** for
-the layout: per sample the road is the fitted rectangle, immune to boundary
-dents, and a laterally drifting true center (slanted area) is followed
-segment-by-segment.
+**Road width (ray shooting) and the virtual middle line.** The road width is
+measured by **ray shooting from the mapped centerline**: at each width-test
+position one ray is cast along the positive and one along the negative normal
+of the centerline, and the width at that point is the **sum of both ray
+lengths**. A ray hit only counts as the road edge when
+  - the hit boundary segment is **more parallel than orthogonal** to the
+    centerline (a transverse segment — the cap at a junction mouth — says
+    nothing about the width), and
+  - it is not shared with another `area:highway` of a road type on the same
+    layer (a rectangular cutout connected to an adjacent area, typically a
+    junction) — unless a **kerb way** runs along it, marking the true road
+    edge (footway/sidewalk areas are ignored).
+When a hit fails either test, the measurement **backtracks along the
+centerline in steps of 1 m** until a position measures validly, and that
+cross-section's width is used. Width tests run **every 2 meters** along each
+line-segment, **always at the OSM way vertices** (a vertex is where lane
+counts, parking and other properties change); a segment shorter than 2 m
+contributes only its vertices. Failed width tests whose neighbours also fail
+are interpolated along the arc.
+
+With the valid hits a **virtual middle line** is constructed — at each
+sample, the middle between the two road edges (half the width), recorded as
+the lateral offset `midM` from the mapped centerline. Per `area:highway` the
+middle-line positions form **one interpolating spline** (the base curve of
+every drawn marking), so the solid centerline is continuous within the area.
+The lane markings are drawn as **offsets of that middle spline**; each
+sample's measured edges are re-based onto the middle line (the half-width on
+each side). One-sided boundary dents (a bus platform cutting into the road on
+one side while the other side stays on its trend) are repaired against a
+robust linear trend of each edge along the arc before the middle line is
+built — a road may drift laterally (slanted parallelogram) or change width
+genuinely (trapezoid) without being misread as a dent.
 Continuity across the pieces of one road:
 - **Per-piece unit width**: every piece's width units (traffic lanes +
-  parking) split its OWN fitted road width evenly — the grid fills the
+  parking) split its OWN measured road width evenly — the grid fills the
   road on every piece. A group-wide shared width cannot: where the unit
   count changes mid-road (way 4536810, 6 units over 14.9 m chaining
   into 5 units over 15.1 m) a shared width fills neither piece.
 - **Bidirectional roads** carry the solid direction border (the **middle
   line**) at ONE shared offset along the whole road — the median of the
-  pieces' parking-aware natural border positions (each piece's fitted
-  right road edge minus its right parking unit and fwd lane widths, at
-  the piece's own unit width). The middle line is CONTINUOUS within the
-  highway area; pieces whose parking layout or unit count differs keep
-  the shared offset, and their PARKING STRIPS absorb the difference
-  between their natural border position and the anchor (the strips are
-  the flexible units — a strip follows the locally available space,
-  the traffic lanes keep the shared offset). Lane separators between
-  lanes of the same direction are drawn dashed.
-- **One-way roads** have no border; the block anchors on the road edge that
-  did **not** move where the road grows, so the outermost lane continues
-  across lane-count changes (in the unfolded domain, the flattened corner
-  vertices of adjacent rectangles coincide on the continuous side).
+  pieces' parking-aware natural border positions (each piece's right road
+  edge minus its right parking unit and fwd lane widths, at the piece's
+  own unit width). The middle line is CONTINUOUS within the highway area;
+  pieces whose parking layout or unit count differs keep the shared
+  offset, and their PARKING STRIPS absorb the difference between their
+  natural border position and the anchor. Lane separators between lanes
+  of the same direction are drawn dashed.
+- **One-way roads** have no border. Where the lane count changes, the
+  layout tracks how the **middle line moves** between the pieces: the
+  middle line moving LEFT (the road grows to the left — a rectangular
+  trapezoid) means the new lanes are added on the LEFT and the block
+  anchors on the RIGHT edge, so the right lanes continue; moving RIGHT
+  mirrors it. A middle line that does not move (both edges shifted out —
+  a non-rectangular trapezoid) adds the lanes on BOTH sides, unfolding
+  from the middle line itself.
 - Each piece's **parking strips absorb its leftover width**; the renderer
-  clamps every boundary into the local fitted road span, so markings never
-  overlap the area boundary even where the road narrows below the block.
+  clamps every boundary into the locally measured road span, so markings
+  never overlap the area boundary even where the road narrows below the
+  block (a bus platform shows as unpainted road).
 
-**Rendering modes.** Three lane-marking rendering modes (panel selector):
+**Rendering modes.** Two lane-marking rendering modes (panel selector):
 - **smooth (spline)** — the offset samples are interpolated and Chaikin-
   smoothed into flowing curves (default);
 - **piece-wise linear** — the same offset samples are drawn as a crisp
-  polyline without interpolation;
-- **fitted rectangles** — the markings are replaced by the fitted road
-  model itself: one outlined rectangle per line-segment (its fitted
-  edges, tangentially limited by the segment), making the underlying
-  road model and its segment tiling visible.
+  polyline without interpolation.
 
 **Parking lanes.** A parking lane consumes road width but does not count as a traffic
 lane. It is recognised from three taggings:

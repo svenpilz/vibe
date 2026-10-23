@@ -1,13 +1,14 @@
 /**
- * Regression tests for the PER-LINE-SEGMENT road-model fit (README §5):
- * the chained centerline is a string of line-segments, and each segment
- * gets its own rectangle fitted to the highway area — tangentially
- * limited by the segment, maximizing covered area while minimizing
- * spill. Key case: a PARALLELOGRAM area over a straight road — both
- * long edges slanted along the road. A per-piece rectangle (one shift
- * for the whole way) cannot follow the slanted true center; the
- * per-segment fits must recover (a) the constant perpendicular extent
- * and (b) a lateral shift that grows linearly along the road.
+ * Regression tests for the RAY-SHOT road width model (README §5): the
+ * width comes from ray casting in both normal directions from the
+ * mapped centerline, hit-filtered (the hit segment must be more
+ * parallel than orthogonal to the road) and backtracked in 1 m steps
+ * on invalid hits. Key case: a PARALLELOGRAM area over a straight
+ * road — both long edges slanted along the road. The measured width
+ * is the constant perpendicular extent (9 m), and the VIRTUAL MIDDLE
+ * LINE (half the width) follows the slanted true center: its lateral
+ * offset from the mapped way grows linearly along the road — the
+ * property a piece-wide model cannot express.
  */
 import { createOSMData } from "../src/osm-pbf";
 import { extractFeatures } from "../src/extract";
@@ -42,9 +43,9 @@ const mPerLat = 111_320 / 1e7;
 // PARALLELOGRAM: both long edges slanted by lat(x) = ±450 + x/100 —
 // the true road center climbs linearly while the mapped centerline
 // stays at lat 0. Perpendicular extent is constant; the required
-// lateral shift grows by (10000/100) quantized lat units = ~1.11 m
-// per segment. Caps stay far outside the way ends so no end truncation
-// contaminates the fits.
+// lateral middle-line shift grows by ~1.11 m per 10000 quantized lon
+// units (100 lat units). Caps stay far outside the way ends so no end
+// truncation contaminates the measurements.
 const latB = (x: number): number => -450 + x / 100;
 const latT = (x: number): number => 450 + x / 100;
 {
@@ -78,95 +79,92 @@ check(
 );
 const p = lm[0] as LineFeature | undefined;
 check(
-  "piece carries fitted per-sample rectangle edges",
-  p?.spline !== undefined &&
-    p.spline.some((s) => s.fitLeftM !== undefined && s.fitRightM !== undefined),
-  `fitted:${p?.spline?.filter((s) => s.fitLeftM !== undefined).length}/${p?.spline?.length}`,
+  "piece carries the middle-line spline",
+  p?.spline !== undefined && p.spline!.length >= 2,
+  `spline:${p?.spline?.length}`,
 );
 
 if (p?.spline) {
-  const fitted = p.spline.filter(
-    (s) => s.fitLeftM !== undefined && s.fitRightM !== undefined,
-  );
-  check(
-    "every sample carries its segment's fitted edges",
-    fitted.length === p.spline!.length,
-    `fitted:${fitted.length} of ${p.spline!.length}`,
-  );
+  const sp = p.spline;
   const want = 900 * mPerLat;
   const devW = Math.max(
-    ...fitted.map((s) => Math.abs(s.fitLeftM! + s.fitRightM! - want)),
+    ...sp.map((s) => Math.abs(s.leftM + s.rightM - want)),
   );
   check(
-    "fitted width is the constant perpendicular extent (9 m ± 0.35)",
+    "ray-shot width is the constant perpendicular extent (9 m ± 0.35)",
     devW < 0.35,
     `devW:${devW.toFixed(3)} want:${want.toFixed(3)}`,
   );
-  // the fitted rectangle must follow the slanted true center: the
-  // lateral shift (fitLeftM - fitRightM)/2 grows linearly along the
-  // road — the property a single per-piece rectangle cannot express
-  const shift = fitted.map((s) => (s.fitLeftM! - s.fitRightM!) / 2);
-  const n = shift.length;
-  const first = shift.slice(0, Math.floor(n / 3));
-  const last = shift.slice(Math.ceil((2 * n) / 3));
+  // the middle line must follow the slanted true center: the lateral
+  // offset from the mapped way (midM, positive = left) shrinks
+  // linearly along the road — the area's center climbs to the LEFT
+  const mid = sp.map((s) => s.midM ?? 0);
+  const n = mid.length;
+  const first = mid.slice(0, Math.floor(n / 3));
+  const last = mid.slice(Math.ceil((2 * n) / 3));
   const mean = (xs: number[]): number =>
     xs.reduce((a, b) => a + b, 0) / xs.length;
-  const dShift = mean(last) - mean(first);
+  const dMid = mean(last) - mean(first);
   // expected growth: (20000/100) quantized lat units ~ 2.22 m from the
   // first third's center to the last third's center
   check(
-    "fitted shift follows the slanted true center (grows ~2.2 m along the road)",
-    dShift > 1.4 && dShift < 3.0,
-    `dShift:${dShift.toFixed(3)} first:${mean(first).toFixed(3)} last:${mean(last).toFixed(3)}`,
+    "middle line follows the slanted true center (moves ~2.2 m along the road)",
+    dMid > 1.4 && dMid < 3.0,
+    `dMid:${dMid.toFixed(3)} first:${mean(first).toFixed(3)} last:${mean(last).toFixed(3)}`,
   );
-  // monotone: the shift grows monotonically (small noise allowed)
+  // monotone: the middle-line offset moves monotonically (small noise
+  // allowed)
   let mono = true;
   for (let i = 1; i < n; i++)
-    if (shift[i] < shift[i - 1] - 0.25) mono = false;
+    if (mid[i] < mid[i - 1] - 0.25) mono = false;
   check(
-    "fitted shift grows monotonically along the road",
+    "middle-line offset moves monotonically along the road",
     mono,
-    `shift:${shift.map((x) => x.toFixed(2)).join(" ")}`,
+    `mid:${mid.map((x) => x.toFixed(2)).join(" ")}`,
   );
-  // TANGENTIAL NON-OVERLAP: adjacent segments' sample ranges must be
-  // disjoint except for the shared vertex sample — the per-segment
-  // rectangles tile the road without overlapping tangentially. The
-  // chain has 3 segments (4 vertices); a sample of segment k must never
-  // appear again behind a sample of segment k+1 except at the seam
-  const segs = [...new Set(p.spline.map((s) => s.seg))].sort(
-    (a, b) => (a ?? 0) - (b ?? 0),
-  );
-  check(
-    "samples cover every chain line-segment",
-    segs.length === 3,
-    `segments:${segs.join(",")}`,
-  );
-  let ordered = true;
-  for (let i = 1; i < segs.length; i++) {
-    const lastOf = p.spline.filter((s) => s.seg === segs[i - 1]);
-    const firstOf = p.spline.filter((s) => s.seg === segs[i]);
-    const lastPt = lastOf[lastOf.length - 1]?.pt;
-    const firstPt = firstOf[0]?.pt;
-    // the seam samples coincide (same shared vertex)
-    if (!lastPt || !firstPt) {
-      ordered = false;
-      continue;
+  // the spline points lie ON the middle line: each sample's lateral
+  // distance from the mapped way must equal its midM (the base curve
+  // of every drawn marking offset)
+  let onMid = true;
+  let onDetail = "";
+  for (const s of sp) {
+    // project the sample point onto the nearest way vertex pair and
+    // measure the lateral offset
+    let bi = 0,
+      bd = Infinity;
+    for (let i = 0; i < p.coords.length; i++) {
+      const d = (s.pt[0] - p.coords[i][0]) ** 2 + (s.pt[1] - p.coords[i][1]) ** 2;
+      if (d < bd) {
+        bd = d;
+        bi = i;
+      }
     }
-    const seamGap = Math.hypot(
-      (lastPt[0] - firstPt[0]) * 1e-7 * 111320 * Math.cos((52.52 * Math.PI) / 180),
-      (lastPt[1] - firstPt[1]) * 1e-7 * 111320,
-    );
-    if (seamGap > 5) ordered = false;
+    const a = p.coords[Math.max(0, bi - 1)];
+    const b = p.coords[Math.min(p.coords.length - 1, bi + 1)];
+    const dx = b[0] - a[0],
+      dy = b[1] - a[1];
+    const l = Math.hypot(dx, dy);
+    if (l === 0) continue;
+    const nx = -dy / l,
+      ny = dx / l;
+    const vx = s.pt[0] - p.coords[bi][0],
+      vy = s.pt[1] - p.coords[bi][1];
+    const latQ = vx * nx + vy * ny;
+    const mPerLon =
+      (111_320 * Math.cos(((s.pt[1] / 1e7) * Math.PI) / 180)) / 1e7;
+    const latM = Math.hypot(nx * mPerLon, ny * mPerLat) * latQ;
+    if (Math.abs(latM - (s.midM ?? 0)) > 0.25) {
+      onMid = false;
+      onDetail = `latM:${latM.toFixed(3)} midM:${s.midM?.toFixed(3)}`;
+      break;
+    }
   }
-  check(
-    "adjacent segment sample ranges meet at the shared vertex (no tangential gap/overlap)",
-    ordered,
-  );
-  // every sample belongs to exactly one segment: the seg values are
-  // contiguous along the spline (monotone non-decreasing)
+  check("spline samples sit on the middle line", onMid, onDetail);
+  // the chain line-segments are all covered: samples carry segment
+  // indices monotone along the spline
   let monotoneSeg = true;
-  for (let i = 1; i < p.spline.length; i++)
-    if ((p.spline[i].seg ?? 0) < (p.spline[i - 1].seg ?? 0)) monotoneSeg = false;
+  for (let i = 1; i < sp.length; i++)
+    if ((sp[i].seg ?? 0) < (sp[i - 1].seg ?? 0)) monotoneSeg = false;
   check("segment indices monotone along the spline", monotoneSeg);
 }
 

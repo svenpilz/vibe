@@ -105,146 +105,111 @@ function pointInAreaQ(pt: number[], area: AreaFeature): boolean {
   return true;
 }
 
-/**
- * Robust lateral cross-section: walk outward from the sample along BOTH
- * normals until the first exit from the area (coarse metric steps, then
- * binary refinement). Returns [leftM, rightM], the distances in meters to
- * the area boundary on each side of the sample. Unlike a plain ray cast,
- * the bounded metric step cannot jump over narrow boundary features, and
- * starting at the sample itself detects a sample sitting outside the area.
- */
-function lateralIntervalInArea(
-  pt: number[],
-  nx: number,
-  ny: number,
-  mPerLon: number,
-  mPerLat: number,
-  area: AreaFeature,
-  maxM: number,
-): [number, number] | null {
-  if (!pointInAreaQ(pt, area)) return null;
-  const inside = (m: number): boolean =>
-    pointInAreaQ(
-      [pt[0] + (nx * m) / mPerLon, pt[1] + (ny * m) / mPerLat],
-      area,
-    );
-  const edge = (dir: number): number => {
-    const STEP = 2;
-    let prev = 0;
-    for (let m = STEP; m <= maxM; m += STEP) {
-      if (!inside(dir * m)) {
-        let lo = prev,
-          hi = m;
-        for (let k = 0; k < 20; k++) {
-          const mid = (lo + hi) / 2;
-          if (inside(dir * mid)) lo = mid;
-          else hi = mid;
-        }
-        return dir * ((lo + hi) / 2);
-      }
-      prev = m;
-    }
-    return dir * maxM;
-  };
-  const left = edge(1);
-  const right = edge(-1);
-  return [left, -right];
-}
+/** area:highway types that are NOT roads for the ray-hit adjacency test:
+ *  a boundary shared with a footway/sidewalk area is a plain road edge */
+const FOOTWAY_AREA_TYPES = new Set([
+  "footway",
+  "sidewalk",
+  "path",
+  "cycleway",
+  "steps",
+]);
 
 /**
- * Fit the extruded road model to the measured cross-sections of one
- * (way, area) piece. The model is a rectangle of `units` evenly sized
- * strips (traffic lanes + parking units), centered on the mapped
- * centerline and shifted `s` meters to its left. At sample i the block
- * covers the lateral interval [s - U*w/2, s + U*w/2] (meters-left
- * convention); the road occupies [-rightM_i, leftM_i]. The fit maximizes
- * covered length minus the length spilling outside the highway area,
- * summed over the samples: the largest rectangle that actually fits the
- * geometry, tolerating minority dents (bus platforms, cutouts) that
- * would shrink an exact fit.
+ * Road width by RAY SHOOTING: from a point on the centerline, cast one
+ * ray along the positive and one along the negative normal; the width
+ * at that point is the sum of both ray lengths. A hit only counts when
+ * the hit boundary segment is MORE PARALLEL than orthogonal to the
+ * centerline (a transverse boundary — the cap at a junction mouth —
+ * says nothing about the width), and when the segment is not shared
+ * with another area:highway of a road type (a rectangular cutout
+ * connected to an adjacent area, typically a junction) unless a kerb
+ * way runs along it — the kerb marks the true road edge. Invalid hits
+ * make the whole cross-section invalid (null): the caller backtracks
+ * along the centerline to find a valid one.
  */
-function fitRoadRectangle(
-  samples: { leftM: number; rightM: number }[],
-  units: number,
-  /** fraction of per-sample coverages trimmed from EACH end of the
-   *  sorted list before summing — the robustness knob. 0.15 (default):
-   *  minority dents inside one segment are dropped. Higher (0.35) for
-   *  the PIECE-level road fit: a platform denting a third of a short
-   *  piece's samples must not drag the piece rectangle sideways */
-  trimFrac = 0.15,
-): { w: number; s: number } {
-  const ivs: [number, number][] = samples.map((s) => [-s.rightM, s.leftM]);
-  const overlap = (i: number, lo: number, hi: number): number =>
-    Math.max(0, Math.min(hi, ivs[i][1]) - Math.max(lo, ivs[i][0]));
-  // the optimal block sits flush against cross-section edges: the
-  // coverage function is piecewise linear in s with breakpoints exactly
-  // where a block edge meets an interval edge — evaluating those
-  // candidates is exact, no ternary assumptions. When the block is
-  // NARROWER than the road along the whole piece (fewer units than the
-  // area has room for — e.g. a 2-lane way crossing a wide area), a whole
-  // PLATEAU of shifts achieves full coverage and the objective alone is
-  // underdetermined: among equally-optimal shifts, the one closest to
-  // the measured area midline wins — the rectangle centers itself in
-  // the road instead of clinging to an arbitrary plateau edge
-  const midPref = (() => {
-    const offs = samples.map((x) => (x.leftM - x.rightM) / 2).sort((a, b) => a - b);
-    return offs[Math.floor(offs.length / 2)];
-  })();
-  // TRIMMED objective: the plain sum lets a minority of samples
-  // dominate — junction-mouth widenings pull the rectangle sideways and
-  // inflate its width, platform dents shrink it. Dropping the top and
-  // bottom per-sample coverages makes the MAJORITY cross-section decide,
-  // which is the robust reading of an inconsistent OSM area
-  const trim = Math.max(0, Math.floor(ivs.length * trimFrac));
-  const scoreOf = (per: number[]): number => {
-    const s = [...per].sort((a, b) => a - b);
-    let sum = 0;
-    for (let i = trim; i < s.length - trim; i++) sum += s[i];
-    return sum;
+function rayWidthInArea(
+  origin: number[],
+  tx: number,
+  ty: number,
+  area: AreaFeature,
+  roadAreasNear: (
+    bbox: [number, number, number, number],
+  ) => AreaFeature[],
+  kerbMarked: (a: number[], b: number[]) => boolean,
+  maxM: number,
+): { left: number; right: number; valid: boolean } | null {
+  if (!pointInAreaQ(origin, area)) return null;
+  const mPerLon =
+    (111_320 * Math.cos(((origin[1] / 1e7) * Math.PI) / 180)) / 1e7;
+  const mPerLat = 111_320 / 1e7;
+  const COS45 = Math.SQRT1_2;
+  const cast = (dir: number): { d: number; ok: boolean } | null => {
+    const end = [
+      origin[0] + ((dir * -ty) / mPerLon) * maxM,
+      origin[1] + ((dir * tx) / mPerLat) * maxM,
+    ];
+    let bestD = Infinity;
+    let bestSeg: [number[], number[]] | null = null;
+    for (const ring of area.outer)
+      for (let i = 1; i < ring.length; i++) {
+        const a = ring[i - 1],
+          b = ring[i];
+        const ip = segIntersect(origin, end, a, b);
+        if (!ip) continue;
+        const d = Math.hypot(
+          (ip[0] - origin[0]) * mPerLon,
+          (ip[1] - origin[1]) * mPerLat,
+        );
+        if (d < bestD) {
+          bestD = d;
+          bestSeg = [a, b];
+        }
+      }
+    if (!bestSeg || bestD <= 0.01) return null;
+    const [a, b] = bestSeg;
+    const sx = (b[0] - a[0]) * mPerLon,
+      sy = (b[1] - a[1]) * mPerLat;
+    const sl = Math.hypot(sx, sy);
+    if (sl === 0) return null;
+    // the hit segment must be more parallel than orthogonal to the road
+    if (Math.abs((sx * tx + sy * ty) / sl) <= COS45) return { d: bestD, ok: false };
+    // a hit segment shared with another area:highway of a road type is a
+    // cutout towards that area (typically a junction) — valid only when
+    // a kerb way marks the true road edge along it. The other area must
+    // be on the SAME layer and must actually SHARE the edge: several
+    // points along the hit segment must lie on its boundary (a merely
+    // touching or overlapping neighbor with its own edge elsewhere is
+    // not a cutout)
+    const pad = 300;
+    const bb: [number, number, number, number] = [
+      Math.min(a[0], b[0]) - pad,
+      Math.min(a[1], b[1]) - pad,
+      Math.max(a[0], b[0]) + pad,
+      Math.max(a[1], b[1]) + pad,
+    ];
+    const probes = [0.2, 0.5, 0.8].map((t) => [
+      a[0] + (b[0] - a[0]) * t,
+      a[1] + (b[1] - a[1]) * t,
+    ]);
+    const shared = roadAreasNear(bb).some(
+      (oa) =>
+        oa !== area &&
+        oa.layer === area.layer &&
+        probes.filter((p) => pointOnAreaBoundaryQ(p, oa, 150)).length >= 2,
+    );
+    if (shared && !kerbMarked(a, b)) return { d: bestD, ok: false };
+    return { d: bestD, ok: true };
   };
-  const bestShift = (w: number): { s: number; v: number } => {
-    const h = (units * w) / 2;
-    const cands: number[] = [0];
-    for (const [lo, hi] of ivs) {
-      cands.push(lo + h, hi - h, (lo + hi) / 2);
-    }
-    // TIE TOLERANCE: when the block is NARROWER than the road (fewer
-    // units than the area holds), a whole PLATEAU of shifts achieves
-    // (near-)full coverage, and the plateau candidates' scores differ
-    // only by the samples' tiny span variations — an absolute epsilon
-    // would let a plateau EDGE win by a hair, wedging the rectangle
-    // against one road side (seen as absurdly shifted per-segment
-    // rectangles). A tolerance of ~1 cm per (untrimmed) sample treats
-    // near-equal coverage as a tie, and the measured-area midline
-    // preference centers the rectangle instead
-    const tie = 0.01 * ivs.length;
-    let best = { s: 0, v: -Infinity };
-    for (const s of cands) {
-      const per = ivs.map((_, i) => overlap(i, s - h, s + h));
-      const v = 2 * scoreOf(per) - units * w * (ivs.length - 2 * trim);
-      if (v > best.v + tie) best = { s, v };
-      else if (v > best.v - tie && Math.abs(s - midPref) < Math.abs(best.s - midPref))
-        best = { s, v: Math.max(best.v, v) };
-    }
-    return best;
+  const left = cast(1);
+  if (left === null) return null;
+  const right = cast(-1);
+  if (right === null) return null;
+  return {
+    left: left.d,
+    right: right.d,
+    valid: left.ok && right.ok,
   };
-  const cand = [
-    ...new Set(samples.map((x) => (x.leftM + x.rightM) / units)),
-  ].sort((a, b) => a - b);
-  const wLo = Math.max(0.5, cand[0] * 0.5);
-  const wHi = cand[cand.length - 1] * 1.5;
-  let best = { ...bestShift(cand[0]), w: cand[0] };
-  const N = 24;
-  for (let i = 0; i <= N; i++) {
-    const w = wLo + ((wHi - wLo) * i) / N;
-    const r = bestShift(w);
-    if (r.v > best.v) best = { ...r, w };
-  }
-  for (const w of cand) {
-    const r = bestShift(w);
-    if (r.v > best.v) best = { ...r, w };
-  }
-  return { w: best.w, s: best.s };
 }
 
 /** squared distance from pt to segment a-b in quantized units */
@@ -1470,11 +1435,19 @@ export function extractFeatures(
     /** unit normal (left-positive) at the sample */
     nx: number;
     ny: number;
-    /** measured distance to the left/right area edge, meters */
+    /** measured distance to the left/right area edge, meters — relative
+     *  to the MIDDLE LINE (the sample sits on it): the half-width on
+     *  each side */
     leftM: number;
     rightM: number;
+    /** lateral offset of the middle line from the MAPPED centerline, in
+     *  meters (positive = left of the way) — the spline points are the
+     *  way points shifted by this along the sample normal */
+    midM?: number;
     /** index of the chain line-segment the sample projects onto */
     seg?: number;
+    /** arc-length position of the sample on the chain (internal) */
+    tArc?: number;
     /** fitted edges of the segment's road-model rectangle, meters */
     fitLeftM?: number;
     fitRightM?: number;
@@ -1497,13 +1470,29 @@ export function extractFeatures(
      *  measured road edges and the fitted edges of the per-segment road-model
      *  rectangles (fitLeftM/fitRightM) */
     spline?: SplineSampleInfo[];
-    /** the piece's ROAD-WIDE fitted rectangle (dent-robust, trimmed
-     *  objective over all samples) — the piece-level layout quantities
-     *  (lane width, anchors) derive from it, while the per-segment fits
-     *  stay honest (dents show as smaller rectangles in the rects mode) */
-    roadFitLeftM?: number;
-    roadFitRightM?: number;
   }
+  // context the RAY HIT FILTER needs: the other highway areas of ROAD
+  // type (the adjacent-area:highway cutout test ignores footways and
+  // other non-road areas) and the kerb way segments (a hit segment
+  // carrying a kerb marks the true road edge even where another road
+  // area attaches)
+  const allRoadAreas = areas.filter(
+    (a) => !a.junction && !FOOTWAY_AREA_TYPES.has(a.highway),
+  );
+  const kerbSegs: { a: number[]; b: number[] }[] = [];
+  for (const kw of kerbWays)
+    for (let i = 1; i < kw.coords.length; i++)
+      kerbSegs.push({ a: kw.coords[i - 1], b: kw.coords[i] });
+  const kerbAlongShared = (a: number[], b: number[]): boolean =>
+    kerbSegs.some(
+      (k) =>
+        Math.min(k.a[0], k.b[0]) <= Math.max(a[0], b[0]) + 1 &&
+        Math.max(k.a[0], k.b[0]) >= Math.min(a[0], b[0]) - 1 &&
+        Math.min(k.a[1], k.b[1]) <= Math.max(a[1], b[1]) + 1 &&
+        Math.max(k.a[1], k.b[1]) >= Math.min(a[1], b[1]) - 1 &&
+        distToSegQ2(a[0], a[1], k.a, k.b) < 100 * 100 &&
+        distToSegQ2(b[0], b[1], k.a, k.b) < 100 * 100,
+    );
   const samplesOf = new Map<LineFeature, MarkingSample[]>();
   for (const cl of laneCandidates) {
     const candidates = queryAreas(areaGridL, cl.bbox);
@@ -1561,9 +1550,9 @@ export function extractFeatures(
       const rights: number[] = [];
       const [minX, minY, maxX, maxY] = area.bbox;
       const maxRay = Math.hypot(maxX - minX, maxY - minY) + 1000;
-      // nx/ny is a UNIT NORMAL IN METRIC SPACE; the quantized ray
-      // direction (nx/mPerLon, ny/mPerLat) has metric length 1, so the
-      // ray parameter t IS the distance in meters
+      // ray-shoot the segment-midpoint cross-sections (the group
+      // layout keys off these medians): same hit filter + adjacency
+      // rule as the per-piece splines
       const measureAt = (
         sample: number[],
         nx: number,
@@ -1572,15 +1561,17 @@ export function extractFeatures(
         const mPerLon =
           (111_320 * Math.cos(((sample[1] / 1e7) * Math.PI) / 180)) / 1e7;
         const mPerLat = 111_320 / 1e7;
-        return lateralIntervalInArea(
+        const tl = Math.hypot(nx * mPerLon, ny * mPerLat);
+        const m = rayWidthInArea(
           sample,
-          nx,
-          ny,
-          mPerLon,
-          mPerLat,
+          -ny / tl,
+          nx / tl,
           area,
+          (bb) => allRoadAreas.filter((oa) => bboxOverlap(oa.bbox, bb)),
+          kerbAlongShared,
           maxRay,
         );
+        return m ? [m.left, m.right] : null;
       };
       const median = (xs: number[]): number => {
         const s2 = [...xs].sort((a, b) => a - b);
@@ -2018,113 +2009,380 @@ export function extractFeatures(
       if (best && bestD2 > OVERSHOOT_M * OVERSHOOT_M) return best;
       return raw;
     };
-    const ptAt = (t: number): { p: number[]; d: number[] } => {
-      const p = projectIfOffChain(ptAtRaw(t));
-      const e = Math.min(0.25, Math.max(1e-6, (cum[cum.length - 1] || 1) * 1e-4));
-      const pa = projectIfOffChain(ptAtRaw(Math.max(0, t - e)));
-      const pb = projectIfOffChain(ptAtRaw(Math.min(cum[cum.length - 1], t + e)));
-      return {
-        p,
-        d: [pb[0] - pa[0], pb[1] - pa[1]],
-      };
+    // closest point ON the chain polyline at arc-length t (the
+    // position where the corresponding vertex-based segment is
+    // evaluated): the chordal Catmull-Rom loops near knots of very
+    // different segment lengths (a 98 m segment chained to a 39 m one)
+    // and the overshoot clamp's projection jumps between loop folds —
+    // instead, walk the polyline to t directly: the sample positions
+    // advance monotonically at exactly the arc spacing
+    const chainPtAt = (t: number): { p: number[]; d: number[] } => {
+      const tt = Math.max(0, Math.min(cum[cum.length - 1], t));
+      let k = 1;
+      while (k < cum.length - 1 && cum[k] < tt) k++;
+      const a = mv[k - 1],
+        b = mv[k];
+      const len = cum[k] - cum[k - 1];
+      const f = len > 0 ? (tt - cum[k - 1]) / len : 0;
+      const p = [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
+      const dl = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      const d =
+        dl > 0
+          ? [(b[0] - a[0]) / dl, (b[1] - a[1]) / dl]
+          : (() => {
+              const pa = mv[Math.max(0, k - 2)];
+              const l2 = Math.hypot(a[0] - pa[0], a[1] - pa[1]);
+              return l2 > 0
+                ? [(a[0] - pa[0]) / l2, (a[1] - pa[1]) / l2]
+                : [1, 0];
+            })();
+      return { p, d };
     };
+    const ptAt = chainPtAt;
     const [minX, minY, maxX, maxY] = area.bbox;
     const maxRay = Math.hypot(maxX - minX, maxY - minY) + 1000;
-    const measureAt = (
-      sample: number[],
-      nx: number,
-      ny: number,
-    ): [number, number] | null => {
-      const mPerLon = (111_320 * cosLat) / 1e7;
-      const mPerLat = 111_320 / 1e7;
-      return lateralIntervalInArea(
-        sample,
-        nx,
-        ny,
-        mPerLon,
-        mPerLat,
-        area,
-        maxRay,
+    // context the ray filter needs: the other highway areas near a hit
+    // segment (cutout test) and whether a kerb way runs along a segment
+    const roadAreasNear = (
+      bbox: [number, number, number, number],
+    ): AreaFeature[] =>
+      allRoadAreas.filter((oa) => bboxOverlap(oa.bbox, bbox));
+    const kerbAlong = (a: number[], b: number[]): boolean =>
+      kerbSegs.some(
+        (k) =>
+          Math.min(k.a[0], k.b[0]) <= Math.max(a[0], b[0]) + 1 &&
+          Math.max(k.a[0], k.b[0]) >= Math.min(a[0], b[0]) - 1 &&
+          Math.min(k.a[1], k.b[1]) <= Math.max(a[1], b[1]) + 1 &&
+          Math.max(k.a[1], k.b[1]) >= Math.min(a[1], b[1]) - 1 &&
+          distToSegQ2(a[0], a[1], k.a, k.b) < 100 * 100 &&
+          distToSegQ2(b[0], b[1], k.a, k.b) < 100 * 100,
       );
-    };
+    /**
+     * Ray-shoot one cross-section from the sample point, with the
+     * BACKTRACKING rule: when a ray hit is invalid (transverse segment,
+     // adjacent area:highway without a kerb), walk back along the chain
+     // in steps of 1 m until a position measures validly, and report
+     // THAT measurement (the width at the closest valid cross-section).
+     // Returns the measured split relative to the CHAIN at position t.
+     */
     const EPS_M = 0.3;
-    // PER-SEGMENT sampling: each line-segment owns its own sample — its
-    // cross-sections at ~4 m, always including BOTH endpoints (with the
-    // endpoint samples nudged EPS into the segment so a vertex exactly
-    // on the area boundary still measures). A segment's rectangle is
-    // fitted STRICTLY on its own cross-sections: no neighbour padding,
-    // so adjacent fitted rectangles never overlap tangentially — the
-    // first sample of segment k+1 coincides with the last sample of
-    // segment k (the shared vertex), and no stretch of road is claimed
-    // by two fits
+    const BACKTRACK_M = 30;
+    const measureWithBacktrack = (
+      t: number,
+    ): { leftM: number; rightM: number } | null => {
+      const inArea = (tt: number): boolean => {
+        const { p } = ptAt(tt);
+        const qx = p[0] / (1e-7 * 111_320 * cosLat);
+        const qy = p[1] / (1e-7 * 111_320);
+        return pointInAreaQ([qx, qy], area);
+      };
+      // fallback: when NO valid cross-section exists along the whole
+      // backtrack window (a piece whose every boundary edge is shared
+      // with adjacent road areas), use the WIDEST invalid measurement —
+      // the invalid hits are still the best estimate, and the widest
+      // reading rejects the spuriously narrow transverse-cap hits at
+      // the piece ends (a cap crossing reads less than the road width)
+      let fallback: { leftM: number; rightM: number } | null = null;
+      for (let bt = 0; bt <= BACKTRACK_M; bt += 1) {
+        for (const dt of bt === 0 ? [0] : [-bt, bt]) {
+          const tt = Math.min(Math.max(t + dt, 0), total);
+          if (bt > 0 && !inArea(tt)) continue;
+          const { p, d } = ptAt(tt);
+          const dl = Math.hypot(d[0], d[1]);
+          if (dl === 0) continue;
+          const tx = d[0] / dl,
+            ty = d[1] / dl;
+          const nx = -ty,
+            ny = tx;
+          const qx = p[0] / (1e-7 * 111_320 * cosLat);
+          const qy = p[1] / (1e-7 * 111_320);
+          const m = rayWidthInArea(
+            [qx, qy],
+            tx,
+            ty,
+            area,
+            roadAreasNear,
+            kerbAlong,
+            maxRay,
+          );
+          if (!m) continue;
+          const meas = { leftM: m.left, rightM: m.right };
+          if (m.valid) return meas;
+          if (
+            !fallback ||
+            meas.leftM + meas.rightM > fallback.leftM + fallback.rightM
+          )
+            fallback = meas;
+        }
+      }
+      return fallback;
+    };
+    // WIDTH TESTS ALWAYS AT THE WAY VERTICES (a vertex is where the
+    // chain changes owner way — lane counts, parking and other
+    // properties change there, so the sample must exist exactly there),
+    // and BETWEEN them every 2 m on longer stretches (a segment shorter
+    // than 2 m contributes only its endpoints)
+    const SAMPLE_M = 2;
     const raw: (SplineSampleInfo & { cl: LineFeature })[] = [];
+    // failed width tests (no measurable cross-section anywhere in the
+    // backtrack window): filled afterwards by interpolation between the
+    // nearest successful neighbours, so the 2 m cadence never breaks
+    const failed: { t: number; seg: number }[] = [];
+    const pushSample = (
+      t: number,
+      seg: number,
+    ): void => {
+      const t0 = cum[seg],
+        t1 = cum[seg + 1];
+      // the exact vertices are recorded, but the MEASUREMENT is nudged
+      // EPS into the segment: a vertex on the area boundary is
+      // ambiguous for the containment test
+      const isStart = Math.abs(t - t0) < 1e-9;
+      const isEnd = Math.abs(t - t1) < 1e-9;
+      const eps = Math.min(EPS_M, (t1 - t0) / 4);
+      const measureT = isStart
+        ? t0 + eps
+        : isEnd
+          ? t1 - eps
+          : t;
+      // a sample POSITION outside the area (a chain segment leading
+      // into a junction) is never taken: even a backtracked width
+      // would extend the piece beyond its area section
+      const posQ = [
+        ptAt(t).p[0] / (1e-7 * 111_320 * cosLat),
+        ptAt(t).p[1] / (1e-7 * 111_320),
+      ];
+      if (!pointInAreaTolQ2(posQ, area)) return;
+      const m = measureWithBacktrack(measureT);
+      if (!m) {
+        failed.push({ t, seg });
+        return;
+      }
+      const pv = ptAt(t).p;
+      // the sample's OWN normal at t — the backtracked measurement only
+      // contributes the distances; using the backtracked position's
+      // normal at t twists the spline where the road curves
+      const { d } = ptAt(t);
+      const dl = Math.hypot(d[0], d[1]);
+      if (dl === 0) return;
+      raw.push({
+        pt: [
+          Math.round(pv[0] / (1e-7 * 111_320 * cosLat)),
+          Math.round(pv[1] / (1e-7 * 111_320)),
+        ],
+        nx: -d[1] / dl,
+        ny: d[0] / dl,
+        leftM: m.leftM,
+        rightM: m.rightM,
+        seg,
+        tArc: t,
+        cl: ownerOfSeg(seg),
+      });
+    };
     for (let seg = 0; seg < cum.length - 1; seg++) {
       const t0 = cum[seg],
         t1 = cum[seg + 1];
       const len = t1 - t0;
       if (len <= 0) continue;
-      // a segment must own ENOUGH samples for a robust per-segment fit
-      // (>= 5): a short segment whose own samples all sit inside a
-      // boundary dent would otherwise fit the dent
-      const n = Math.max(4, Math.min(40, Math.round(len / 4)));
-      for (let s = 0; s <= n; s++) {
-        const isEnd = s === 0 || s === n;
-        // interior samples: uniform arc length; endpoints: the EXACT
-        // shared vertex (both adjacent segments reference the SAME point,
-        // so their rectangles meet there — no tangential gap); the
-        // MEASUREMENT ray is nudged EPS into THIS segment so a vertex on
-        // the area boundary measures into this segment's side, but the
-        // recorded pt stays the vertex itself
-        let t: number;
-        let measureT: number;
-        if (isEnd) {
-          const eps = Math.min(EPS_M, len / 4);
-          t = s === 0 ? t0 : t1;
-          measureT = s === 0 ? t0 + eps : t1 - eps;
-        } else {
-          t = t0 + (len * s) / n;
-          measureT = t;
+      // the vertices themselves are ALWAYS sampled; longer stretches
+      // are subsampled between them every 2 m, in ARC ORDER
+      pushSample(t0, seg);
+      if (len > SAMPLE_M) {
+        const n = Math.floor((len - 1e-9) / SAMPLE_M);
+        for (let s = 1; s <= n; s++)
+          pushSample(t0 + (len * s) / (n + 1), seg);
+      }
+      pushSample(t1, seg);
+    }
+    // fill failed samples by interpolating the measured edges between
+    // the nearest successful neighbours along the arc (end runs extend
+    // the nearest neighbour's values). Samples OUTSIDE the area (chain
+    // segments leading into a junction) stay dropped — a piece never
+    // extends beyond its area section. The inserted samples keep the
+    // chain's arc order
+    if (failed.length > 0 && raw.length >= 2) {
+      const inAreaQ = (t: number): boolean => {
+        const { p } = ptAt(t);
+        return pointInAreaTolQ2(
+          [
+            p[0] / (1e-7 * 111_320 * cosLat),
+            p[1] / (1e-7 * 111_320),
+          ],
+          area,
+        );
+      };
+      for (const f of [...failed]) {
+        if (!inAreaQ(f.t)) continue;
+        let iLo = -1,
+          iHi = -1;
+        for (let i = 0; i < raw.length; i++) {
+          if ((raw[i].tArc ?? 0) <= f.t) iLo = i;
+          if ((raw[i].tArc ?? 0) >= f.t && iHi < 0) iHi = i;
         }
-        const { p, d } = ptAt(measureT);
+        let left: number, right: number;
+        if (iLo >= 0 && iHi >= 0 && iLo !== iHi) {
+          const w =
+            (f.t - (raw[iLo].tArc ?? 0)) /
+            ((raw[iHi].tArc ?? 0) - (raw[iLo].tArc ?? 0));
+          left = raw[iLo].leftM + (raw[iHi].leftM - raw[iLo].leftM) * w;
+          right = raw[iLo].rightM + (raw[iHi].rightM - raw[iLo].rightM) * w;
+        } else if (iLo >= 0) {
+          left = raw[iLo].leftM;
+          right = raw[iLo].rightM;
+        } else if (iHi >= 0) {
+          left = raw[iHi].leftM;
+          right = raw[iHi].rightM;
+        } else continue;
+        const { p, d } = ptAt(f.t);
         const dl = Math.hypot(d[0], d[1]);
         if (dl === 0) continue;
-        const nx = -d[1] / dl,
-          ny = d[0] / dl;
-        const qx = p[0] / (1e-7 * 111_320 * cosLat);
-        const qy = p[1] / (1e-7 * 111_320);
-        const ux = d[0] / dl,
-          uy = d[1] / dl;
-        const mid = ptAt(total / 2).p;
-        const towards =
-          (mid[0] - p[0]) * ux + (mid[1] - p[1]) * uy >= 0 ? 1 : -1;
-        const nudged = [
-          qx + (ux * EPS_M * towards) / (1e-7 * 111_320 * cosLat),
-          qy + (uy * EPS_M * towards) / (1e-7 * 111_320),
-        ];
-        if (!pointInAreaQ(nudged, area)) continue;
-        const m2 = measureAt(nudged, nx, ny);
-        if (!m2) continue;
-        // the recorded sample point: the exact arc-length position t
-        // (the shared vertex at the ends), not the nudged measure point
-        const pv = ptAt(t).p;
         raw.push({
           pt: [
-            Math.round(pv[0] / (1e-7 * 111_320 * cosLat)),
-            Math.round(pv[1] / (1e-7 * 111_320)),
+            Math.round(p[0] / (1e-7 * 111_320 * cosLat)),
+            Math.round(p[1] / (1e-7 * 111_320)),
           ],
-          nx,
-          ny,
-          leftM: m2[0],
-          rightM: m2[1],
-          seg,
-          cl: ownerOfSeg(seg),
+          nx: -d[1] / dl,
+          ny: d[0] / dl,
+          leftM: left,
+          rightM: right,
+          seg: f.seg,
+          tArc: f.t,
+          cl: ownerOfSeg(f.seg),
         });
+        raw.sort((a, b) => (a.tArc ?? 0) - (b.tArc ?? 0));
       }
     }
-    // samples of a way the chain traverses REVERSED carry the chain's
-    // normal and left/right split; flip them back so every consumer sees
-    // the sample in the OWNING WAY's own orientation (left/right must
-    // match the way's tags: parking:left etc.)
+
+    // at a seam vertex the two adjacent segments sample the SAME
+    // position; keep ONE copy so no zero-length chord enters the
+    // spline (a duplicate pair turns per-sample noise into 180-degree
+    // angles). The kept sample carries the FIRST segment's owner; the
+    // per-piece ranges still meet exactly at the vertex
+    const dedup: (SplineSampleInfo & { cl: LineFeature })[] = [];
+    for (const s of raw) {
+      const last = dedup[dedup.length - 1];
+      if (
+        last &&
+        last.pt[0] === s.pt[0] &&
+        last.pt[1] === s.pt[1]
+      )
+        continue;
+      dedup.push(s);
+    }
+    // MINIMUM SPACING for interior sub-samples: a sub-sample closer
+    // than 1 m to its predecessor carries no extra information, and
+    // the sub-meter chords turn per-sample lateral noise into large
+    // angles — drop it. Segment endpoints (the way vertices) are NEVER
+    // dropped: they are the property-switch positions
+    const isVertex = (
+      arr: (SplineSampleInfo & { cl: LineFeature })[],
+      i: number,
+    ): boolean => {
+      const s = arr[i];
+      const seg = s.seg ?? 0;
+      return (
+        i === 0 ||
+        i === arr.length - 1 ||
+        (arr[i - 1].seg ?? 0) !== seg ||
+        (i + 1 < arr.length && (arr[i + 1].seg ?? 0) !== seg)
+      );
+    };
+    const dedupSrc = dedup.length >= 2 ? dedup : raw;
+    const spaced: (SplineSampleInfo & { cl: LineFeature })[] = [];
+    for (let i = 0; i < dedupSrc.length; i++) {
+      const s = dedupSrc[i];
+      const last = spaced[spaced.length - 1];
+      if (
+        !isVertex(dedupSrc, i) &&
+        last &&
+        Math.hypot(
+          (s.pt[0] - last.pt[0]) * (1e-7 * 111_320 * cosLat),
+          (s.pt[1] - last.pt[1]) * (1e-7 * 111_320),
+        ) < 1
+      ) {
+        continue;
+      }
+      spaced.push(s);
+    }
+    const samples = spaced.length >= 2 ? spaced : dedupSrc;
+    // DENT REPAIR before the middle-line re-basing: ONE-SIDED inward
+    // spikes (a bus platform cutting INTO the road on one boundary)
+    // are mapping artifacts of the boundary, not real narrowings — a
+    // Hampel filter over an ~18 m arc window replaces an edge that
+    // deviates more than 1.2 m from its window median while the OTHER
+    // side is stable. Both sides denting together is a genuine
+    // narrowing (facing platforms) and is kept; outward spikes are
+    // replaced only at the chain ends (junction mouths widen for real)
+    const arcOf2 = samples.map((s) =>
+      Math.hypot(
+        (s.pt[0] - samples[0].pt[0]) * (1e-7 * 111_320 * cosLat),
+        (s.pt[1] - samples[0].pt[1]) * (1e-7 * 111_320),
+      ),
+    );
+    const WIN2 = 18;
+    const winIdx2 = (i: number): number[] => {
+      const out2: number[] = [];
+      for (let j = 0; j < arcOf2.length; j++)
+        if (Math.abs(arcOf2[j] - arcOf2[i]) <= WIN2) out2.push(j);
+      return out2.length > 0 ? out2 : [i];
+    };
+    const repairedSides = (() => {
+      const L = samples.map((s) => s.leftM);
+      const R = samples.map((s) => s.rightM);
+      // the reference is a ROBUST LINEAR TREND of each side along the
+      // arc (Theil-Sen over the window): a road may drift laterally
+      // (slanted parallelogram) or narrow/widen genuinely (trapezoid) —
+      // both follow the trend and never flag. Only abrupt ONE-SIDED
+      // dents (a platform cutting into one boundary while the other
+      // stays on its trend) repair
+      const trendAt = (
+        vals: number[],
+        idx: number[],
+        i: number,
+      ): number => {
+        const pts = idx.map((j) => [arcOf2[j], vals[j]]);
+        if (pts.length < 3) return median2(idx.map((j) => vals[j]));
+        const slopes: number[] = [];
+        for (let a = 0; a < pts.length; a++)
+          for (let b = a + 1; b < pts.length; b++) {
+            const dx = pts[b][0] - pts[a][0];
+            if (dx > 0.5) slopes.push((pts[b][1] - pts[a][1]) / dx);
+          }
+        const slope = slopes.length > 0 ? median2(slopes) : 0;
+        const base = median2(
+          pts.map((p) => p[1] - slope * p[0]),
+        );
+        return base + slope * arcOf2[i];
+      };
+      const repair = (vals: number[], other: number[]): number[] => {
+        const out = [...vals];
+        for (let i = 0; i < vals.length; i++) {
+          const idx = winIdx2(i);
+          const trend = trendAt(vals, idx, i);
+          const trendOther = trendAt(other, idx, i);
+          if (
+            trend - vals[i] > 1.2 &&
+            Math.abs(other[i] - trendOther) < 1.0
+          ) {
+            out[i] = trend;
+          } else if (vals[i] - trend > 1.2) {
+            if (
+              arcOf2[i] - arcOf2[0] > WIN2 &&
+              arcOf2[arcOf2.length - 1] - arcOf2[i] > WIN2
+            )
+              out[i] = trend;
+          }
+        }
+        return out;
+      };
+      const smL = repair(L, R);
+      const smR = repair(R, L);
+      return samples.map((s, i) => ({
+        ...s,
+        leftM: smL[i],
+        rightM: smR[i],
+      }));
+    })();
     // orient flips each sample's left/right split into the OWNING WAY's
     // own convention (the chain may traverse the way reversed) and
     // stamps it REVERSED; the per-piece slicing reverses the sample
@@ -2143,204 +2401,77 @@ export function extractFeatures(
             ny: -s.ny,
             leftM: s.rightM,
             rightM: s.leftM,
-            rawLeftM: s.rawRightM,
-            rawRightM: s.rawLeftM,
+            midM: -(s.midM ?? 0),
           }
         : { ...s, rev: false };
-    if (raw.length < 3) return raw.map(orient);
-    // ---- pass 2: re-center on the geometric midline ----
-    // The mapped centerline can be SHIFTED by the mapper (jogging the way
-    // where parking sides change, honoring placement). The AREA boundary
-    // is objective: the midline between the two measured edges is a
-    // property of the road, not of the mapping. Re-measure from it so
-    // the split (leftM/rightM) stops wobbling with the way.
-    // Robust smoothing per side (moving median): boundary DENTS (bus
-    // platforms, cutouts) are minority outliers and vanish, while real
-    // widenings (span changes with lane counts) survive.
-    const midPts: { p: number[] }[] = raw.map((s) => {
-      // boundary hit points in metric coords: p +- normal * dist
-      const nxq = s.nx, nyq = s.ny; // metric unit normal
-      const lx = s.pt[0] * (1e-7 * 111_320 * cosLat) - nxq * s.leftM;
-      const ly = s.pt[1] * (1e-7 * 111_320) - nyq * s.leftM;
-      const rx = s.pt[0] * (1e-7 * 111_320 * cosLat) + nxq * s.rightM;
-      const ry = s.pt[1] * (1e-7 * 111_320) + nyq * s.rightM;
-      return { p: [(lx + rx) / 2, (ly + ry) / 2] };
+    // ---- the VIRTUAL MIDDLE LINE: half the width at each sample, in
+    // meters relative to the mapped centerline (positive = LEFT). Its
+    // lateral offsets form ONE interpolating spline per area:highway
+    // — the solid centerline is continuous. The markings are offsets
+    // of that middle spline, and the sample's own edges are re-based
+    // onto it (leftM/rightM measure from the middle line)
+    const midOff = repairedSides.map(
+      (s) => (s.leftM - s.rightM) / 2,
+    );
+    // smooth the middle-line offsets: the spline BASE sits on the
+    // middle line, so per-sample measurement noise would kink every
+    // drawn boundary. Moving median over ~6 m (kills solitary
+    // outliers) followed by a moving AVERAGE over ~16 m of arc
+    // (subdues residual wobble) — genuine trends (slanted areas,
+    // trapezoids) survive both
+    const midMed = midOff.map((_, i) => {
+      const xs: number[] = [];
+      for (
+        let j = i - 1;
+        j <= i + 1 && j < repairedSides.length;
+        j++
+      )
+        if (j >= 0) xs.push(midOff[j]);
+      return median2(xs);
     });
-    // smooth the midline with a moving average over the arc
-    const midSmoothed = midPts.map((m, i) => {
-      if (!m) return null;
-      const W = 2;
-      let sx = 0, sy = 0, n = 0;
-      for (let j = Math.max(0, i - W); j <= Math.min(midPts.length - 1, i + W); j++) {
-        const mj = midPts[j];
-        if (mj) { sx += mj.p[0]; sy += mj.p[1]; n++; }
-      }
-      return n > 0 ? [sx / n, sy / n] : m.p;
+    const midSm = midMed.map((_, i) => {
+      let sum = 0,
+        n = 0;
+      for (
+        let j = i - 4;
+        j <= i + 4 && j < midMed.length;
+        j++
+      )
+        if (j >= 0) {
+          sum += midMed[j];
+          n++;
+        }
+      return n > 0 ? sum / n : midMed[i];
     });
-    // re-measure from the smoothed midline: radial pairs via the LOCAL
-    // midline tangent (circle-fit-free: midline points are ~4 m apart,
-    // the chord direction is a good local tangent)
-    const raw2: (SplineSampleInfo & { cl: LineFeature })[] = [];
-    for (let i = 0; i < raw.length; i++) {
-      const m = midSmoothed[i];
-      if (!m) { raw2.push(raw[i]); continue; }
-      // local tangent from neighbours on the smoothed midline
-      const prev = midSmoothed[Math.max(0, i - 1)];
-      const next = midSmoothed[Math.min(midSmoothed.length - 1, i + 1)];
-      if (!prev || !next) { raw2.push(raw[i]); continue; }
-      const tx = next[0] - prev[0], ty = next[1] - prev[1];
-      const tl = Math.hypot(tx, ty);
-      if (tl === 0) { raw2.push(raw[i]); continue; }
-      const nx = -ty / tl, ny = tx / tl; // metric unit normal at the midline
-      // measure from the sample's own point (pt keeps the drawn curve):
-      // leftM/rightM must stay relative to pt, or downstream consumers
-      // (the rectangle fit) read them against the wrong reference
-      const m2 = measureAt(raw[i].pt, nx, ny);
-      if (!m2) { raw2.push(raw[i]); continue; }
-      raw2.push({
-        ...raw[i],
-        nx,
-        ny,
-        leftM: m2[0],
-        rightM: m2[1],
-      });
-    }
-    // Hampel-style robust smoothing per side (window ~9 samples = ~36 m):
-    // a sample whose edge deviates more than 1.2 m from its window
-    // median is replaced by that median. INWARD spikes (platforms,
-    // bollard cutouts, kerb dents - the edge cuts INTO the road) are
-    // always replaced; OUTWARD deviations are kept only at the very ends
-    // of the chain (junction mouths widen outward for real). Genuine
-    // widenings (lane-count changes) span whole windows and their
-    // window medians follow them, so they survive
-    // window in ARC LENGTH (~18 m each side), not sample count: under
-    // the per-segment sampling the samples are NOT evenly spaced (short
-    // segments are denser), so a fixed sample count would give short
-    // segments a tiny metric window and let dent shoulders through
-    const arcOf = raw2.map((s) =>
-      Math.hypot(
-        (s.pt[0] - raw2[0].pt[0]) * (1e-7 * 111_320 * cosLat),
-        (s.pt[1] - raw2[0].pt[1]) * (1e-7 * 111_320),
-      ),
-    );
-    const WIN_M = 18;
-    const winIdx = (i: number): number[] => {
-      const out2: number[] = [];
-      for (let j = 0; j < arcOf.length; j++)
-        if (Math.abs(arcOf[j] - arcOf[i]) <= WIN_M) out2.push(j);
-      return out2.length > 0 ? out2 : [i];
-    };
-    const smoothSide = (vals: number[], other: number[]): number[] => {
-      const out = [...vals];
-      for (let i = 0; i < vals.length; i++) {
-        const idx = winIdx(i);
-        const med = median2(idx.map((j) => vals[j]));
-        const medOther = median2(idx.map((j) => other[j]));
-        if (med - vals[i] > 1.2 && Math.abs(other[i] - medOther) < 1.0) {
-          // ONE-SIDED inward dent with the other side stable: a mapping
-          // artifact (platform, cutout on one boundary) — the true road
-          // edge is farther out. When BOTH sides dent together the road
-          // genuinely narrows (facing platforms) and the dent is kept
-          out[i] = med;
-        } else if (vals[i] - med > 1.2) {
-          // outward spike: keep only at the chain ends (mouth widening)
-          if (arcOf[i] - arcOf[0] > WIN_M && arcOf[arcOf.length - 1] - arcOf[i] > WIN_M)
-            out[i] = med;
-        }
-      }
-      return out;
-    };
-    const L = raw2.map((s) => s.leftM);
-    const R = raw2.map((s) => s.rightM);
-    const smL = smoothSide(L, R);
-    const smR = smoothSide(R, L);
-    const smoothed = raw2.map((s, i) => ({
-      ...s,
-      leftM: smL[i],
-      rightM: smR[i],
-    }));
-    // keep the ORIGINAL sample positions (the drawn curve) but with the
-    // re-centered, smoothed edges
-    const final = smoothed.map((s) => ({
-      ...s,
-      // RAW edges: the honest measured geometry, preserved before the
-      // outlier/dent repair below — the per-segment rectangle fits
-      // consume these, so dents show as SMALLER fitted rectangles while
-      // the repaired leftM/rightM keep the markings layout clean
-      rawLeftM: s.leftM,
-      rawRightM: s.rightM,
-    }));
-    // per-side outlier repair (boundary tips / junction mouths truncate
-    // one side); interior outliers interpolate, end runs truncate.
-    // The reference is a ROBUST LINEAR TREND of the measured WIDTH along
-    // the chain (Theil–Sen), not a piece-wide median: a road may drift
-    // laterally (a slanted parallelogram — the fitted shift grows
-    // linearly) or change width genuinely (a trapezoid area), and a
-    // global median would misread both as outlier runs. Only samples
-    // whose width steps BELOW the trend are artifacts — one-sided
-    // boundary dents (bus platforms, cutouts, boundary tips) narrow the
-    // measured span abruptly; widenings (junction mouths) never flag
-    const widths = final.map((s) => s.leftM + s.rightM);
-    let slope = 0;
-    if (widths.length >= 3) {
-      const slopes: number[] = [];
-      for (let i = 0; i < widths.length; i++)
-        for (let j = i + 1; j < widths.length; j++)
-          slopes.push((widths[j] - widths[i]) / (j - i));
-      slope = median2(slopes);
-    }
-    const base = median2(widths.map((w, i) => w - slope * i));
-    const bad = final.map(
-      (s, i) =>
-        s.leftM + s.rightM <
-        base + slope * i - Math.max(0.45, 0.08 * (base + slope * i)),
-    );
-    if (!bad.some((b) => b)) return final.map(orient);
-    let lo = 0;
-    while (lo < bad.length && bad[lo]) lo++;
-    let hi = bad.length;
-    while (hi > lo && bad[hi - 1]) hi--;
-    const kept = final.slice(lo, hi);
-    if (kept.length < 3) return final.map(orient);
-    const lefts: (number | null)[] = kept.map((s, i) =>
-      bad[lo + i] ? null : s.leftM,
-    );
-    const rights: (number | null)[] = kept.map((s, i) =>
-      bad[lo + i] ? null : s.rightM,
-    );
-    const fill = (xs: (number | null)[]): void => {
-      let lastGood = -1;
-      for (let i = 0; i < xs.length; i++) {
-        if (xs[i] !== null) {
-          lastGood = i;
-          continue;
-        }
-        let nextGood = -1;
-        for (let j = i + 1; j < xs.length; j++)
-          if (xs[j] !== null) {
-            nextGood = j;
-            break;
-          }
-        if (lastGood >= 0 && nextGood >= 0)
-          xs[i] =
-            (xs[lastGood] as number) +
-            (((xs[nextGood] as number) - (xs[lastGood] as number)) *
-              (i - lastGood)) /
-              (nextGood - lastGood);
-        else if (lastGood >= 0) xs[i] = xs[lastGood];
-        else if (nextGood >= 0) xs[i] = xs[nextGood];
-      }
-    };
-    fill(lefts);
-    fill(rights);
-    const repaired = kept.map((s, i) =>
-      orient({
+    // re-base the measured edges onto the middle line: relative to the
+    // middle, the road half-width is the same on both sides — so the
+    // two measured halves are averaged into one (halving the
+    // per-sample measurement noise)
+    const out = repairedSides.map((s, i) => {
+      const half = (s.leftM + s.rightM) / 2;
+      return {
         ...s,
-        leftM: lefts[i] as number,
-        rightM: rights[i] as number,
-      }),
-    );
-    return repaired.map(orient);
+        leftM: half,
+        rightM: half,
+        midM: midSm[i],
+      };
+    });
+    // the SAMPLE POINTS move onto the middle line: the renderer offsets
+    // this spline to draw the markings, so the base curve must BE the
+    // middle line, not the mapped way
+    const final = out.map((s) => {
+      const m = s.midM!;
+      const mx =
+        (s.pt[0] * (1e-7 * 111_320 * cosLat) + s.nx * m) /
+        (1e-7 * 111_320 * cosLat);
+      const my =
+        (s.pt[1] * (1e-7 * 111_320) + s.ny * m) / (1e-7 * 111_320);
+      return {
+        ...s,
+        pt: [Math.round(mx), Math.round(my)] as number[],
+      };
+    });
+    return final.map(orient);
   };
 
   for (const ways of groups.values()) {
@@ -2394,133 +2525,10 @@ export function extractFeatures(
           ny: s.ny,
           leftM: s.leftM,
           rightM: s.rightM,
+          midM: s.midM,
           seg: s.seg,
-          fitLeftM: s.fitLeftM,
-          fitRightM: s.fitRightM,
-          rawLeftM: s.rawLeftM,
-          rawRightM: s.rawRightM,
           rev: s.rev,
         }));
-      }
-    }
-    // FIT THE ROAD MODEL PER LINE-SEGMENT: the chained polyline is a
-    // string of line-segments; each gets its own extruded rectangle with
-    // the piece's units (traffic lanes + parking strips), evenly sized,
-    // tangentially limited by the segment and shifted sideways to
-    // maximize covered highway area minus spill outside it. The fit is
-    // the robust reading of the area: a straight road yields the
-    // sub-rectangle of the area from the segment's start to its end (a
-    // parallelogram area still fits, the rectangle may leave the area
-    // where the boundary slants), a boundary dent (bus platform, cutout)
-    // only trims the minority of segments it spans, and the lateral
-    // shift aligns the mapped centerline with the road's true center
-    // where the mapper jogged it. Samples carry their segment's FITTED
-    // edges (fitLeftM/fitRightM), which REPLACE the measured span for
-    // the layout below
-    for (const p of pieces) {
-      const units =
-        p.cl.lanes! +
-        (p.cl.parkingLeft ? 1 : 0) +
-        (p.cl.parkingRight ? 1 : 0);
-      const sp = p.spline;
-      if (!sp || sp.length < 2) continue;
-      // segment indices are monotonic along the spline (samples are
-      // ordered by arc length). TWO-PASS FIT, both times tangentially
-      // limited to the segment (adjacent rectangles never overlap —
-      // segment k's ends at the shared vertex, k+1's starts there):
-      // PASS 1 fits each segment with NEIGHBOUR CONTEXT (its samples
-      // plus the adjacent segments') — the context window makes the
-      // trimmed objective robust: a dent spanning a whole short
-      // segment is a minority of the window and gets smoothed away.
-      // PASS 2 re-fits each segment on its OWN samples only, with the
-      // samples the pass-1 rectangle classifies as one-sided dents
-      // (measured edge deep inside the fitted rectangle while the
-      // other side matches) REMOVED — genuine lateral drift
-      // (slanted areas) re-emerges at full strength because the drift
-      // never reads as a dent (both edges move coherently), while
-      // dents stay excluded from the final fit
-      const segRanges: { i0: number; i1: number }[] = [];
-      {
-        let i0 = 0;
-        while (i0 < sp.length) {
-          const g = sp[i0].seg ?? 0;
-          let i1 = i0 + 1;
-          while (i1 < sp.length && (sp[i1].seg ?? 0) === g) i1++;
-          segRanges.push({ i0, i1 });
-          i0 = i1;
-        }
-      }
-      // PASS 0 — the ROAD-WIDE fit: one rectangle over ALL the piece's
-      // samples. Its trimmed objective treats a minority dent (a bus
-      // platform denting a few of many cross-sections) as noise — the
-      // robust reading of the piece as a whole, and the reference the
-      // per-segment fits are reconciled with below
-      // the fits consume the RAW measured edges — the honest geometry;
-      // the repaired leftM/rightM only serve the markings layout
-      const rawOf = (
-        xs: { leftM: number; rightM: number; rawLeftM?: number; rawRightM?: number }[],
-      ) =>
-        xs.map((s) => ({
-          leftM: s.rawLeftM ?? s.leftM,
-          rightM: s.rawRightM ?? s.rightM,
-        }));
-      const roadFit = (() => {
-        const { w, s: shift } = fitRoadRectangle(rawOf(sp), units, 0.35);
-        if (!(w > 0) || !isFinite(w) || !isFinite(shift)) return null;
-        const fit = {
-          fl: shift + (units * w) / 2,
-          fr: (units * w) / 2 - shift,
-        };
-        p.roadFitLeftM = fit.fl;
-        p.roadFitRightM = fit.fr;
-        return fit;
-      })();
-      const dentMask: boolean[] = new Array(sp.length).fill(false);
-      if (roadFit) {
-        for (let i = 0; i < sp.length; i++) {
-          // one-sided dent vs the ROAD-WIDE fit: measured edge deep
-          // inside the road rectangle, the other side close, AND the
-          // total width below the road-wide width — the
-          // platform/cutout case the per-segment fits must not follow.
-          // Lateral drift (slanted areas) moves both edges COHERENTLY
-          // at constant width and never flags; widenings point outward
-          // and never flag either
-          const dl = roadFit.fl - sp[i].leftM;
-          const dr = roadFit.fr - sp[i].rightM;
-          const width = sp[i].leftM + sp[i].rightM;
-          const roadWidth = roadFit.fl + roadFit.fr;
-          if (roadWidth - width > 0.6) {
-            if (dl > 0.6 && dr < 0.5) dentMask[i] = true;
-            else if (dr > 0.6 && dl < 0.5) dentMask[i] = true;
-          }
-        }
-      }
-      // PASS 2 — the FINAL per-segment fits: each segment HONESTLY on
-      // its OWN samples (dented ones included — a dent genuinely makes
-      // those segments' road narrower, so their rectangle is SMALLER,
-      // which the "fitted rectangles" mode shows; the trimmed
-      // objective already ignores minority dents inside one segment).
-      // The tangential extents stay disjoint: segment k's rectangle
-      // ends at the shared vertex, k+1's starts there
-      for (const { i0, i1 } of segRanges) {
-        const grp = sp.slice(i0, i1);
-        const { w, s: shift } = fitRoadRectangle(rawOf(grp), units);
-        if (!(w > 0) || !isFinite(w) || !isFinite(shift)) continue;
-        const fl = shift + (units * w) / 2;
-        const fr = (units * w) / 2 - shift;
-        for (let i = i0; i < i1; i++) {
-          sp[i].fitLeftM = fl;
-          sp[i].fitRightM = fr;
-          // repair the dented samples' MEASURED values to their
-          // segment's fitted edge — the markings layout consumes the
-          // measured span; the fit itself stays the honest one
-          if (dentMask[i]) {
-            if (roadFit && roadFit.fl - sp[i].leftM > 0.6 && fr - sp[i].rightM < 0.5)
-              sp[i].leftM = fl;
-            else if (roadFit && roadFit.fr - sp[i].rightM > 0.6 && fl - sp[i].leftM < 0.5)
-              sp[i].rightM = fr;
-          }
-        }
       }
     }
     const unitsOf = (p: MarkingSample & { cl: LineFeature }): number =>
@@ -2529,26 +2537,48 @@ export function extractFeatures(
       (p.cl.parkingRight ? 1 : 0);
     // FITTED edges of the piece: the MEDIAN of its samples' fitted
     // rectangle edges — the piece-level quantities the group layout keys
-    // off (anchors, clamps). Pieces without any fitted sample keep their
-    // measured edges
-    const fitLeftM = (p: MarkingSample & { cl: LineFeature }): number =>
-      p.roadFitLeftM ?? p.leftM;
-    const fitRightM = (p: MarkingSample & { cl: LineFeature }): number =>
-      p.roadFitRightM ?? p.rightM;
-    // fitted unit width of the piece's road-model rectangles (falling
-    // back to the even split of its measured width when no segment fit
-    // succeeded); the layout is the FIT, not the boundary measurement
-    const laneWOf = (p: MarkingSample & { cl: LineFeature }): number => {
-      // the road-wide fit is dent-robust; per-segment medians would
-      // follow a dent spanning whole segments
-      if (p.roadFitLeftM !== undefined && p.roadFitRightM !== undefined)
-        return (p.roadFitLeftM + p.roadFitRightM) / unitsOf(p);
-      const xs = (p.spline ?? []).filter(
-        (s) => s.fitLeftM !== undefined && s.fitRightM !== undefined,
+    // The piece's road edges IN THE MIDDLE-LINE FRAME: the spline samples
+    // sit ON the virtual middle line (half the width), and their
+    // leftM/rightM are the half-width to each side — the piece-level
+    // quantities the layout keys off (anchors, clamps) are the medians
+    // of those half-widths, falling back to the piece's measured medians
+    const halfSpan = (
+      p: MarkingSample & { cl: LineFeature },
+      side: "l" | "r",
+    ): number => {
+      const xs = (p.spline ?? []).map((s) =>
+        side === "l" ? s.leftM : s.rightM,
       );
-      if (xs.length === 0) return (p.leftM + p.rightM) / unitsOf(p);
-      return median(xs.map((s) => (s.fitLeftM! + s.fitRightM!) / unitsOf(p)));
+      if (xs.length === 0)
+        return side === "l" ? p.leftM : p.rightM;
+      // DENT-ROBUST reading: the median of the piece's WIDEST window —
+      // the moving median over a ~12 m arc window kills minority dents
+      // (bus platforms cutting INTO the road), and taking the maximum
+      // window median recovers the road's true extent where the piece
+      // narrows genuinely towards one end (junction mouths, trapezoids)
+      const med = (ys: number[]): number => {
+        const s2 = [...ys].sort((a, b) => a - b);
+        const m = s2.length >> 1;
+        return s2.length % 2 ? s2[m] : (s2[m - 1] + s2[m]) / 2;
+      };
+      let best = -Infinity;
+      const W = 6;
+      for (let i = 0; i < xs.length; i++) {
+        const lo = Math.max(0, i - W),
+          hi = Math.min(xs.length - 1, i + W);
+        const m = med(xs.slice(lo, hi + 1));
+        if (m > best) best = m;
+      }
+      return best;
     };
+    const fitLeftM = (p: MarkingSample & { cl: LineFeature }): number =>
+      halfSpan(p, "l");
+    const fitRightM = (p: MarkingSample & { cl: LineFeature }): number =>
+      halfSpan(p, "r");
+    // unit width of the piece: its measured half-widths split evenly
+    // over its width units (traffic lanes + parking)
+    const laneWOf = (p: MarkingSample & { cl: LineFeature }): number =>
+      (fitLeftM(p) + fitRightM(p)) / unitsOf(p);
     // the through-lane width when the parking strips absorb the remaining
     // road width instead of narrowing the traffic lanes: total minus one
     // parking unit per side, split over the traffic lanes
@@ -2557,7 +2587,8 @@ export function extractFeatures(
       const unitsW = laneWOf(p);
       return (fitLeftM(p) + fitRightM(p) - park * unitsW) / p.cl.lanes!;
     };
-    // left traffic edge of a piece (its parking lane virtually removed)
+    // left traffic edge of a piece (its parking lane virtually removed),
+    // relative to the middle line
     const trafficLeftM = (p: MarkingSample & { cl: LineFeature }): number =>
       fitLeftM(p) - (p.cl.parkingLeft ? laneWOf(p) : 0);
     // continuity anchor in METERS: the position of the direction border
@@ -2571,48 +2602,28 @@ export function extractFeatures(
       return f > 0 && f < p.cl.lanes!;
     });
     const anchorBorder = borderPieces.length > 0;
-    // bidirectional roads: one shared border anchor (median of the
-    // pieces' natural border positions). One-way roads have no border:
-    // every piece anchors on its OWN measured left road edge — pure
-    // geometry, following the actual road outline, which is continuous
-    // where the ways meet (placement=* tags are ignored). The lane width
-    // is shared across the whole road group as the MINIMUM of the pieces'
-    // even-split widths, so the through lanes fit the narrowest piece
-    // (where parking eats into the width): the divider runs at the same
-    // distance from the road edge on every piece, all units stay visible,
-    // and wider pieces leave their extra width unpainted
     let anchorOf: (p: MarkingSample & { cl: LineFeature }) => number;
     // one-way roads: which side of the road the block is anchored on
     // ("left" | "right" | "center"), decided by where the road grows
     let anchorKind: "left" | "right" | "center" = "left";
     // PER-PIECE unit width: every piece's width units (traffic lanes +
-    // parking) split ITS OWN fitted road width evenly — the available
+    // parking) split ITS OWN measured road width evenly — the available
     // width is distributed evenly over ALL lanes (README 5), so the
-    // grid fills the road on every piece, and the rectangles see the
-    // parking units (way 4536810: 6 units over 14.9 m -> 2.49 m/unit
-    // next to 5 units over 15.1 m -> 3.02 m/unit). The through lanes
-    // stay continuous through the shared middle-line anchor, not
-    // through a shared width
+    // grid fills the road on every piece. The through lanes stay
+    // continuous through the shared middle-line anchor, not through a
+    // shared width
     const laneWShared = trafficLaneWOf;
     if (anchorBorder) {
       // right-hand traffic: traffic in the way's (forward) direction
       // keeps RIGHT of the direction border, oncoming traffic LEFT.
-      // UNFOLDED ALIGNMENT: straightening the mapped centerline makes
-      // the chain of fitted segment rectangles a 1-D strip, and the
-      // ONE MIDDLE-LINE ANCHOR per DIRECTION SPLIT: the middle line must
-      // be CONTINUOUS within the highway area (README 5), so pieces of
-      // the SAME direction split (fwd+bwd lane counts) draw their solid
-      // border at the SAME offset - the median of their PARKING-AWARE
-      // natural border positions (each piece's fitted right road edge
-      // minus its right parking unit and fwd lane widths, all at the
-      // piece's OWN unit width). Pieces with a DIFFERENT split (way
-      // 396518419: 2+1 with a parking bay vs the neighboring 1+1) have
-      // their middle line at a different natural place - holding them
-      // to a foreign split's anchor bends the line and inflates the
-      // 1+1 piece's lanes to fill the displaced block. Each split
-      // aligns among itself; the split change is where the middle line
-      // legitimately steps (a 2+1 road's border sits elsewhere than a
-      // 1+1 road's)
+      // The middle line (the spline base) is the natural zero; pieces
+      // of the SAME direction split draw their solid border at the SAME
+      // offset — the median of their PARKING-AWARE natural border
+      // positions (each piece's right road edge minus its right parking
+      // unit and fwd lane widths, all at the piece's OWN unit width).
+      // Pieces with a DIFFERENT split have their middle line at a
+      // different natural place; each split aligns among itself, and the
+      // split change is where the middle line legitimately steps
       const splitOf = (p: MarkingSample & { cl: LineFeature }): string =>
         `${fwdOf(p.cl)}+${p.cl.lanes! - fwdOf(p.cl)}`;
       const anchorPosBySplit = new Map<string, number[]>();
@@ -2629,20 +2640,24 @@ export function extractFeatures(
         anchorMBySplit.set(key, median(xs));
       anchorOf = (p) => anchorMBySplit.get(splitOf(p)) ?? 0;
     } else {
-      // which side does the road GROW on along the group? Compare the
-      // pieces' measured edges: when the lane count rises from one piece
-      // to the next, the extra units sit on the side whose measured edge
-      // moved further out. Lanes added on the RIGHT (left edge roughly
-      // constant) anchor on the LEFT edge, so the left lanes continue;
-      // lanes added on the LEFT anchor on the RIGHT edge, so the right
-      // lanes continue; lanes added on BOTH sides (centerline stays)
-      // anchor on the centerline itself, continuous outwards from it
-      // the growth-side analysis needs the MEASURED road edges: each
-      // piece's FIT spans only its own units (a 2-lane piece's rectangle
-      // is narrower than a 5-lane piece's), so comparing fitted edges
-      // would misread the unit-count change as road growth. The measured
-      // edges span the full area at each piece — the objective geometry
-      const edges = pieces.map((p) => ({ l: trafficLeftM(p), r: p.rightM }));
+      // ONE-WAY LANE-COUNT CHANGES: track how the middle line moves
+      // between the pieces. The middle line's lateral offset from the
+      // mapped way (midM) and the half-width reconstruct each piece's
+      // absolute road edges (left = mid + half, right = half - mid);
+      // where the lane count rises, the side whose edge MOVED is the
+      // side the road grew on. The middle line moving LEFT (road gets
+      // bigger to the left, a rectangular trapezoid) adds the new lanes
+      // LEFT — the block anchors on the RIGHT edge, so the right lanes
+      // continue; moving right mirrors it. A middle line that does not
+      // move (both edges shifted out, a non-rectangular trapezoid) adds
+      // the lanes on BOTH sides — the block unfolds from the middle
+      // line itself
+      const edges = pieces.map((p) => {
+        const mids = (p.spline ?? []).map((s) => s.midM ?? 0);
+        const mid = mids.length > 0 ? median(mids) : (p.leftM - p.rightM) / 2;
+        const half = (fitLeftM(p) + fitRightM(p)) / 2;
+        return { l: mid + half, r: half - mid };
+      });
       // max edge movement between any two pieces
       let dl = 0,
         dr = 0;
@@ -2656,7 +2671,7 @@ export function extractFeatures(
       // a piece's traffic block is laid FROM the anchor edge; the anchor
       // edge is the one that did NOT move (the continuous side)
       const rightTrafficM = (p: MarkingSample & { cl: LineFeature }): number =>
-        p.rightM - (p.cl.parkingRight ? laneWOf(p) : 0);
+        fitRightM(p) - (p.cl.parkingRight ? laneWOf(p) : 0);
       // the LEFT edge moved much more than the right -> the road grew LEFT
       // (added lanes sit on the left); symmetric for the right
       const anchorLeftCase = dl > dr + 0.75;
@@ -2864,23 +2879,13 @@ export function extractFeatures(
         // continuously outwards from it
         laneLeftM = anchorOf(p) - (p.cl.lanes! * laneW) / 2;
       }
-      // clamp so markings never extend past the road edge. BIDIRECTIONAL
-      // pieces clamp into their FITTED rectangle — the border continuity
-      // is the fit's product and the rectangle is where the road is.
-      // ONE-WAY pieces clamp into their MEASURED span instead: there the
-      // outermost lane carries the continuity (anchored on the measured
-      // road edge), and a narrow fitted rectangle (fewer units than the
-      // area holds, e.g. a 2-lane way across a wide mouth) must not
-      // cut the anchored outer lane off the road
+      // clamp so markings never extend past the road edge: the piece's
+      // half-spans from the middle line bound the block on each side
       const blockW = p.cl.lanes! * laneW;
       const parkLeft = bidirectional ? 0 : p.cl.parkingLeft ? laneW : 0;
       const parkRight = bidirectional ? 0 : p.cl.parkingRight ? laneW : 0;
-      const minLeft = bidirectional
-        ? blockW + parkRight - fitRightM(p)
-        : blockW + parkRight - p.rightM;
-      const maxLeft = bidirectional
-        ? fitLeftM(p) - parkLeft
-        : p.leftM - parkLeft;
+      const minLeft = blockW + parkRight - fitRightM(p);
+      const maxLeft = fitLeftM(p) - parkLeft;
       if (laneLeftM < minLeft) laneLeftM = minLeft;
       if (laneLeftM > maxLeft) laneLeftM = maxLeft;
       // the piece's CONTINUITY ANCHOR, in the renderer's offset convention

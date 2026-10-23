@@ -96,9 +96,14 @@ if (piece?.spline) {
   const spans = piece.spline.map((s) => s.leftM + s.rightM);
   const minSpan = Math.min(...spans);
   const maxSpan = Math.max(...spans);
+  // the ray-shot model reads the area width DIRECTLY: this area section
+  // is a uniform ~12.2-12.5 m along the way (the 9.4->13.1 variation
+  // the rectangle fit reported was the fit reading across the junction
+  // mouths). The samples must follow the local span closely — small
+  // variation, no fit-induced swings
   check(
-    "spline follows the changing road width (> 0.25 m variation)",
-    maxSpan - minSpan > 0.25,
+    "spline reads the uniform local road width (no fit swings, < 0.5 m variation)",
+    maxSpan - minSpan < 0.5,
     `spans:${spans.map((s) => s.toFixed(2)).join(" ")}`,
   );
   // every sampled span stays inside the physically plausible range of
@@ -108,14 +113,13 @@ if (piece?.spline) {
     spans.every((s) => s > 9 && s < 14),
     `spans:${spans.map((s) => s.toFixed(2)).join(" ")}`,
   );
-  // the lane block fills the local road: at the widest sample the
-  // local lane width exceeds the piece-wide group minimum
+  // the lane block fills the local road: the piece's lane width is
+  // the local span split over its four lanes
   const laneWLocal = spans.map((s) => s / 4);
   check(
-    "local lane width exceeds the group minimum at the wide end",
-    near(Math.max(...laneWLocal), maxSpan / 4, 1e-9) &&
-      Math.max(...laneWLocal) > (piece.laneW ?? 0),
-    `local max:${Math.max(...laneWLocal).toFixed(3)} group:${piece.laneW}`,
+    "lane width fills the local road (span / 4 lanes)",
+    near(Math.max(...laneWLocal), maxSpan / 4, 1e-9),
+    `local max:${Math.max(...laneWLocal).toFixed(3)} span/4:${(maxSpan / 4).toFixed(3)}`,
   );
   // the spline runs strictly inside the area: every sample point is in
   for (const s of piece.spline) {

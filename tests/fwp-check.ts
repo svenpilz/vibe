@@ -85,8 +85,17 @@ if (p?.spline && p.spline.length >= 2) {
   // samples sit at the shared seam vertices F (52.4712103,13.3285881)
   // and B (52.4712715,13.3287931) — the chain segments beyond them lie
   // outside the area (junction mouths) and must contribute nothing
-  const near = (pt: number[], lat: number, lon: number): boolean =>
-    Math.abs(pt[1] / 1e7 - lat) < 1e-6 && Math.abs(pt[0] / 1e7 - lon) < 1e-6;
+  // the samples sit ON THE MIDDLE LINE (offset from the mapped way by
+  // midM, the road's true center), so the endpoints are the seam
+  // vertices shifted sideways — a metric tolerance covers the shift
+  const near = (pt: number[], lat: number, lon: number): boolean => {
+    const mPerLat = 111_320 / 1e7;
+    const mPerLon = (111_320 * Math.cos((lat * Math.PI) / 180)) / 1e7;
+    return (
+      Math.abs((pt[1] / 1e7 - lat) * 1e7 * mPerLat) < 0.5 &&
+      Math.abs((pt[0] / 1e7 - lon) * 1e7 * mPerLon) < 0.5
+    );
+  };
   check(
     "piece starts at the area's south seam vertex",
     near(sp[0].pt, 52.4712103, 13.3285881),
@@ -127,20 +136,18 @@ if (p?.spline && p.spline.length >= 2) {
     drawn.length >= 1 && groups.length - drawn.length <= 2,
     `groups:${groups.map((g) => g.length).join("|")}`,
   );
-  // no drawn rectangle degenerates: each has a tangential extent and
-  // positive fitted edges
+  // every sample measures positive half-widths on both sides of the
+  // middle line
   let ok = true;
   let detail = "";
-  for (const g of drawn) {
-    const a = sp[g[0]],
-      b2 = sp[g[g.length - 1]];
-    const len = Math.hypot(b2.pt[0] - a.pt[0], b2.pt[1] - a.pt[1]);
-    if (len < 100 || !(a.fitLeftM! > 0.1) || !(a.fitRightM! > 0.1)) {
+  for (const s of sp) {
+    if (!(s.leftM > 0.1) || !(s.rightM > 0.1)) {
       ok = false;
-      detail = `len:${len} fitL:${a.fitLeftM} fitR:${a.fitRightM}`;
+      detail = `left:${s.leftM} right:${s.rightM}`;
+      break;
     }
   }
-  check("every rendered rectangle has a tangential extent", ok, detail);
+  check("every sample measures positive half-widths", ok, detail);
 }
 
 if (failures > 0) {

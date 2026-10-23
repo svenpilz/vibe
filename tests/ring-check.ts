@@ -65,7 +65,11 @@ const cosLat = Math.cos((LAT / 1e7) * (Math.PI / 180));
 const mPerLon = 1e-7 * 111320 * cosLat;
 const mPerLat = 1e-7 * 111320;
 
-// ring polyline (quantized) for corridor checks: the four sides
+// ring polyline (quantized) for corridor checks: the four sides. The
+// samples sit ON THE MIDDLE LINE (here ~20-33 m inside the way — the
+// area is much larger than the way ring), so the corridor is measured
+// from each sample's own midM-shifted position: a sample must stay
+// within 0.5 m of the line through the ring way offset by ITS midM
 let worstCorridor = 0;
 let totalLen = 0;
 for (const p of lm) {
@@ -79,7 +83,11 @@ for (const p of lm) {
     );
   totalLen += len;
   for (const s of sp) {
-    const x = s.pt[0], y = s.pt[1];
+    // undo the middle-line shift: the sample's position relative to
+    // the ring way must lie on the way corridor
+    const m = s.midM ?? 0;
+    const x = s.pt[0] - (s.nx * m) / mPerLon;
+    const y = s.pt[1] - (s.ny * m) / mPerLat;
     let best = Infinity;
     const segs: [number[], number[]][] = [
       [[2000, LAT], [8000, LAT]],
@@ -112,8 +120,9 @@ check(
 );
 
 // TANGENTIAL OVERLAP: pieces must not draw into each other's stretch —
-// each piece's samples must lie within its own way's vertex span
-// (plus a small margin for the seam vertices)
+// each piece's samples (undone of their middle-line shift) must lie
+// within its own way's vertex span (plus a small margin for the seam
+// vertices)
 for (const p of lm) {
   const cs = p.coords;
   const xs = cs.map((c) => c[0]);
@@ -123,18 +132,21 @@ for (const p of lm) {
   let inside = true;
   let detail = "";
   for (const s of sp) {
+    const m = s.midM ?? 0;
+    const rx = s.pt[0] - (s.nx * m) / mPerLon;
+    const ry = s.pt[1] - (s.ny * m) / mPerLat;
     if (vertical) {
       const lo = Math.min(...ys) - 100, hi = Math.max(...ys) + 100;
-      if (s.pt[1] < lo || s.pt[1] > hi || Math.abs(s.pt[0] - xs[0]) > 100) {
+      if (ry < lo || ry > hi || Math.abs(rx - xs[0]) > 100) {
         inside = false;
-        detail = `sample ${s.pt.join(",")} outside way span x=${xs[0]} y[${lo},${hi}]`;
+        detail = `sample ${rx},${ry} outside way span x=${xs[0]} y[${lo},${hi}]`;
         break;
       }
     } else {
       const lo = Math.min(...xs) - 100, hi = Math.max(...xs) + 100;
-      if (s.pt[0] < lo || s.pt[0] > hi || Math.abs(s.pt[1] - ys[0]) > 100) {
+      if (rx < lo || rx > hi || Math.abs(ry - ys[0]) > 100) {
         inside = false;
-        detail = `sample ${s.pt.join(",")} outside way span y=${ys[0]} x[${lo},${hi}]`;
+        detail = `sample ${rx},${ry} outside way span y=${ys[0]} x[${lo},${hi}]`;
         break;
       }
     }
