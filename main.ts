@@ -499,7 +499,18 @@ function draw() {
 
   const gs =
     lodVisible("grass") && grassIndex ? queryIndex(grassIndex, bbox) : [];
-  const areas = lodVisible("areas") && areaIndex ? visibleAreas(bbox) : [];
+  const areas = lodVisible("areas") && areaIndex
+    ? // TRAFFIC ISLANDS LAST: an island inside another area:highway
+      // must paint AFTER its surrounding area, or the surrounding
+      // fill covers the island's surface
+      visibleAreas(bbox).sort((a, b) =>
+        a.highway === "traffic_island" && b.highway !== "traffic_island"
+          ? 1
+          : b.highway === "traffic_island" && a.highway !== "traffic_island"
+            ? -1
+            : 0,
+      )
+    : [];
   const bl =
     lodVisible("buildings") && buildingIndex
       ? queryIndex(buildingIndex, bbox)
@@ -1650,9 +1661,10 @@ function drawTurnArrows(cl: LineFeature) {
         // turn direction, capped to stay inside the lane
         const ex = Math.cos(angle),
           ey = Math.sin(angle);
-        // TRUE L-SHAPE: the branch leaves at the shaft's very END (the
-        // corner point), not before it
-        const fork = loc(shaftTop, 0);
+        // the branch leaves BELOW the shaft's end so the through
+        // head and the branch head stay clearly apart (easier to
+        // distinguish); the corner keeps the L-shape readable
+        const fork = loc(shaftTop - headLen * 0.9, 0);
         let dBranch = w * 1.1;
         const room = Math.max(lanePx / 2 - shaftW / 2 - w / 4, len * 0.05);
         if (Math.abs(ey) > 1e-6) {
