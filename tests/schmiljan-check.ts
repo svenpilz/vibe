@@ -224,15 +224,21 @@ check(
   withStop.length === 1,
   `pieces with stop lines:${withStop.map((p) => p.id).join(",")}`,
 );
-// the y_junction area is NOT a junction: pieces inside it render lane
-// markings (it is a plain branching carriageway)
-const yAreaId = result.areas.find((a) =>
-  a.outer.some((ring) => ring.some((pt) => pt[1] === Math.round(52.4698246 * 1e7) && pt[0] === Math.round(13.3311193 * 1e7))),
-)?.id;
-const piecesInY = lm.filter((p) => (p.areaIds ?? []).includes(yAreaId ?? ""));
+// the y_junction area IS a junction for MARKINGS: no lane marking
+// pieces render inside it (a branching carriageway carries no
+// through-lane grid). But it is NOT a traffic junction: no stop line
+// at its boundary (that was the phantom around node 10815279758)
+const yArea = result.areas.find(
+  (a) =>
+    a.junction === true && a.trafficJunction !== true,
+);
+check("y_junction area is a marking junction", yArea !== undefined);
+const piecesInY = yArea
+  ? lm.filter((p) => (p.areaIds ?? []).includes(yArea.id))
+  : [];
 check(
-  "y_junction area renders as plain road (lane marking pieces)",
-  piecesInY.length >= 1,
+  "no lane marking pieces inside the y_junction area",
+  piecesInY.length === 0,
   `pieces in y_junction area:${piecesInY.length}`,
 );
 

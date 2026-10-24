@@ -726,12 +726,14 @@ export function extractFeatures(
         name: tags["name"],
         wheelchair: tags["wheelchair"],
         lit: tags["lit"],
-        // a TRAFFIC junction only for real junction tags: junction=yes,
-        // area:highway=junction, roundabout/circular. Other values
-        // (y_junction etc.) are geometry descriptors, not signalized
-        // intersections — treating them as junctions drew phantom stop
-        // lines and lane markings on plain branching road areas
-        junction:
+        // junction (ANY value, e.g. y_junction): lane markings never
+        // render inside such an area — a branching carriageway is not
+        // painted with through-lane grids
+        junction: areaHighway === "junction" || tags["junction"] !== undefined,
+        // a real TRAFFIC junction (signals, right of way): only these
+        // carry stop lines at their boundary — y_junction is a plain
+        // geometry descriptor, not a signalized intersection
+        trafficJunction:
           areaHighway === "junction" ||
           tags["junction"] === "yes" ||
           tags["junction"] === "roundabout" ||
@@ -1038,10 +1040,8 @@ export function extractFeatures(
       name: tags["name"],
       wheelchair: tags["wheelchair"],
       lit: tags["lit"],
-      // a TRAFFIC junction only for real junction tags (see the
-      // way-branch comment above): y_junction etc. are geometry
-      // descriptors, not signalized intersections
-      junction:
+      junction: areaHighway === "junction" || tags["junction"] !== undefined,
+      trafficJunction:
         areaHighway === "junction" ||
         tags["junction"] === "yes" ||
         tags["junction"] === "roundabout" ||
@@ -1441,7 +1441,9 @@ export function extractFeatures(
   // lanes=*, lane_markings=no) the boundary is the whole stop line; for
   // bidirectional lane-bearing ways it is laterally clipped to the
   // stopping direction's half (forward = right half, backward = left)
-  const junctionAreaList = areas.filter((a) => a.junction);
+  // stop-line junction candidates: real TRAFFIC junctions only
+  // (y_junction etc. are geometry descriptors, not signalized)
+  const junctionAreaList = areas.filter((a) => a.trafficJunction === true);
   // pick THE junction area the stop line belongs to: the one CONTAINING
   // the traffic_signals node wins (a road area can border several
   // junction areas, e.g. one at each end - the wrong pick would draw
@@ -2914,24 +2916,59 @@ export function extractFeatures(
       }
     }
     // junction adjacency + lane clipping for the stop line boundary
-    const junctionAreasStop = areas.filter((a) => a.junction);
+    // STOP LINES live only at real TRAFFIC junctions — a geometry
+    // descriptor like junction=y_junction is a plain branching
+    // carriageway without signals; drawing a stop line at its boundary
+    // was the phantom around node 10815279758
+    const junctionAreasStop = areas.filter(
+      (a) => a.trafficJunction === true,
+    );
+    // STOP LINE RULE (purely geometric): a stop line renders only when
+    // the traffic_signals node lies ON the shared boundary between the
+    // entering road area and the adjacent area:highway polygon — the
+    // junction TAGGING is irrelevant (a signalized boundary without
+    // junction=yes still stops traffic; a junction=yes area without a
+    // signal node on the boundary gets nothing)
+    const distPtToSeg2 = (
+      px: number, py: number,
+      ax: number, ay: number,
+      bx: number, by: number,
+    ): number => {
+      const dx = bx - ax, dy = by - ay;
+      const l2 = dx * dx + dy * dy;
+      let t = l2 > 0 ? ((px - ax) * dx + (py - ay) * dy) / l2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      const cx = ax + dx * t, cy = ay + dy * t;
+      return (px - cx) ** 2 + (py - cy) ** 2;
+    };
+    const SIG_TOL2 = (2 * 5e2) ** 2; // ~1 m in quantized units, generous
     const findJunctionForStopLine = (
       road: AreaFeature,
       sigQ: number[] | undefined,
     ): AreaFeature | null => {
       let best: AreaFeature | null = null;
       let bestD = Infinity;
-      for (const ja of junctionAreasStop) {
+      // any adjacent highway area is a candidate — the SIGNAL ON THE
+      // BOUNDARY decides, not the area's junction tag
+      for (const ja of areas) {
+        if (ja === road) continue;
+        if (FOOTWAY_AREA_TYPES.has(ja.highway)) continue;
         if (!bboxOverlap(ja.bbox, road.bbox)) continue;
         const chains = sharedBoundaryQ(road, ja, 10);
         if (chains.length === 0) continue;
-        if (!sigQ) return ja;
+        if (!sigQ) continue;
         let d = Infinity;
         for (const chain of chains)
-          for (const pt of chain) {
-            const dd = (pt[0] - sigQ[0]) ** 2 + (pt[1] - sigQ[1]) ** 2;
+          for (let i = 1; i < chain.length; i++) {
+            const dd = distPtToSeg2(
+              sigQ[0], sigQ[1],
+              chain[i - 1][0], chain[i - 1][1],
+              chain[i][0], chain[i][1],
+            );
             if (dd < d) d = dd;
           }
+        // the boundary must PASS THROUGH the signal node
+        if (d > SIG_TOL2) continue;
         if (d < bestD) {
           bestD = d;
           best = ja;

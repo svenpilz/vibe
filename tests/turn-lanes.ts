@@ -43,6 +43,7 @@ const rect = (x0: number, x1: number, hw: number): number[] => {
 };
 
 // one-way road flowing into a junction at its END: left|through;right
+// plus a second way exercising merge_to_* values
 way([node(0, 0), node(5000, 0), node(10000, 0)], {
   highway: "tertiary",
   surface: "asphalt",
@@ -53,6 +54,17 @@ way([node(0, 0), node(5000, 0), node(10000, 0)], {
 });
 way(rect(-450, 10500, 450), { "area:highway": "tertiary", surface: "asphalt" });
 way(rect(10500, 12000, 450), { "area:highway": "tertiary", junction: "yes" });
+// merge_to_* values (rendered as regular left/right)
+way([node(70000, 0), node(75000, 0), node(80000, 0)], {
+  highway: "tertiary",
+  surface: "asphalt",
+  lanes: "2",
+  name: "E-Straße",
+  oneway: "yes",
+  "turn:lanes": "merge_to_left|merge_to_right",
+});
+way(rect(69550, 80500, 450), { "area:highway": "tertiary", surface: "asphalt" });
+way(rect(80500, 82000, 450), { "area:highway": "tertiary", junction: "yes" });
 
 // bidirectional road with a junction at BOTH ends: forward arrows at the
 // end, backward arrows at the start
@@ -159,6 +171,19 @@ check(
       `centres:${c0.toFixed(2)},${c1.toFixed(2)} block:[${left.toFixed(2)},${(left + w).toFixed(2)}]`,
     );
   }
+}
+
+// merge_to_* parse and are carried (the renderer draws them as
+// regular left/right)
+{
+  const e = lm.find((m) => m.name === "E-Straße");
+  check(
+    "merge_to_left|merge_to_right carried per lane",
+    e?.turnLanesFwd !== undefined &&
+      e.turnLanesFwd[0].join(",") === "merge_to_left" &&
+      e.turnLanesFwd[1].join(",") === "merge_to_right",
+    JSON.stringify(e?.turnLanesFwd),
+  );
 }
 
 if (failures > 0) {

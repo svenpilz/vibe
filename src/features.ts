@@ -16,6 +16,12 @@ export interface AreaFeature {
   lit?: string;
   /** junction=yes / area:highway=junction */
   junction?: boolean;
+  /** a real TRAFFIC junction (junction=yes, area:highway=junction,
+   *  roundabout/circular) — stop lines are drawn only at the boundary of
+   *  such areas; geometry descriptors like junction=y_junction are
+   *  junctions for markings (no lane markings inside) but not for stop
+   *  lines */
+  trafficJunction?: boolean;
   /** OSM layer=* tag (default 0) */
   layer: number;
   /** OSM level=* tag (undefined when absent) */

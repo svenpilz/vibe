@@ -238,8 +238,8 @@ if (failures > 0) {
     (m) => m.name === "G-Stra\u00dfe",
   );
   check(
-    "direction tag: stop line present",
-    g !== undefined && g.stopLinesQ !== undefined && g.stopLinesQ.length >= 1 && g.stopLinesQ.every((l) => l.length >= 2),
+    "mid-block signal (node strictly inside one area): no stop line",
+    g === undefined || g.stopLinesQ === undefined || g.stopLinesQ.length === 0,
   );
 
   // one-way road, backward-facing signal: no traffic stops -> no line
