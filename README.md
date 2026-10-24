@@ -180,10 +180,17 @@ Continuity across the pieces of one road:
   block (a bus platform shows as unpainted road).
 
 **Rendering modes.** Two lane-marking rendering modes (panel selector):
-- **smooth (spline)** — the offset samples are interpolated and Chaikin-
-  smoothed into flowing curves (default);
-- **piece-wise linear** — the same offset samples are drawn as a crisp
-  polyline without interpolation.
+- **smooth (spline)** — the middle line's sample points are connected and
+  Chaikin-smoothed into flowing curves (default);
+- **piece-wise linear** — the smooth spline is disabled and the sample
+  points are connected with straight segments, so the raw sample grid is
+  visible.
+
+**Debug mode (currently enabled).** Lane-marking rendering is reduced to
+only the solid middle line; all other lane boundaries, parking strips and
+stop lines are hidden, and the middle line's sample points are marked as
+red dots so the sample spacing is directly visible (see
+`laneMarkingsDebug` in `main.ts`).
 
 **Parking lanes.** A parking lane consumes road width but does not count as a traffic
 lane. It is recognised from three taggings:

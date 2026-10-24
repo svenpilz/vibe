@@ -59,6 +59,9 @@ let stopLineIndex: Indexed<StopLineFeature> | null = null;
  *  interpolation */
 let laneSmoothness: "spline" | "linear" = "spline";
 
+/** debug: draw only the middle-line boundary and mark its sample points */
+const laneMarkingsDebug = true;
+
 const layers = {
   areas: true,
   buildings: true,
@@ -1306,6 +1309,14 @@ function drawLaneMarkings(cl: LineFeature) {
       ctx.lineTo(smooth[i][0], smooth[i][1]);
     ctx.stroke();
     if (!solid) ctx.setLineDash([]);
+    if (laneMarkingsDebug) {
+      ctx.fillStyle = "#ff3355";
+      for (const p of pts) {
+        ctx.beginPath();
+        ctx.arc(p[0], p[1], 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
   };
 
   // draw a boundary between a parking unit and the adjacent traffic lane so
@@ -1315,6 +1326,7 @@ function drawLaneMarkings(cl: LineFeature) {
   if (cl.parkingRight) boundaryOffsets.push(-leftM + total * cl.laneW!);
   for (const offPx of boundaryOffsets.map((o) => o * px)) {
     if (hasSpline) break;
+    if (laneMarkingsDebug) break;
     const offset: [number, number][] = base.map((p, i) => [
       p[0] + normals[i][0] * offPx,
       p[1] + normals[i][1] * offPx,
@@ -1329,7 +1341,7 @@ function drawLaneMarkings(cl: LineFeature) {
     ctx.stroke();
     ctx.setLineDash([]);
   }
-  if (hasSpline && sp) {
+  if (hasSpline && sp && !laneMarkingsDebug) {
     // parking boundaries sit at the block's outer edges — the SAME
     // offsets as the non-spline path (negative = left of the centerline):
     // the parking strip occupies the unit between the block edge and the
@@ -1343,6 +1355,8 @@ function drawLaneMarkings(cl: LineFeature) {
       );
   }
   for (let k = 1; k < total; k++) {
+    if (laneMarkingsDebug && !(fwd > 0 && fwd < total && k === total - fwd))
+      continue;
     // distance from the centerline, negative = left side
     const offPx = (-leftM + k * cl.laneW!) * px;
     // solid only between opposite directions: exists when some (but not
@@ -1365,7 +1379,7 @@ function drawLaneMarkings(cl: LineFeature) {
   // stop line: the shared boundary polyline between the entering road
   // area and the junction area (not necessarily orthogonal to the road),
   // already clipped to the lanes flowing into the signal
-  if (cl.stopLinesQ) {
+  if (cl.stopLinesQ && !laneMarkingsDebug) {
     ctx.strokeStyle = "#e8e8e8";
     ctx.setLineDash([]);
     ctx.lineWidth = Math.max(2, 0.4 * px);
