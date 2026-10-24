@@ -127,7 +127,13 @@ lengths**. A ray hit only counts as the road edge when
     edge (footway/sidewalk areas are ignored).
 When a hit fails either test, the measurement **backtracks along the
 centerline in steps of 1 m** until a position measures validly, and that
-cross-section's width is used. Width tests run **every 2 meters** along each
+cross-section's width is used. The hit tests run against spatial indexes
+built once before the marking phase: a uniform grid (spatial hash, 50 000
+quantized-unit cells) over each area's ring segments — a ray cast tests only
+the segments in the cells its (bbox-clipped) ray passes through — plus the
+precomputed road-area **adjacency** (same layer, genuinely shared edge) and a
+grid over the kerb way segments, so the cutout and kerb tests probe only an
+area's short neighbour lists instead of scanning all areas per hit. Width tests run **every 2 meters** along each
 line-segment, **always at the OSM way vertices** (a vertex is where lane
 counts, parking and other properties change); a segment shorter than 2 m
 contributes only its vertices. Failed width tests whose neighbours also fail

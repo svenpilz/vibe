@@ -115,6 +115,62 @@ const FOOTWAY_AREA_TYPES = new Set([
   "steps",
 ]);
 
+/** spatial index over an area's OUTER RING SEGMENTS: a quantized-
+ *  coordinate grid (the same 50k cells as the area index) so a ray
+ *  cast only tests the segments in the cells its ray passes through.
+ *  Built ONCE per area (cached by the caller) — without it every cast
+ *  scanned every ring segment of the area */
+interface SegIndex {
+  grid: Map<string, number[][][]>;
+}
+const SEG_CELL = 50000;
+function buildAreaSegIndex(area: AreaFeature): SegIndex {
+  const grid = new Map<string, number[][][]>();
+  for (const ring of area.outer)
+    for (let i = 1; i < ring.length; i++) {
+      const seg: number[][] = [ring[i - 1], ring[i]];
+      const x0 = Math.floor(Math.min(seg[0][0], seg[1][0]) / SEG_CELL),
+        x1 = Math.floor(Math.max(seg[0][0], seg[1][0]) / SEG_CELL);
+      const y0 = Math.floor(Math.min(seg[0][1], seg[1][1]) / SEG_CELL),
+        y1 = Math.floor(Math.max(seg[0][1], seg[1][1]) / SEG_CELL);
+      if (x1 - x0 > 40 || y1 - y0 > 40) continue;
+      for (let x = x0; x <= x1; x++)
+        for (let y = y0; y <= y1; y++) {
+          const k = `${x},${y}`;
+          let arr = grid.get(k);
+          if (!arr) grid.set(k, (arr = []));
+          arr.push(seg);
+        }
+    }
+  return { grid };
+}
+/** the segments of the area's rings that the ray origin->end passes
+ *  through (cell walk) — deduplicated */
+function rayCandidateSegs(
+  area: AreaFeature,
+  segIdx: SegIndex,
+  origin: number[],
+  end: number[],
+): number[][][] {
+  const out: number[][][] = [];
+  const seen = new Set<number[][]>();
+  const x0 = Math.floor(Math.min(origin[0], end[0]) / SEG_CELL),
+    x1 = Math.floor(Math.max(origin[0], end[0]) / SEG_CELL);
+  const y0 = Math.floor(Math.min(origin[1], end[1]) / SEG_CELL),
+    y1 = Math.floor(Math.max(origin[1], end[1]) / SEG_CELL);
+  for (let x = x0; x <= x1; x++)
+    for (let y = y0; y <= y1; y++) {
+      const arr = segIdx.grid.get(`${x},${y}`);
+      if (!arr) continue;
+      for (const s of arr)
+        if (!seen.has(s)) {
+          seen.add(s);
+          out.push(s);
+        }
+    }
+  return out;
+}
+
 /**
  * Road width by RAY SHOOTING: from a point on the centerline, cast one
  * ray along the positive and one along the negative normal; the width
@@ -133,9 +189,14 @@ function rayWidthInArea(
   tx: number,
   ty: number,
   area: AreaFeature,
-  roadAreasNear: (
-    bbox: [number, number, number, number],
-  ) => AreaFeature[],
+  /** spatial index over the area's ring segments, built ONCE per area
+   *  — the cast only tests segments in the cells the ray passes
+   *  through instead of scanning every ring segment */
+  segIdx: SegIndex,
+  /** the area's ADJACENT road areas (same layer, shared edge),
+   *  precomputed ONCE before the marking phase — the cutout test
+   *  probes only these, never a per-hit area scan */
+  adjacentRoadAreas: AreaFeature[],
   kerbMarked: (a: number[], b: number[]) => boolean,
   maxM: number,
 ): { left: number; right: number; valid: boolean } | null {
@@ -145,27 +206,41 @@ function rayWidthInArea(
   const mPerLat = 111_320 / 1e7;
   const COS45 = Math.SQRT1_2;
   const cast = (dir: number): { d: number; ok: boolean } | null => {
-    const end = [
+    let end = [
       origin[0] + ((dir * -ty) / mPerLon) * maxM,
       origin[1] + ((dir * tx) / mPerLat) * maxM,
     ];
+    // CLIP the ray to the area's bbox: no hit can lie beyond it, and
+    // the cell walk then covers only the few cells between the origin
+    // and the near boundary instead of the whole maxRay length
+    {
+      const [bx0, by0, bx1, by1] = area.bbox;
+      const dx = end[0] - origin[0],
+        dy = end[1] - origin[1];
+      let tMax = Infinity;
+      if (dx > 0) tMax = Math.min(tMax, (bx1 - origin[0]) / dx);
+      else if (dx < 0) tMax = Math.min(tMax, (bx0 - origin[0]) / dx);
+      if (dy > 0) tMax = Math.min(tMax, (by1 - origin[1]) / dy);
+      else if (dy < 0) tMax = Math.min(tMax, (by0 - origin[1]) / dy);
+      if (tMax < 1)
+        end = [origin[0] + dx * tMax, origin[1] + dy * tMax];
+    }
     let bestD = Infinity;
     let bestSeg: [number[], number[]] | null = null;
-    for (const ring of area.outer)
-      for (let i = 1; i < ring.length; i++) {
-        const a = ring[i - 1],
-          b = ring[i];
-        const ip = segIntersect(origin, end, a, b);
-        if (!ip) continue;
-        const d = Math.hypot(
-          (ip[0] - origin[0]) * mPerLon,
-          (ip[1] - origin[1]) * mPerLat,
-        );
-        if (d < bestD) {
-          bestD = d;
-          bestSeg = [a, b];
-        }
+    for (const seg of rayCandidateSegs(area, segIdx, origin, end)) {
+      const a = seg[0],
+        b = seg[1];
+      const ip = segIntersect(origin, end, a, b);
+      if (!ip) continue;
+      const d = Math.hypot(
+        (ip[0] - origin[0]) * mPerLon,
+        (ip[1] - origin[1]) * mPerLat,
+      );
+      if (d < bestD) {
+        bestD = d;
+        bestSeg = [a, b];
       }
+    }
     if (!bestSeg || bestD <= 0.01) return null;
     const [a, b] = bestSeg;
     const sx = (b[0] - a[0]) * mPerLon,
@@ -176,26 +251,17 @@ function rayWidthInArea(
     if (Math.abs((sx * tx + sy * ty) / sl) <= COS45) return { d: bestD, ok: false };
     // a hit segment shared with another area:highway of a road type is a
     // cutout towards that area (typically a junction) — valid only when
-    // a kerb way marks the true road edge along it. The other area must
-    // be on the SAME layer and must actually SHARE the edge: several
-    // points along the hit segment must lie on its boundary (a merely
-    // touching or overlapping neighbor with its own edge elsewhere is
-    // not a cutout)
-    const pad = 300;
-    const bb: [number, number, number, number] = [
-      Math.min(a[0], b[0]) - pad,
-      Math.min(a[1], b[1]) - pad,
-      Math.max(a[0], b[0]) + pad,
-      Math.max(a[1], b[1]) + pad,
-    ];
+    // a kerb way marks the true road edge along it. The adjacency was
+    // BUILT ONCE (same layer, genuinely shared edge — several probes
+    // along the ring segment lie on the other area's boundary), so the
+    // per-hit test only re-probes the hit segment against the area's
+    // short neighbour list
     const probes = [0.2, 0.5, 0.8].map((t) => [
       a[0] + (b[0] - a[0]) * t,
       a[1] + (b[1] - a[1]) * t,
     ]);
-    const shared = roadAreasNear(bb).some(
+    const shared = adjacentRoadAreas.some(
       (oa) =>
-        oa !== area &&
-        oa.layer === area.layer &&
         probes.filter((p) => pointOnAreaBoundaryQ(p, oa, 150)).length >= 2,
     );
     if (shared && !kerbMarked(a, b)) return { d: bestD, ok: false };
@@ -1471,28 +1537,106 @@ export function extractFeatures(
      *  rectangles (fitLeftM/fitRightM) */
     spline?: SplineSampleInfo[];
   }
-  // context the RAY HIT FILTER needs: the other highway areas of ROAD
-  // type (the adjacent-area:highway cutout test ignores footways and
-  // other non-road areas) and the kerb way segments (a hit segment
-  // carrying a kerb marks the true road edge even where another road
-  // area attaches)
+  // context the RAY HIT FILTER needs, built ONCE before the marking
+  // phase: the ADJACENCY of the road-type highway areas (same layer,
+  // genuinely shared edge — the cutout test probes only the area's
+  // short neighbour list, never all areas per hit) and a spatial
+  // index over the kerb way segments (a hit segment carrying a kerb
+  // marks the true road edge even where another road area attaches)
+  onProgress?.(72, "building road-area adjacency…");
   const allRoadAreas = areas.filter(
     (a) => !a.junction && !FOOTWAY_AREA_TYPES.has(a.highway),
   );
-  const kerbSegs: { a: number[]; b: number[] }[] = [];
+  // bbox grid over the road areas: candidate pairs come from the same
+  // or neighbouring grid cells only
+  const roadAreaGrid = buildAreaIndex(allRoadAreas);
+  const adjacencyOf = new Map<AreaFeature, AreaFeature[]>();
+  for (const a of allRoadAreas) adjacencyOf.set(a, []);
+  for (const a of allRoadAreas) {
+    // candidates: road areas whose bbox overlaps a's bbox (grid query)
+    const cands = queryAreas(roadAreaGrid, a.bbox);
+    for (const b of cands) {
+      if (b === a) continue;
+      if (b.layer !== a.layer) continue;
+      if (adjacencyOf.get(b)!.includes(a)) continue; // pair done
+      // genuinely SHARED EDGE: a ring segment of a whose interior
+      // probes lie on b's boundary (and vice versa is implied by the
+      // same shared geometry)
+      let shared = false;
+      outer: for (const ring of a.outer) {
+        for (let i = 1; i < ring.length; i++) {
+          const p1 = ring[i - 1],
+            p2 = ring[i];
+          // skip degenerate segments
+          if (p1[0] === p2[0] && p1[1] === p2[1]) continue;
+          const probes = [0.25, 0.5, 0.75].map((t) => [
+            p1[0] + (p2[0] - p1[0]) * t,
+            p1[1] + (p2[1] - p1[1]) * t,
+          ]);
+          if (
+            probes.filter((p) => pointOnAreaBoundaryQ(p, b, 150)).length >= 2
+          ) {
+            shared = true;
+            break outer;
+          }
+        }
+      }
+      if (shared) {
+        adjacencyOf.get(a)!.push(b);
+        adjacencyOf.get(b)!.push(a);
+      }
+    }
+  }
+  // spatial index over the kerb way segments (quantized-coordinate
+  // grid; cells of the same 50k grid as the area index)
+  const kerbSegGrid = new Map<string, { a: number[]; b: number[] }[]>();
   for (const kw of kerbWays)
-    for (let i = 1; i < kw.coords.length; i++)
-      kerbSegs.push({ a: kw.coords[i - 1], b: kw.coords[i] });
-  const kerbAlongShared = (a: number[], b: number[]): boolean =>
-    kerbSegs.some(
-      (k) =>
-        Math.min(k.a[0], k.b[0]) <= Math.max(a[0], b[0]) + 1 &&
-        Math.max(k.a[0], k.b[0]) >= Math.min(a[0], b[0]) - 1 &&
-        Math.min(k.a[1], k.b[1]) <= Math.max(a[1], b[1]) + 1 &&
-        Math.max(k.a[1], k.b[1]) >= Math.min(a[1], b[1]) - 1 &&
-        distToSegQ2(a[0], a[1], k.a, k.b) < 100 * 100 &&
-        distToSegQ2(b[0], b[1], k.a, k.b) < 100 * 100,
-    );
+    for (let i = 1; i < kw.coords.length; i++) {
+      const seg = { a: kw.coords[i - 1], b: kw.coords[i] };
+      const x0 = Math.floor(Math.min(seg.a[0], seg.b[0]) / AREA_CELL),
+        x1 = Math.floor(Math.max(seg.a[0], seg.b[0]) / AREA_CELL);
+      const y0 = Math.floor(Math.min(seg.a[1], seg.b[1]) / AREA_CELL),
+        y1 = Math.floor(Math.max(seg.a[1], seg.b[1]) / AREA_CELL);
+      if (x1 - x0 > 40 || y1 - y0 > 40) continue;
+      for (let x = x0; x <= x1; x++)
+        for (let y = y0; y <= y1; y++) {
+          const k = `${x},${y}`;
+          let arr = kerbSegGrid.get(k);
+          if (!arr) kerbSegGrid.set(k, (arr = []));
+          arr.push(seg);
+        }
+    }
+  // per-area ring-segment index cache: built ONCE per area on first
+  // use, reused by every ray cast into that area
+  const segIndexCache = new Map<AreaFeature, SegIndex>();
+  const segIndexOf = (a: AreaFeature): SegIndex => {
+    let idx = segIndexCache.get(a);
+    if (!idx) segIndexCache.set(a, (idx = buildAreaSegIndex(a)));
+    return idx;
+  };
+  const kerbAlongShared = (a: number[], b: number[]): boolean => {
+    const x0 = Math.floor(Math.min(a[0], b[0]) / AREA_CELL),
+      x1 = Math.floor(Math.max(a[0], b[0]) / AREA_CELL);
+    const y0 = Math.floor(Math.min(a[1], b[1]) / AREA_CELL),
+      y1 = Math.floor(Math.max(a[1], b[1]) / AREA_CELL);
+    for (let x = x0; x <= x1; x++)
+      for (let y = y0; y <= y1; y++) {
+        const arr = kerbSegGrid.get(`${x},${y}`);
+        if (!arr) continue;
+        for (const k of arr) {
+          if (
+            Math.min(k.a[0], k.b[0]) <= Math.max(a[0], b[0]) + 1 &&
+            Math.max(k.a[0], k.b[0]) >= Math.min(a[0], b[0]) - 1 &&
+            Math.min(k.a[1], k.b[1]) <= Math.max(a[1], b[1]) + 1 &&
+            Math.max(k.a[1], k.b[1]) >= Math.min(a[1], b[1]) - 1 &&
+            distToSegQ2(a[0], a[1], k.a, k.b) < 100 * 100 &&
+            distToSegQ2(b[0], b[1], k.a, k.b) < 100 * 100
+          )
+            return true;
+        }
+      }
+    return false;
+  };
   const samplesOf = new Map<LineFeature, MarkingSample[]>();
   for (const cl of laneCandidates) {
     const candidates = queryAreas(areaGridL, cl.bbox);
@@ -1567,7 +1711,8 @@ export function extractFeatures(
           -ny / tl,
           nx / tl,
           area,
-          (bb) => allRoadAreas.filter((oa) => bboxOverlap(oa.bbox, bb)),
+          segIndexOf(area),
+          adjacencyOf.get(area) ?? [],
           kerbAlongShared,
           maxRay,
         );
@@ -2041,22 +2186,12 @@ export function extractFeatures(
     const ptAt = chainPtAt;
     const [minX, minY, maxX, maxY] = area.bbox;
     const maxRay = Math.hypot(maxX - minX, maxY - minY) + 1000;
-    // context the ray filter needs: the other highway areas near a hit
-    // segment (cutout test) and whether a kerb way runs along a segment
-    const roadAreasNear = (
-      bbox: [number, number, number, number],
-    ): AreaFeature[] =>
-      allRoadAreas.filter((oa) => bboxOverlap(oa.bbox, bbox));
-    const kerbAlong = (a: number[], b: number[]): boolean =>
-      kerbSegs.some(
-        (k) =>
-          Math.min(k.a[0], k.b[0]) <= Math.max(a[0], b[0]) + 1 &&
-          Math.max(k.a[0], k.b[0]) >= Math.min(a[0], b[0]) - 1 &&
-          Math.min(k.a[1], k.b[1]) <= Math.max(a[1], b[1]) + 1 &&
-          Math.max(k.a[1], k.b[1]) >= Math.min(a[1], b[1]) - 1 &&
-          distToSegQ2(a[0], a[1], k.a, k.b) < 100 * 100 &&
-          distToSegQ2(b[0], b[1], k.a, k.b) < 100 * 100,
-      );
+    // context the ray filter needs: the area's precomputed ADJACENT
+    // road areas (cutout test) and whether a kerb way runs along a
+    // segment — both built once before the marking phase
+    const adjacentRoads = adjacencyOf.get(area) ?? [];
+    const segIdx = segIndexOf(area);
+    const kerbAlong = kerbAlongShared;
     /**
      * Ray-shoot one cross-section from the sample point, with the
      * BACKTRACKING rule: when a ray hit is invalid (transverse segment,
@@ -2101,7 +2236,8 @@ export function extractFeatures(
             tx,
             ty,
             area,
-            roadAreasNear,
+            segIdx,
+            adjacentRoads,
             kerbAlong,
             maxRay,
           );
@@ -2474,7 +2610,9 @@ export function extractFeatures(
     return final.map(orient);
   };
 
-  for (const ways of groups.values()) {
+  const groupList = [...groups.values()];
+  for (let gi = 0; gi < groupList.length; gi++) {
+    const ways = groupList[gi];
     // one marking piece per (way, area section) of the road
     const pieces: (MarkingSample & { cl: LineFeature })[] = [];
     for (const w of ways)
