@@ -1554,19 +1554,18 @@ function drawTurnArrows(cl: LineFeature) {
     // SCREEN SPACE has y pointing down, so a geographic LEFT turn is a
     // NEGATIVE math rotation here — left/slight_left/sharp_left take
     // negative angles, the right variants positive
-    // merge_to_left / merge_to_right render as REGULAR left/right
-    // arrows (the marking shows the merge direction); through stays
-    // straight
+    // merge_to_left / merge_to_right render as SLIGHT turns (a merge
+    // is a shallow lateral move); through stays straight
     const dirAngle = (v: string): number =>
-      v === "left" || v === "merge_to_left"
+      v === "left"
         ? -Math.PI / 2
-        : v === "slight_left"
+        : v === "slight_left" || v === "merge_to_left"
           ? -Math.PI / 4
           : v === "sharp_left"
             ? (-3 * Math.PI) / 4
-            : v === "right" || v === "merge_to_right"
+            : v === "right"
               ? Math.PI / 2
-              : v === "slight_right"
+              : v === "slight_right" || v === "merge_to_right"
                 ? Math.PI / 4
                 : v === "sharp_right"
                   ? (3 * Math.PI) / 4
