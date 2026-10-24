@@ -191,11 +191,18 @@ Continuity across the pieces of one road:
   points are connected with straight segments, so the raw sample grid is
   visible.
 
-**Debug mode (currently enabled).** Lane-marking rendering is reduced to
-only the solid middle line; all other lane boundaries, parking strips and
-stop lines are hidden, and the middle line's sample points are marked as
-red dots so the sample spacing is directly visible (see
-`laneMarkingsDebug` in `main.ts`).
+**Turn lane indicators.** `turn:lanes=*` (and the `:forward`/`:backward`
+variants, wiki values `left`, `slight_left`, `sharp_left`, `through`,
+`right`, `slight_right`, `sharp_right`, `reverse`, `merge_to_left/right`,
+none/empty, `;` combinations) are painted as white arrows inside the
+lanes on the approach to a junction: the arrows sit in the lane centres,
+point along the road and end ~0.6 m before the junction mouth — a piece
+flowing into a `junction=yes`/`area:highway=junction` area carries arrows
+only at that end, so nothing is drawn on the junction area itself. A one-way
+street's arrows follow its own direction (`oneway=-1` handled), a
+bidirectional road draws the forward list at its end and the backward list
+at its start, and incompletely tagged lists are padded with untagged
+(arrowless) lanes.
 
 **Parking lanes.** A parking lane consumes road width but does not count as a traffic
 lane. It is recognised from three taggings:

@@ -60,7 +60,7 @@ let stopLineIndex: Indexed<StopLineFeature> | null = null;
 let laneSmoothness: "spline" | "linear" = "spline";
 
 /** debug: draw only the middle-line boundary and mark its sample points */
-const laneMarkingsDebug = true;
+const laneMarkingsDebug = false;
 
 const layers = {
   areas: true,
@@ -1394,6 +1394,209 @@ function drawLaneMarkings(cl: LineFeature) {
     }
     ctx.lineWidth = lineW;
   }
+  if (!laneMarkingsDebug) drawTurnArrows(cl);
+}
+
+/**
+ * Turn lane indicators: white arrows painted inside each lane on the
+ * approach to a junction. The extractor attaches turnLanesFwd only when
+ * the way flows into a junction area at its END (and turnLanesBwd for
+ * the backward direction at its START), so the arrows stop at the
+ * junction mouth and never paint the junction area itself.
+ *
+ * Geometry: the lane's centreline is the spline offset laterally into
+ * the lane's middle; the arrow sits in the last ~5 m of the approach,
+ * aligned with the road's direction there.
+ */
+function drawTurnArrows(cl: LineFeature) {
+  if (!cl.turnLanesFwd && !cl.turnLanesBwd) return;
+  const px = pxPerMeter();
+  const fwd = cl.lanesFwd ?? Math.ceil(cl.lanes! / 2);
+  const total = cl.lanes!;
+  const leftM = cl.laneLeftM ?? (total * cl.laneW!) / 2;
+  // lane block: boundaries at -leftM + k*laneW; lane k (counted from the
+  // block's LEFT) spans [-leftM + k*laneW, -leftM + (k+1)*laneW]
+  // forward lanes: the RIGHTMOST fwd lanes of the block (right-hand
+  // traffic keeps right of the middle line); backward lanes fill the rest
+  const laneCentreM = (k: number): number =>
+    -leftM + (k + 0.5) * cl.laneW!;
+  const sp = cl.spline;
+  const hasSpline =
+    sp !== undefined && sp.length >= 2 && sp.every((s) => s.pt.length === 2);
+  const drawOne = (
+    turns: string[],
+    centreOffM: number,
+    dir: 1 | -1,
+  ): void => {
+    // sample points of the lane centreline in screen coords
+    const pts: [number, number][] = hasSpline
+      ? sp!.map((s) => [
+          lonToX(s.pt[0] / Q) + s.nx * centreOffM * px,
+          latToY(s.pt[1] / Q) + s.ny * centreOffM * px,
+        ])
+      : cl.coords.map((c, i) => {
+          const nx = -normalOf(cl, i)[1],
+            ny = normalOf(cl, i)[0];
+          return [
+            lonToX(c[0] / Q) + nx * centreOffM * px,
+            latToY(c[1] / Q) + ny * centreOffM * px,
+          ];
+        });
+    if (pts.length < 2) return;
+    if (dir === -1) pts.reverse();
+    // the last ARROW_LEN meters of the approach, ending a little before
+    // the junction mouth
+    const ARROW_LEN = 5;
+    const tip = pts[pts.length - 1];
+    const back = pointAtArcDistance(pts, ARROW_LEN * px);
+    if (!back) return;
+    const dx = tip[0] - back[0],
+      dy = tip[1] - back[1];
+    const l = Math.hypot(dx, dy);
+    if (l < 2) return;
+    const ux = dx / l,
+      uy = dy / l;
+    const nx = -uy,
+      ny = ux;
+    // arrow dimensions in pixels, clamped for visibility
+    const len = Math.min(l, ARROW_LEN * px);
+    const halfW = Math.max(2.5, Math.min(len * 0.18, 0.45 * px * cl.laneW!));
+    const head = Math.min(len * 0.45, 1.2 * px);
+    const stemW = Math.max(1.5, halfW * 0.28);
+    // base point of the arrow, set back from the tip so the arrow ends
+    // ~0.6 m before the junction boundary
+    const setBack = 0.6 * px;
+    const bx = tip[0] - ux * setBack,
+      by = tip[1] - uy * setBack;
+    const tailX = bx - ux * (len - setBack),
+      tailY = by - uy * (len - setBack);
+    ctx.strokeStyle = "#e8e8e8";
+    ctx.fillStyle = "#e8e8e8";
+    ctx.setLineDash([]);
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    const dirAngle = (v: string): number =>
+      v === "left"
+        ? Math.PI / 2
+        : v === "slight_left"
+          ? Math.PI / 4
+          : v === "sharp_left"
+            ? (3 * Math.PI) / 4
+            : v === "right"
+              ? -Math.PI / 2
+              : v === "slight_right"
+                ? -Math.PI / 4
+                : v === "sharp_right"
+                  ? (-3 * Math.PI) / 4
+                  : v === "reverse"
+                    ? Math.PI
+                    : 0; // through, merge_to_* -> straight
+    const dirs = turns.map(dirAngle).sort((a, b) => a - b);
+    if (dirs.length === 0) return;
+    // one shaft per direction, fanned symmetrically inside the lane
+    const spread = dirs.length > 1 ? halfW * 0.9 : 0;
+    dirs.forEach((angle, i) => {
+      const off = dirs.length > 1 ? (i / (dirs.length - 1) - 0.5) * 2 * spread * 0.5 : 0;
+      const sx0 = tailX + nx * off,
+        sy0 = tailY + ny * off;
+      const ex = bx + nx * off,
+        ey = by + ny * off;
+      const c = Math.cos(angle),
+        s = Math.sin(angle);
+      // rotate around the arrow tip: the head branches bend by angle
+      const hx = ex + (ux * c - uy * s) * head,
+        hy = ey + (ux * s + uy * c) * head;
+      ctx.lineWidth = stemW;
+      ctx.beginPath();
+      ctx.moveTo(sx0, sy0);
+      ctx.lineTo(ex, ey);
+      ctx.stroke();
+      // head: two barbs from the branch tip, or a U-turn hook
+      if (angle === Math.PI) {
+        // reverse: hook back around the tip
+        ctx.beginPath();
+        ctx.moveTo(ex - ux * head + nx * head, ey - uy * head + ny * head);
+        ctx.quadraticCurveTo(ex + nx * head, ey + ny * head, ex + ux * head + nx * head, ey + uy * head + ny * head);
+        ctx.stroke();
+      } else {
+        const barb = Math.max(2.5, head * 0.45);
+        const hx2 = hx + (ux * c + uy * s) * barb,
+          hy2 = hy + (-ux * s + uy * c) * barb;
+        ctx.beginPath();
+        ctx.moveTo(hx, hy);
+        ctx.lineTo(hx2, hy2);
+        ctx.stroke();
+        // merge/through share the straight-ahead shape; barb back to the
+        // shaft gives the classic arrow look
+        ctx.beginPath();
+        ctx.moveTo(ex, ey);
+        ctx.lineTo(hx2, hy2);
+        ctx.stroke();
+      }
+    });
+  };
+  if (cl.turnLanesFwd && fwd > 0) {
+    // forward lanes are the RIGHTMOST fwd lanes: lane index (from the
+    // block's left) total-fwd .. total-1; turn:lanes lists the leftmost
+    // FORWARD lane first. oneway=-1 flows against the way: the arrows
+    // point at the way's start (dir -1) and each lane's offset in the
+    // way frame flips sign (the leftmost lane in travel order is the
+    // way frame's RIGHTMOST)
+    const dir: 1 | -1 = cl.turnRev ? -1 : 1;
+    const laneOff = (j: number): number =>
+      cl.turnRev ? laneCentreM(total - 1 - j) : laneCentreM(total - fwd + j);
+    for (let j = 0; j < fwd; j++) {
+      const turns = cl.turnLanesFwd[j] ?? [];
+      if (turns.length === 0) continue;
+      drawOne(turns, laneOff(j), dir);
+    }
+  }
+  if (cl.turnLanesBwd && fwd < total) {
+    const bwd = total - fwd;
+    for (let j = 0; j < bwd; j++) {
+      const turns = cl.turnLanesBwd[j] ?? [];
+      if (turns.length === 0) continue;
+      drawOne(turns, laneCentreM(j), -1);
+    }
+  }
+}
+
+/** unit normal (left of the way) at vertex i of a centerline, in screen
+ *  coords — helper for the non-spline fallback of the arrow renderer */
+function normalOf(cl: LineFeature, i: number): [number, number] {
+  const a = cl.coords[Math.max(0, i - 1)];
+  const b = cl.coords[Math.min(cl.coords.length - 1, i + 1)];
+  const ax = lonToX(a[0] / Q),
+    ay = latToY(a[1] / Q);
+  const bx = lonToX(b[0] / Q),
+    by = latToY(b[1] / Q);
+  const dx = bx - ax,
+    dy = by - ay;
+  const l = Math.hypot(dx, dy);
+  return l > 0 ? [-dy / l, dx / l] : [0, 0];
+}
+
+/** walk a screen-space polyline backwards from its last point by the given
+ *  pixel distance; null when the polyline is shorter than that */
+function pointAtArcDistance(
+  pts: [number, number][],
+  dist: number,
+): [number, number] | null {
+  let remaining = dist;
+  for (let i = pts.length - 1; i > 0; i--) {
+    const dx = pts[i][0] - pts[i - 1][0],
+      dy = pts[i][1] - pts[i - 1][1];
+    const l = Math.hypot(dx, dy);
+    if (l >= remaining) {
+      const t = remaining / l;
+      return [
+        pts[i][0] - dx * t,
+        pts[i][1] - dy * t,
+      ];
+    }
+    remaining -= l;
+  }
+  return null;
 }
 
 // ---------------- interaction ----------------

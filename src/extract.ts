@@ -489,6 +489,44 @@ function parseLanes(v: string | undefined): number | undefined {
   return Number.isFinite(n) && n > 0 && n <= 16 ? n : undefined;
 }
 
+const TURN_VALUES = new Set([
+  "none",
+  "left",
+  "slight_left",
+  "sharp_left",
+  "through",
+  "right",
+  "slight_right",
+  "sharp_right",
+  "reverse",
+  "merge_to_left",
+  "merge_to_right",
+]);
+
+/** parse turn:lanes=* — one | separated entry per lane (leftmost first),
+ *  each lane's turn values ; separated; only wiki-approved values are
+ *  kept, unknown ones treated as "none" */
+function parseTurnLanes(v: string | undefined): string[][] | undefined {
+  if (v === undefined || v.trim() === "") return undefined;
+  const lanes = v.split("|").map((laneStr) =>
+    laneStr
+      .split(";")
+      .map((s) => s.trim())
+      .filter((s) => TURN_VALUES.has(s) && s !== "none"),
+  );
+  if (lanes.every((l) => l.length === 0)) return undefined;
+  return lanes;
+}
+
+/** pad a turn:lanes list to its direction's lane count: a shorter list
+ *  gains empty (untagged) entries on the right — incomplete tagging
+ *  usually covers only the turn lanes while through lanes are missing */
+function padTurnLanes(lanes: string[][], count: number): string[][] {
+  const out = lanes.slice(0, count);
+  while (out.length < count) out.push([]);
+  return out;
+}
+
 function parseLevel(v: string | undefined): number | undefined {
   if (v === undefined) return undefined;
   const n = parseFloat(v);
@@ -850,6 +888,16 @@ export function extractFeatures(
                   2 * parseLanes(tags["lanes:backward"])!) -
                 parseLanes(tags["lanes:backward"])!
               : undefined),
+          turnLanes:
+            tags["oneway"] === "-1"
+              ? parseTurnLanes(tags["turn:lanes:backward"])
+              : parseTurnLanes(
+                  tags["turn:lanes"] ?? tags["turn:lanes:forward"],
+                ),
+          turnLanesBackward: parseTurnLanes(
+            tags["turn:lanes:backward"],
+          ),
+          turnRev: tags["oneway"] === "-1",
           lit: tags["lit"],
           name: tags["name"],
           layer: parseLayer(tags["layer"]),
@@ -2831,6 +2879,43 @@ export function extractFeatures(
     }
     // junction adjacency + lane clipping for the stop line boundary
     const junctionAreasStop = areas.filter((a) => a.junction);
+    // the JUNCTION SIDE of the piece, in the way's own direction: a
+    // junction area adjacent to the piece's road area clips the turn
+    // arrows at that end — arrows are drawn only on the APPROACH up to
+    // the junction mouth, never on the junction area itself
+    const hasJunctionAt = (p: MarkingSample & { cl: LineFeature }, end: "start" | "end"): boolean => {
+      for (const ja of junctionAreasStop) {
+        if (!bboxOverlap(ja.bbox, p.area.bbox)) continue;
+        if (sharedBoundaryQ(p.area, ja, 10).length === 0) continue;
+        // adjacency is not enough: the shared boundary must lie at the
+        // piece's END — the boundary's nearest point to the way's end
+        // vertex must be much closer to that end than to the way's
+        // midpoint (a junction the road passes along its side, e.g. a
+        // long junction area sharing the road's left edge, must not
+        // cut the arrows at the wrong end)
+        const endQ = end === "end" ? p.cl.coords[p.cl.coords.length - 1] : p.cl.coords[0];
+        const midQ = p.cl.coords[Math.floor(p.cl.coords.length / 2)];
+        const dEnd = nearestBoundaryDistance2(p.area, ja, endQ);
+        const dMid = nearestBoundaryDistance2(p.area, ja, midQ);
+        if (dEnd === Infinity) continue;
+        if (dEnd < (dMid === Infinity ? Infinity : dMid)) return true;
+      }
+      return false;
+    };
+    const nearestBoundaryDistance2 = (
+      road: AreaFeature,
+      junction: AreaFeature,
+      ptQ: number[],
+    ): number => {
+      let d = Infinity;
+      for (const chain of sharedBoundaryQ(road, junction, 10)) {
+        for (const bpt of chain) {
+          const dd = (bpt[0] - ptQ[0]) ** 2 + (bpt[1] - ptQ[1]) ** 2;
+          if (dd < d) d = dd;
+        }
+      }
+      return d;
+    };
     const findJunctionForStopLine = (
       road: AreaFeature,
       sigQ: number[] | undefined,
@@ -3092,6 +3177,36 @@ export function extractFeatures(
         ) as Q[][];
         if (clipped.length >= 2) stopLinesQ.push(clipped);
       }
+      // turn lane indicators: the way's turn:lanes split onto its
+      // forward/backward lane counts. FORWARD: the way's own left-to-right
+      // order is the tagged order already (turn:lanes=* / :forward lists the
+      // leftmost lane first, seen in the direction of travel = the way's
+      // direction). BACKWARD: turn:lanes:backward lists the leftmost lane
+      // first seen AGAINST the way, so the list matches the backward
+      // block directly. A one-way street flows forward only (an oneway=-1
+      // way's lanes were already flipped onto turnLanes at parse time).
+      // A list shorter than its direction's lane count is padded with
+      // empty (untagged) lanes on the RIGHT (extra through lanes on a
+      // road whose turn:lanes only covers the turn lanes is the common
+      // incomplete tagging).
+      let turnLanesFwd: string[][] | undefined;
+      let turnLanesBwd: string[][] | undefined;
+      // oneway=-1: the forward direction's traffic flows AGAINST the
+      // way — its approach end is the way's START, and turnRev tells
+      // the renderer to point the arrows against the way
+      const rev = p.cl.turnRev === true;
+      if (
+        fwd > 0 &&
+        p.cl.turnLanes !== undefined &&
+        hasJunctionAt(p, rev ? "start" : "end")
+      )
+        turnLanesFwd = padTurnLanes(p.cl.turnLanes, fwd);
+      if (
+        bidirectional &&
+        p.cl.turnLanesBackward !== undefined &&
+        hasJunctionAt(p, "start")
+      )
+        turnLanesBwd = padTurnLanes(p.cl.turnLanesBackward, p.cl.lanes! - fwd);
       laneMarkings.push({
         ...p.cl,
         // the marking lives on the area's layer (bird's-eye stacking, selector
@@ -3108,6 +3223,9 @@ export function extractFeatures(
         laneAnchorM: anchorOffsetM,
         areaIds: [p.area.id],
         stopLinesQ: stopLinesQ.length > 0 ? stopLinesQ : undefined,
+        turnLanesFwd,
+        turnLanesBwd,
+        turnRev: rev || undefined,
       });
     }
   }

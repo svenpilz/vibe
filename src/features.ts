@@ -45,6 +45,12 @@ export interface LineFeature {
   areaIds?: string[];
   /** lanes=* total lane count (centerlines only) */
   lanes?: number;
+  /** turn:lanes of the way's own direction, leftmost lane first — each
+   * lane's turn values as a list (centerlines only) */
+  turnLanes?: string[][];
+  /** turn:lanes:backward of the way, leftmost lane first in the backward
+   * direction's own left-to-right order (centerlines only) */
+  turnLanesBackward?: string[][];
   /** lane_markings=no: lanes exist but are not painted */
   noLaneMarkings?: boolean;
   /** lane width in meters inferred from the highway area (centerlines only) */
@@ -86,6 +92,20 @@ export interface LineFeature {
    * that CONTAINS the signal node, restricted to the lanes flowing into
    * that signal */
   stopLinesQ?: Q[][][];
+  /** turn:lanes of the piece's forward direction, leftmost lane first
+   * (markings only) — each lane's values as a list, e.g.
+   * [["left"],["through"],["through","right"]]. Present only when the
+   * way flows INTO a junction area at its end (arrows are drawn on the
+   * approach, never on the junction area) */
+  turnLanesFwd?: string[][];
+  /** turn:lanes of the piece's backward direction, leftmost lane first in
+   * the backward direction's own order — present only when the way flows
+   * into a junction area at its start */
+  turnLanesBwd?: string[][];
+  /** oneway=-1: the forward direction's traffic flows AGAINST the way —
+   * the arrows point towards the way's start and the junction they
+   * approach is at the way's start */
+  turnRev?: boolean;
   /** number of lanes forward (same direction of travel, centerlines only) */
   lanesFwd?: number;
   /** which lateral reference the lane block is anchored on (markings only):
