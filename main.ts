@@ -1491,6 +1491,10 @@ function drawTurnArrows(cl: LineFeature) {
     ctx.setLineDash([]);
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
+    // arrow head: symmetric V (two barbs meeting at the tip), pointing in
+    // the turn direction; the shaft bends toward the turn for a single
+    // value, multiple values fan into parallel shafts each with its own
+    // head. through/merge draw the straight-ahead V — never an L
     const dirAngle = (v: string): number =>
       v === "left"
         ? Math.PI / 2
@@ -1509,47 +1513,45 @@ function drawTurnArrows(cl: LineFeature) {
                     : 0; // through, merge_to_* -> straight
     const dirs = turns.map(dirAngle).sort((a, b) => a - b);
     if (dirs.length === 0) return;
-    // one shaft per direction, fanned symmetrically inside the lane
-    const spread = dirs.length > 1 ? halfW * 0.8 : 0;
+    const spread = dirs.length > 1 ? Math.min(halfW * 0.8, lanePx * 0.22) : 0;
     dirs.forEach((angle, i) => {
       const off =
         dirs.length > 1 ? (i / (dirs.length - 1) - 0.5) * spread : 0;
-      const sx0 = tailX + nx * off,
-        sy0 = tailY + ny * off;
-      const ex = bx + nx * off,
-        ey = by + ny * off;
+      // the SHAFT: from the tail to the head base; for a single turn the
+      // shaft bends toward the turn (an arc-like kink at half length),
+      // for multiple turns each shaft stays straight and the FAN is
+      // carried by the head direction
       const c = Math.cos(angle),
         s = Math.sin(angle);
-      const hx = ex + (ux * c - uy * s) * head,
-        hy = ey + (ux * s + uy * c) * head;
+      const baseX = bx + nx * off,
+        baseY = by + ny * off;
+      const tipX = baseX + (ux * c - uy * s) * head,
+        tipY = baseY + (ux * s + uy * c) * head;
       ctx.lineWidth = stemW;
       ctx.beginPath();
-      ctx.moveTo(sx0, sy0);
-      ctx.lineTo(ex, ey);
-      ctx.stroke();
-      if (angle === Math.PI) {
-        ctx.beginPath();
-        ctx.moveTo(ex - ux * head + nx * head, ey - uy * head + ny * head);
-        ctx.quadraticCurveTo(
-          ex + nx * head,
-          ey + ny * head,
-          ex + ux * head + nx * head,
-          ey + uy * head + ny * head,
-        );
-        ctx.stroke();
+      if (dirs.length === 1 && angle !== 0) {
+        // single turn: bend the shaft at its middle toward the turn so
+        // the whole arrow reads as a curve (like a painted left arrow)
+        const midX = (tailX + baseX) / 2 + nx * (angle > 0 ? 1 : -1) * head * 0.5,
+          midY = (tailY + baseY) / 2 + ny * (angle > 0 ? 1 : -1) * head * 0.5;
+        ctx.moveTo(tailX, tailY);
+        ctx.quadraticCurveTo(midX, midY, baseX, baseY);
       } else {
-        const barb = Math.max(2, head * 0.45);
-        const hx2 = hx + (ux * c + uy * s) * barb,
-          hy2 = hy + (-ux * s + uy * c) * barb;
-        ctx.beginPath();
-        ctx.moveTo(hx, hy);
-        ctx.lineTo(hx2, hy2);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(ex, ey);
-        ctx.lineTo(hx2, hy2);
-        ctx.stroke();
+        ctx.moveTo(tailX + nx * off, tailY + ny * off);
+        ctx.lineTo(baseX, baseY);
       }
+      // head: the symmetric V — two barbs from the tip back to the head
+      // base sides, opening BACKWARD along the arrow axis
+      ctx.moveTo(tipX, tipY);
+      const barb = Math.max(2.5, head * 0.55);
+      const backX = tipX - (ux * c - uy * s) * barb,
+        backY = tipY - (ux * s + uy * c) * barb;
+      const openX = nx * barb * 0.75,
+        openY = ny * barb * 0.75;
+      ctx.moveTo(backX + openX, backY + openY);
+      ctx.lineTo(tipX, tipY);
+      ctx.lineTo(backX - openX, backY - openY);
+      ctx.stroke();
     });
   };
   const drawRepeat = (turns: string[], centreOffM: number, dir: 1 | -1) => {
