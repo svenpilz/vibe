@@ -224,6 +224,43 @@ for (const p of lm) {
   );
 }
 
+// ---- SEAM CONTINUITY: consecutive pieces of the road must MEET at the
+// shared way vertex — the seam sample is owned by one way only, but the
+// neighbour's spline must extend to it, so every drawn lane boundary is
+// ONE CONTINUOUS LINE with no gap where an OSM way starts/ends. The
+// w1->w3 and w7->w10 breaks are junction areas (a different road area)
+// and legitimately interrupt
+{
+  const cosLat3 = Math.cos(52.475 * (Math.PI / 180));
+  const dist3 = (a: number[], b: number[]): number =>
+    Math.hypot(
+      (a[0] - b[0]) * 1e-7 * 111320 * cosLat3,
+      (a[1] - b[1]) * 1e-7 * 111320,
+    );
+  const JUNCTION_BREAKS = new Set(["w1>w3", "w7>w10"]);
+  const seamPairs: [string, string][] = [
+    ["w3", "w4"],
+    ["w4", "w5"],
+    ["w5", "w6"],
+    ["w6", "w7"],
+  ];
+  for (const [aId, bId] of seamPairs) {
+    const a = lm.find((p) => p.id === aId);
+    const b = lm.find((p) => p.id === bId);
+    if (!a || !b) continue;
+    const aLast = (a.spline ?? []).at(-1);
+    const bFirst = (b.spline ?? [])[0];
+    if (!aLast || !bFirst) continue;
+    const gap = dist3(aLast.pt, bFirst.pt);
+    check(
+      `seam ${aId}>${bId}: pieces meet, no gap (< 0.3 m)`,
+      gap < 0.3,
+      `gap:${gap.toFixed(2)} m`,
+    );
+    void JUNCTION_BREAKS;
+  }
+}
+
 // ---- WAY-EXACT SAMPLE OWNERSHIP: every sample of a piece must lie on
 // ITS OWN way's stretch - the old nearest-vertex ownership attributed
 // the second half of a long segment to the NEIGHBOR way, so pieces

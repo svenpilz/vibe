@@ -2701,6 +2701,20 @@ export function extractFeatures(
       }
       if (lo < 0) continue;
       {
+        // SEAM CONTINUITY: the seam VERTEX sample exists only ONCE in
+        // the spline (the dedup keeps a single copy) and is owned by the
+        // way that ENDS at the seam — the next way's range starts one
+        // sub-sample (~2 m) past the shared vertex, so its drawn
+        // boundary left a GAP at every way change. Extend the range by
+        // exactly that one neighbour sample at the piece's ARRAY FRONT
+        // (chain lo for a forward way, chain hi for a REVERSED way —
+        // the array is reversed below, so the extension must sit at
+        // the chain side the array starts from): both pieces then meet
+        // at the same vertex position — one continuous line per lane
+        // boundary, no tangential overlap
+        const isRev = sp[lo]?.rev === true;
+        if (!isRev && lo > 0 && sp[lo - 1].cl !== p.cl) lo--;
+        if (isRev && hi < sp.length - 1 && sp[hi + 1].cl !== p.cl) hi++;
         // REVERSED ways: the samples' values are already in the WAY's
         // own frame (orient flipped them), but they are ordered along
         // the CHAIN - reverse the array so it runs along the way,
