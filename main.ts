@@ -1436,28 +1436,51 @@ function drawTurnArrows(cl: LineFeature) {
   const fwd = cl.lanesFwd ?? (cl.oneway ? cl.lanes! : Math.ceil(cl.lanes! / 2));
   const total = cl.lanes!;
   const leftM = cl.laneLeftM ?? (total * cl.laneW!) / 2;
-  // lane block: boundaries at -leftM + k*laneW; lane k (counted from the
-  // block's LEFT) spans [-leftM + k*laneW, -leftM + (k+1)*laneW].
-  // ARROW REPEAT: one arrow every ARROW_STEP meters of arc along the lane
-  // centreline, starting ARROW_INSET from the piece's ends so arrows
-  // never touch the piece boundaries
+  // ARROW REPEAT: one arrow every ARROW_STEP meters of arc along the
+  // lane centreline, starting ARROW_INSET from the piece's ends so
+  // arrows never touch the piece boundaries
   const ARROW_STEP = 4;
   const ARROW_INSET = 1.5;
-  const laneCentreM = (k: number): number => -leftM + (k + 0.5) * cl.laneW!;
   const sp = cl.spline;
   const hasSpline =
     sp !== undefined && sp.length >= 2 && sp.every((s) => s.pt.length === 2);
   // lane centreline polyline in screen coords
-  const lanePts = (centreOffM: number): [number, number][] =>
+  // the lane centreline uses the SAME per-sample clamped offsets as the
+  // drawn lane boundaries: where the measured road is narrower than the
+  // block (a junction mouth, a bus platform), the boundaries pull
+  // toward the middle line — the arrows must follow them, otherwise
+  // they sit centred on the marking lines instead of inside the lanes.
+  // clampOf replicates drawLaneMarkings' localOffsetM
+  const MARGIN = 0.15;
+  const clampOf = (i: number, offM: number): number => {
+    const s = sp![i];
+    return Math.max(
+      -(s.rightM - MARGIN),
+      Math.min(s.leftM - MARGIN, offM),
+    );
+  };
+  const laneCentreM = (k: number): number => -leftM + (k + 0.5) * cl.laneW!;
+  const laneBoundaryM = (k: number): number => -leftM + k * cl.laneW!;
+  const lanePts = (k: number): [number, number][] =>
     hasSpline
-      ? sp!.map((s) => [
-          lonToX(s.pt[0] / Q) + s.nx * centreOffM * px,
-          latToY(s.pt[1] / Q) + s.ny * centreOffM * px,
-        ])
-      : cl.coords.map((c, i) => [
-          lonToX(c[0] / Q) + normalOf(cl, i)[0] * centreOffM * px,
-          latToY(c[1] / Q) + normalOf(cl, i)[1] * centreOffM * px,
-        ]);
+      ? sp!.map((s, i) => {
+          // lane k spans the clamped boundaries k and k+1; the arrow
+          // runs between them (their mean is the lane centre when the
+          // road is wide enough, and follows the narrowing when not)
+          const centre =
+            (clampOf(i, laneBoundaryM(k)) + clampOf(i, laneBoundaryM(k + 1))) / 2;
+          return [
+            lonToX(s.pt[0] / Q) + s.nx * centre * px,
+            latToY(s.pt[1] / Q) + s.ny * centre * px,
+          ];
+        })
+      : cl.coords.map((c, i) => {
+          const centre = laneCentreM(k);
+          return [
+            lonToX(c[0] / Q) + normalOf(cl, i)[0] * centre * px,
+            latToY(c[1] / Q) + normalOf(cl, i)[1] * centre * px,
+          ];
+        });
   const drawArrowAt = (
     turns: string[],
     pts: [number, number][],
@@ -1625,8 +1648,8 @@ function drawTurnArrows(cl: LineFeature) {
       drawHead(P2, tx, ty);
     });
   };
-  const drawRepeat = (turns: string[], centreOffM: number, dir: 1 | -1) => {
-    let pts = lanePts(centreOffM);
+  const drawRepeat = (turns: string[], laneIdx: number, dir: 1 | -1) => {
+    let pts = lanePts(laneIdx);
     if (pts.length < 2) return;
     if (dir === -1) pts = pts.slice().reverse();
     // total arc length of the lane centreline in pixels
@@ -1651,12 +1674,10 @@ function drawTurnArrows(cl: LineFeature) {
     // way frame flips sign (the leftmost lane in travel order is the
     // way frame's RIGHTMOST)
     const dir: 1 | -1 = cl.turnRev ? -1 : 1;
-    const laneOff = (j: number): number =>
-      cl.turnRev ? laneCentreM(total - 1 - j) : laneCentreM(total - fwd + j);
     for (let j = 0; j < fwd; j++) {
       const turns = cl.turnLanesFwd[j] ?? [];
       if (turns.length === 0) continue;
-      drawRepeat(turns, laneOff(j), dir);
+      drawRepeat(turns, cl.turnRev ? total - 1 - j : total - fwd + j, dir);
     }
   }
   if (cl.turnLanesBwd && fwd < total) {
@@ -1664,7 +1685,7 @@ function drawTurnArrows(cl: LineFeature) {
     for (let j = 0; j < bwd; j++) {
       const turns = cl.turnLanesBwd[j] ?? [];
       if (turns.length === 0) continue;
-      drawRepeat(turns, laneCentreM(j), -1);
+      drawRepeat(turns, j, -1);
     }
   }
 }
