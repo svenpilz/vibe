@@ -11,9 +11,9 @@ Live demo: https://svenpilz.github.io/vibe/
 
 ## Examples
 
-| Lane markings with different road widths | Footway crossing | Residential area with sidewalks |
-|---|---|---|
-| ![Lane markings with different road widths](examples/lane-markings.png) | ![Footway crossing](examples/crossings.png) | ![Residential area with sidewalks](examples/sidewalk.png) |
+| Lane markings with different road widths | Turn lane indicators | Footway crossing | Residential area with sidewalks |
+|---|---|---|---|
+| ![Lane markings with different road widths](examples/lane-markings.png) | ![Turn lane indicators](examples/turn-lanes.png) | ![Footway crossing](examples/crossings.png) | ![Residential area with sidewalks](examples/sidewalk.png) |
 
 ## Usage
 
