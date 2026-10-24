@@ -1661,10 +1661,12 @@ function drawTurnArrows(cl: LineFeature) {
         // turn direction, capped to stay inside the lane
         const ex = Math.cos(angle),
           ey = Math.sin(angle);
-        // the branch leaves BELOW the shaft's end so the through
-        // head and the branch head stay clearly apart (easier to
-        // distinguish); the corner keeps the L-shape readable
-        const fork = loc(shaftTop - headLen * 0.9, 0);
+        // PURE turn (no through on the shaft): the branch starts at
+        // the shaft's very END — a true L. With a through head
+        // sharing the shaft (through;right, left;through), the branch
+        // leaves ~one head length below the end so the two heads stay
+        // clearly apart
+        const fork = loc(through ? shaftTop - headLen * 0.9 : shaftTop, 0);
         let dBranch = w * 1.1;
         const room = Math.max(lanePx / 2 - shaftW / 2 - w / 4, len * 0.05);
         if (Math.abs(ey) > 1e-6) {
