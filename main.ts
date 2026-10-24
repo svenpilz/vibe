@@ -2574,8 +2574,12 @@ function loadPbfFile(file: File) {
   const pbar = document.getElementById("progressbar")!;
   const pfill = document.getElementById("pbrfill") as HTMLDivElement;
   const plabel = document.getElementById("pbrlabel")!;
+  const spinner = document.getElementById("spinner")!;
+  const spinnerTxt = document.getElementById("spinnertxt")!;
   dropzone.style.display = "none";
   pbar.style.display = "block";
+  spinner.style.display = "block";
+  spinnerTxt.textContent = `loading ${file.name}…`;
   document.getElementById("layers")!.style.display = "none";
   statusEl.textContent = `loading ${file.name} (${(file.size / 1e6).toFixed(1)} MB)…`;
 
@@ -2585,6 +2589,7 @@ function loadPbfFile(file: File) {
       pfill.style.width = `${Math.min(100, m.pct).toFixed(1)}%`;
       plabel.textContent = `${m.phase} — ${Math.min(100, m.pct).toFixed(0)}% (${m.msg})`;
       statusEl.textContent = `${m.phase}…`;
+      spinnerTxt.textContent = `${m.phase} — ${Math.min(100, m.pct).toFixed(0)}%`;
     } else if (m.type === "timing") {
       // step runtimes so far, newest last — logged as a whole on done
       (worker as unknown as { __timings: unknown[] }).__timings = m.timings;
@@ -2593,15 +2598,23 @@ function loadPbfFile(file: File) {
       ingestResult(m.result as ExtractResult, file.name);
       const t2 = performance.now();
       const timings = (m.timings ?? []) as { step: string; sec: number }[];
+      const pbfMs = (timings.find((t) => t.step === "parse PBF")?.sec ?? 0) * 1000;
+      const extractMs = timings
+        .filter((t) => t.step.startsWith("extract:"))
+        .reduce((sum, t) => sum + t.sec * 1000, 0);
       timings.push({ step: "main: ingest + index", sec: (t2 - t1) / 1000 });
       timings.push({ step: "TOTAL", sec: (t2 - loadStart) / 1000 });
-      console.group(`load ${file.name}: step runtimes`);
+      console.group(`load ${file.name}: step runtimes (ms)`);
       for (const { step, sec } of timings)
-        console.log(`${step.padEnd(48)} ${sec.toFixed(2)} s`);
+        console.log(`${step.padEnd(48)} ${(sec * 1000).toFixed(0)} ms`);
       console.groupEnd();
+      console.log(
+        `PBF parsed in ${pbfMs.toFixed(0)} ms, features extracted in ${extractMs.toFixed(0)} ms (total ${(t2 - loadStart).toFixed(0)} ms)`,
+      );
       worker.terminate();
       currentWorker = null;
       pbar.style.display = "none";
+      spinner.style.display = "none";
       dropzone.style.display = "block";
       document.getElementById("layers")!.style.display = "block";
       document.getElementById("zoomhint")!.style.display = "block";
@@ -2609,6 +2622,7 @@ function loadPbfFile(file: File) {
     } else if (m.type === "error") {
       statusEl.textContent = `error: ${m.message}`;
       pbar.style.display = "none";
+      spinner.style.display = "none";
       dropzone.style.display = "block";
       worker.terminate();
       currentWorker = null;

@@ -51,6 +51,30 @@
       transition: width 0.2s;
     }
 
+    #spinner {
+      display: none;
+      position: fixed;
+      left: 50%; top: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 50;
+      pointer-events: none;
+    }
+    #spinner .ring {
+      width: 46px; height: 46px;
+      border-radius: 50%;
+      border: 5px solid rgba(126, 200, 255, 0.18);
+      border-top-color: #7ec8ff;
+      animation: spin 0.9s linear infinite;
+      margin: 0 auto 10px;
+    }
+    #spinner .txt {
+      font-size: 12px; color: #9aa; text-align: center;
+      background: rgba(24,24,28,0.85); padding: 4px 10px; border-radius: 6px;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
     .layer { display: flex; align-items: center; gap: 8px; padding: 3px 0; user-select: none; }
     .layer input { accent-color: #7ec8ff; }
     .layer .swatch { width: 14px; height: 14px; border-radius: 3px; flex: none; border: 1px solid rgba(255,255,255,0.25); }
@@ -106,6 +130,11 @@
 
   <div id="info"></div>
   <div id="status">drop an .osm.pbf file to begin</div>
+
+  <div id="spinner">
+    <div class="ring"></div>
+    <div class="txt" id="spinnertxt">loading…</div>
+  </div>
 
   <div id="legend" style="display:none">
     <div style="color:#888; margin-bottom:4px">surface colors</div>
