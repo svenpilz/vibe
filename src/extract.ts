@@ -726,7 +726,16 @@ export function extractFeatures(
         name: tags["name"],
         wheelchair: tags["wheelchair"],
         lit: tags["lit"],
-        junction: areaHighway === "junction" || tags["junction"] !== undefined,
+        // a TRAFFIC junction only for real junction tags: junction=yes,
+        // area:highway=junction, roundabout/circular. Other values
+        // (y_junction etc.) are geometry descriptors, not signalized
+        // intersections — treating them as junctions drew phantom stop
+        // lines and lane markings on plain branching road areas
+        junction:
+          areaHighway === "junction" ||
+          tags["junction"] === "yes" ||
+          tags["junction"] === "roundabout" ||
+          tags["junction"] === "circular",
         layer: parseLayer(tags["layer"]),
         level: parseLevel(tags["level"]),
         outer: [qc],
@@ -1029,7 +1038,14 @@ export function extractFeatures(
       name: tags["name"],
       wheelchair: tags["wheelchair"],
       lit: tags["lit"],
-      junction: areaHighway === "junction" || tags["junction"] !== undefined,
+      // a TRAFFIC junction only for real junction tags (see the
+      // way-branch comment above): y_junction etc. are geometry
+      // descriptors, not signalized intersections
+      junction:
+        areaHighway === "junction" ||
+        tags["junction"] === "yes" ||
+        tags["junction"] === "roundabout" ||
+        tags["junction"] === "circular",
       layer: parseLayer(tags["layer"]),
       level: parseLevel(tags["level"]),
       outer: outerRings,
