@@ -1156,7 +1156,11 @@ function drawLaneMarkings(cl: LineFeature) {
   if (cl.lanes === undefined || cl.laneW === undefined || cl.lanes! < 2) return;
   const px = pxPerMeter();
   const lineW = Math.max(1, 0.12 * px);
-  const fwd = cl.lanesFwd ?? Math.ceil(cl.lanes / 2);
+  // forward lane count EXACTLY like the extractor's fwdOf: a one-way
+  // road runs ALL its lanes forward — the bidirectional fallback here
+  // misread one-way roads and misplaced the middle line and the turn
+  // arrows' lane mapping
+  const fwd = cl.lanesFwd ?? (cl.oneway ? cl.lanes : Math.ceil(cl.lanes / 2));
   const total = cl.lanes;
   ctx.lineWidth = lineW;
   ctx.lineCap = "round";
@@ -1389,6 +1393,11 @@ function drawLaneMarkings(cl: LineFeature) {
       );
     else drawOffsetLine(() => offPx, solid);
   }
+  // SAMPLES MODE on a road WITHOUT a solid middle line (a one-way road
+  // never draws a border): the middle line itself carries the sample
+  // dots, so every piece shows them
+  if (samplesOnly && !(fwd > 0 && fwd < total))
+    drawOffsetLine((i) => localOffsetM(i, 0) * px, true);
   // stop line: the shared boundary polyline between the entering road
   // area and the junction area (not necessarily orthogonal to the road),
   // already clipped to the lanes flowing into the signal
@@ -1424,7 +1433,7 @@ function drawLaneMarkings(cl: LineFeature) {
 function drawTurnArrows(cl: LineFeature) {
   if (!cl.turnLanesFwd && !cl.turnLanesBwd) return;
   const px = pxPerMeter();
-  const fwd = cl.lanesFwd ?? Math.ceil(cl.lanes! / 2);
+  const fwd = cl.lanesFwd ?? (cl.oneway ? cl.lanes! : Math.ceil(cl.lanes! / 2));
   const total = cl.lanes!;
   const leftM = cl.laneLeftM ?? (total * cl.laneW!) / 2;
   // lane block: boundaries at -leftM + k*laneW; lane k (counted from the
@@ -1454,16 +1463,13 @@ function drawTurnArrows(cl: LineFeature) {
     pts: [number, number][],
     arcAt: number,
   ): void => {
-    // position + direction of the lane centreline at arc distance arcAt
-    const here = pointAtArcDistance(pts, arcAt);
-    const ahead = pointAtArcDistance(pts, arcAt + 0.5 * px);
-    if (!here || !ahead) return;
-    const dx = ahead[0] - here[0],
-      dy = ahead[1] - here[1];
-    const l = Math.hypot(dx, dy);
-    if (l === 0) return;
-    const ux = dx / l,
-      uy = dy / l;
+    // position + DRIVING DIRECTION of the lane centreline at arc
+    // distance arcAt, measured from the polyline's front (the array
+    // runs along the driving direction after drawRepeat's reversal)
+    const here = pointAndDirAtArc(pts, arcAt);
+    if (!here) return;
+    const ux = here.u[0],
+      uy = here.u[1];
     const nx = -uy,
       ny = ux;
     // size follows the LANE WIDTH: the arrow fills a good share of the
@@ -1474,8 +1480,8 @@ function drawTurnArrows(cl: LineFeature) {
     const head = Math.min(len * 0.45, lanePx * 0.5);
     const stemW = Math.max(1, halfW * 0.3);
     // the arrow is CENTRED on arcAt along the lane
-    const cx = here[0] - (ux * len) / 2,
-      cy = here[1] - (uy * len) / 2;
+    const cx = here.p[0] - (ux * len) / 2,
+      cy = here.p[1] - (uy * len) / 2;
     const bx = cx + ux * len,
       by = cy + uy * len;
     const tailX = cx,
@@ -1607,21 +1613,23 @@ function normalOf(cl: LineFeature, i: number): [number, number] {
 
 /** walk a screen-space polyline backwards from its last point by the given
  *  pixel distance; null when the polyline is shorter than that */
-function pointAtArcDistance(
+/** position + unit direction of a screen-space polyline at `dist` pixels
+ *  along its arc from the FRONT; null when the polyline is shorter */
+function pointAndDirAtArc(
   pts: [number, number][],
   dist: number,
-): [number, number] | null {
+): { p: [number, number]; u: [number, number] } | null {
   let remaining = dist;
-  for (let i = pts.length - 1; i > 0; i--) {
+  for (let i = 1; i < pts.length; i++) {
     const dx = pts[i][0] - pts[i - 1][0],
       dy = pts[i][1] - pts[i - 1][1];
     const l = Math.hypot(dx, dy);
     if (l >= remaining) {
       const t = remaining / l;
-      return [
-        pts[i][0] - dx * t,
-        pts[i][1] - dy * t,
-      ];
+      return {
+        p: [pts[i - 1][0] + dx * t, pts[i - 1][1] + dy * t],
+        u: [dx / l, dy / l],
+      };
     }
     remaining -= l;
   }

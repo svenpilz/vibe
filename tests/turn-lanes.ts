@@ -142,6 +142,25 @@ check(
   JSON.stringify(d?.turnLanesFwd),
 );
 
+// ---- LANE CENTRING: the forward arrows of a 2-lane one-way road sit at
+// 1/4 and 3/4 of the lane block's width — the renderer derives the lane
+// centres from laneLeftM/laneW; verify the piece data supports exactly
+// that mapping (block spans [-laneLeftM, -laneLeftM + lanes*laneW])
+{
+  const d2 = lm.find((m) => m.name === "D-Straße");
+  if (d2 && d2.laneLeftM !== undefined && d2.laneW !== undefined) {
+    const left = -d2.laneLeftM;
+    const w = d2.lanes! * d2.laneW!;
+    const c0 = left + 0.5 * d2.laneW!;
+    const c1 = left + 1.5 * d2.laneW!;
+    check(
+      "2-lane one-way: arrow lane centres at 1/4 and 3/4 of the block",
+      Math.abs(c0 - (left + w / 4)) < 1e-6 && Math.abs(c1 - (left + (3 * w) / 4)) < 1e-6,
+      `centres:${c0.toFixed(2)},${c1.toFixed(2)} block:[${left.toFixed(2)},${(left + w).toFixed(2)}]`,
+    );
+  }
+}
+
 if (failures > 0) {
   console.error(`${failures} turn lane test(s) failed`);
   process.exit(1);
