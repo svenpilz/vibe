@@ -1533,8 +1533,8 @@ function drawTurnArrows(cl: LineFeature) {
     // reverse: a U-shaped hook, head pointing back. All dimensions in
     // METERS scaled by the ground scale
     const lanePx = cl.laneW! * px;
-    const len = Math.min(2.0 * px, lanePx * 0.8);
-    const w = Math.min(len * 0.52, lanePx * 0.5);
+    const len = Math.min(1.8 * px, lanePx * 0.72);
+    const w = Math.min(len * 0.52, lanePx * 0.45);
     const headLen = w * 0.5;
     const shaftW = w * 0.33;
     // the arrow is CENTRED on arcAt along the lane; local frame:
@@ -1648,7 +1648,9 @@ function drawTurnArrows(cl: LineFeature) {
         // turn direction, capped to stay inside the lane
         const ex = Math.cos(angle),
           ey = Math.sin(angle);
-        const fork = loc(shaftTop - headLen * 0.6, 0);
+        // TRUE L-SHAPE: the branch leaves at the shaft's very END (the
+        // corner point), not before it
+        const fork = loc(shaftTop, 0);
         let dBranch = w * 1.1;
         const room = Math.max(lanePx / 2 - shaftW / 2 - w / 4, len * 0.05);
         if (Math.abs(ey) > 1e-6) {
@@ -1714,10 +1716,16 @@ function drawTurnArrows(cl: LineFeature) {
   }
   if (cl.turnLanesBwd && fwd < total) {
     const bwd = total - fwd;
+    // turn:lanes:backward lists the BACKWARD driver's leftmost lane
+    // first; the backward lanes occupy the block's LEFT range in the
+    // WAY frame, and the backward driver's leftmost is that range's
+    // HIGHEST index (the driver travels against the way) — list index
+    // j maps to block lane bwd-1-j (left|through rendered through|left
+    // before)
     for (let j = 0; j < bwd; j++) {
       const turns = cl.turnLanesBwd[j] ?? [];
       if (turns.length === 0) continue;
-      drawRepeat(turns, j, -1);
+      drawRepeat(turns, bwd - 1 - j, -1);
     }
   }
 }
