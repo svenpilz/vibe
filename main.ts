@@ -1533,8 +1533,8 @@ function drawTurnArrows(cl: LineFeature) {
     // reverse: a U-shaped hook, head pointing back. All dimensions in
     // METERS scaled by the ground scale
     const lanePx = cl.laneW! * px;
-    const len = Math.min(2.4 * px, lanePx * 0.9);
-    const w = Math.min(len * 0.52, lanePx * 0.6);
+    const len = Math.min(2.0 * px, lanePx * 0.8);
+    const w = Math.min(len * 0.52, lanePx * 0.5);
     const headLen = w * 0.5;
     const shaftW = w * 0.33;
     // the arrow is CENTRED on arcAt along the lane; local frame:
@@ -1572,115 +1572,113 @@ function drawTurnArrows(cl: LineFeature) {
                     : 0; // through, merge_to_* -> straight
     const dirs = turns.map(dirAngle).sort((a, b) => a - b);
     if (dirs.length === 0) return;
-    // multiple turn values fan into parallel arrows inside the lane
-    const spread =
-      dirs.length > 1 ? Math.min(lanePx * 0.28, w * 0.45) : 0;
-    dirs.forEach((angle, i) => {
-      const off =
-        dirs.length > 1 ? (i / (dirs.length - 1) - 0.5) * 2 * spread : 0;
-      const drawHead = (
-        p: [number, number],
-        tx: number,
-        ty: number,
-      ): void => {
-        // solid triangular head at p, pointing along (tx, ty):
-        // base perpendicular to the direction, width w, length headLen
-        const bx = -ty,
-          by = tx;
-        const b1: [number, number] = [
-          p[0] + bx * (w / 2),
-          p[1] + by * (w / 2),
-        ];
-        const b2: [number, number] = [
-          p[0] - bx * (w / 2),
-          p[1] - by * (w / 2),
-        ];
-        const tip: [number, number] = [
-          p[0] + tx * headLen,
-          p[1] + ty * headLen,
-        ];
-        ctx.beginPath();
-        ctx.moveTo(b1[0], b1[1]);
-        ctx.lineTo(tip[0], tip[1]);
-        ctx.lineTo(b2[0], b2[1]);
-        ctx.closePath();
-        ctx.fill();
-      };
-      if (angle === Math.PI) {
-        // REVERSE: straight shaft, then a U-shaped hook turning
-        // back; the head points backwards at the hook's end
-        const r = Math.min(lanePx * 0.18, len * 0.22);
-        const fEnd = len / 2 - r * 2;
-        ctx.beginPath();
-        const p0 = loc(-len / 2, off);
-        ctx.moveTo(p0[0], p0[1]);
-        const pA = loc(fEnd, off);
-        ctx.lineTo(pA[0], pA[1]);
-        // semicircle: from direction (1,0) turning to (-1,0) in the
-        // local frame, approximated with segments (up = left of the
-        // driving direction, like a left U-turn)
-        for (let k = 1; k <= 10; k++) {
-          const t = (k / 10) * Math.PI;
-          // the hook bends LEFT of the driving direction (nx is the
-          // right vector -> negative lateral)
-          const p = loc(fEnd + r * Math.sin(t), off - r * (1 - Math.cos(t)));
-          ctx.lineTo(p[0], p[1]);
-        }
-        ctx.stroke();
-        const hp = loc(fEnd, off - 2 * r);
-        drawHead(hp, -ux, -uy);
-        return;
-      }
-      // THROUGH and TURN variants: shaft from the tail along the
-      // axis, then a quadratic elbow bend whose exit direction is the
-      // turn angle. P1 sits on the axis (tangent at the tail points
-      // forward), P2 is the head base; its tangent (P2-P1) carries
-      // the turn angle
-      // ELBOW: straight shaft from the tail to a corner point C on
-      // the axis, then a segment in the EXACT turn direction to the
-      // head base P2 (collinear for through). The exit direction
-      // P2-C carries the turn angle, so obtuse angles (sharp turns,
-      // the head pointing back-sideways) work too
-      const run = Math.min(w * 0.9, len * 0.3);
-      const fC = len / 2 - run - headLen * Math.cos(angle);
-      let dHead = w * 0.9;
-      const ex = Math.cos(angle),
-        ey = Math.sin(angle);
-      // cap the diagonal run so the whole head stays inside the
-      // lane: max lateral extent = dHead*|ey| + headLen*|ey| +
-      // (w/2)*|ex| (tip along the exit direction, base corners along
-      // its perpendicular) must fit the lane's half width
-      const room = Math.max(lanePx / 2 - shaftW / 2, len * 0.1);
-      if (angle !== 0 && Math.abs(ey) > 1e-6) {
-        const dMax =
-          (room - headLen * Math.abs(ey) - (w / 2) * Math.abs(ex)) /
-          Math.abs(ey);
-        if (dHead > dMax) dHead = Math.max(dMax, w * 0.2);
-      }
-      const P0 = loc(-len / 2, off);
-      const C = loc(fC, off);
-      const P2: [number, number] = [
-        C[0] + (ux * ex - uy * ey) * dHead,
-        C[1] + (ux * ey + uy * ex) * dHead,
+    // MERGED ARROW for multiple turn values (like through;right): ONE
+    // shared straight shaft with the through head pointing forward,
+    // plus one diagonal branch from the shaft's upper end for each
+    // additional turn, each branch carrying its own head (the German
+    // merged marking). A single turn keeps the classic elbow shape
+    const drawHead = (
+      p: [number, number],
+      tx: number,
+      ty: number,
+    ): void => {
+      // solid triangular head at p, pointing along (tx, ty):
+      // base perpendicular to the direction, width w, length headLen
+      const bx = -ty,
+        by = tx;
+      const b1: [number, number] = [
+        p[0] + bx * (w / 2),
+        p[1] + by * (w / 2),
+      ];
+      const b2: [number, number] = [
+        p[0] - bx * (w / 2),
+        p[1] - by * (w / 2),
+      ];
+      const tip: [number, number] = [
+        p[0] + tx * headLen,
+        p[1] + ty * headLen,
       ];
       ctx.beginPath();
-      ctx.moveTo(P0[0], P0[1]);
-      ctx.lineTo(C[0], C[1]);
-      ctx.lineTo(P2[0], P2[1]);
-      ctx.stroke();
-      // exit direction of the elbow = P2 - C
-      let tx = P2[0] - C[0],
-        ty = P2[1] - C[1];
-      const tl = Math.hypot(tx, ty);
-      if (tl === 0) {
-        tx = ux;
-        ty = uy;
-      } else {
-        tx /= tl;
-        ty /= tl;
+      ctx.moveTo(b1[0], b1[1]);
+      ctx.lineTo(tip[0], tip[1]);
+      ctx.lineTo(b2[0], b2[1]);
+      ctx.closePath();
+      ctx.fill();
+    };
+    if (dirs.length === 1 && dirs[0] === Math.PI) {
+      // REVERSE: straight shaft, then a U-shaped hook turning
+      // back; the head points backwards at the hook's end
+      const r = Math.min(lanePx * 0.18, len * 0.22);
+      const fEnd = len / 2 - r * 2;
+      ctx.beginPath();
+      const p0 = loc(-len / 2, 0);
+      ctx.moveTo(p0[0], p0[1]);
+      const pA = loc(fEnd, 0);
+      ctx.lineTo(pA[0], pA[1]);
+      // semicircle: from direction (1,0) turning to (-1,0) in the
+      // local frame, approximated with segments; the hook bends LEFT
+      // of the driving direction (nx is the right vector -> negative
+      // lateral)
+      for (let k = 1; k <= 10; k++) {
+        const t = (k / 10) * Math.PI;
+        const p = loc(fEnd + r * Math.sin(t), -r * (1 - Math.cos(t)));
+        ctx.lineTo(p[0], p[1]);
       }
-      drawHead(P2, tx, ty);
-    });
+      ctx.stroke();
+      const hp = loc(fEnd, -2 * r);
+      drawHead(hp, -ux, -uy);
+      return;
+    }
+    if (dirs.length > 1 || (dirs.length === 1 && dirs[0] !== 0)) {
+      // has a non-through component: shared shaft + branch per turn.
+      // The shaft runs to the through head base (or to the branch
+      // fork when no through is present)
+      const through = dirs.includes(0);
+      const turns2 = dirs.filter((a) => a !== 0);
+      const shaftTop = through ? len / 2 - headLen : len / 2 - headLen * 0.5;
+      const p0 = loc(-len / 2, 0);
+      const pTop = loc(shaftTop, 0);
+      ctx.beginPath();
+      ctx.moveTo(p0[0], p0[1]);
+      ctx.lineTo(pTop[0], pTop[1]);
+      ctx.stroke();
+      if (through) drawHead(loc(len / 2 - headLen, 0), ux, uy);
+      for (const angle of turns2) {
+        // branch: from the shaft's upper end diagonally into the
+        // turn direction, capped to stay inside the lane
+        const ex = Math.cos(angle),
+          ey = Math.sin(angle);
+        const fork = loc(shaftTop - headLen * 0.6, 0);
+        let dBranch = w * 1.1;
+        const room = Math.max(lanePx / 2 - shaftW / 2 - w / 4, len * 0.05);
+        if (Math.abs(ey) > 1e-6) {
+          const dMax =
+            (room - headLen * Math.abs(ey) - (w / 2) * Math.abs(ex)) /
+            Math.abs(ey);
+          if (dBranch > dMax) dBranch = Math.max(dMax, w * 0.3);
+        }
+        const P2: [number, number] = [
+          fork[0] + (ux * ex - uy * ey) * dBranch,
+          fork[1] + (ux * ey + uy * ex) * dBranch,
+        ];
+        ctx.beginPath();
+        ctx.moveTo(fork[0], fork[1]);
+        ctx.lineTo(P2[0], P2[1]);
+        ctx.stroke();
+        drawHead(P2, ux * ex - uy * ey, ux * ey + uy * ex);
+      }
+      return;
+    }
+    // single THROUGH: the classic straight shaft + forward head
+    {
+      const p0 = loc(-len / 2, 0);
+      const pTop = loc(len / 2 - headLen, 0);
+      ctx.beginPath();
+      ctx.moveTo(p0[0], p0[1]);
+      ctx.lineTo(pTop[0], pTop[1]);
+      ctx.stroke();
+      drawHead(loc(len / 2 - headLen, 0), ux, uy);
+    }
   };
   const drawRepeat = (turns: string[], laneIdx: number, dir: 1 | -1) => {
     let pts = lanePts(laneIdx);
