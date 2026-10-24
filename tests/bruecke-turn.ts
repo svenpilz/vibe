@@ -113,6 +113,39 @@ if (p) {
   );
 }
 
+// ---- SPACING: the arrow cadence must stay visible — the arrow length
+// (2.4 m capped at 0.9 lane widths) is always well below the 4 m repeat,
+// so consecutive arrows keep a visible gap at any zoom (all-metric
+// sizing; the previous pixel-space clamp made arrows overlap at low
+// zoom, killing the cadence)
+{
+  const laneW2 = p.laneW ?? 0;
+  const arrowLen = Math.min(2.4, laneW2 * 0.9);
+  check(
+    "arrow shorter than the 4 m repeat (visible gaps)",
+    arrowLen < 4 - 0.5,
+    `arrowLen:${arrowLen.toFixed(2)} m, laneW:${laneW2.toFixed(2)}`,
+  );
+  // the piece's arc carries at least two arrows under the 4 m cadence
+  const sp2 = p.spline ?? [];
+  const cosLat4 = Math.cos(52.467 * (Math.PI / 180));
+  let arc = 0;
+  for (let i = 1; i < sp2.length; i++)
+    arc += Math.hypot(
+      (sp2[i].pt[0] - sp2[i - 1].pt[0]) * 1e-7 * 111320 * cosLat4,
+      (sp2[i].pt[1] - sp2[i - 1].pt[1]) * 1e-7 * 111320,
+    );
+  const nArrows = Math.max(
+    0,
+    Math.floor((arc - 1.5) / 4) - Math.ceil(1.5 / 4) + 1,
+  );
+  check(
+    "at least two arrows on the 20 m bridge piece",
+    nArrows >= 2,
+    `arc:${arc.toFixed(1)} m arrows:${nArrows}`,
+  );
+}
+
 if (failures > 0) {
   console.error(`${failures} brücke turn lane test(s) failed`);
   process.exit(1);
