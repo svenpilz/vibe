@@ -671,28 +671,6 @@ function draw() {
       drawLaneMarkings(lm);
       if (clipped) ctx.restore();
     }
-    // --- standalone stop lines (car ways without drawn lane markings) ---
-    const sls2 =
-      lodVisible("laneMarkings") && stopLineIndex
-        ? queryIndex(stopLineIndex, bbox)
-        : [];
-    for (const sl of sls2) {
-      if (!onLayer(sl)) continue;
-      const px2 = pxPerMeter();
-      // the shared boundary polyline between the entering road area and
-      // the junction area
-      if (!sl.line || sl.line.length < 2) continue;
-      ctx.strokeStyle = "#e8e8e8";
-      ctx.setLineDash([]);
-      ctx.lineWidth = Math.max(2, 0.4 * px2);
-      ctx.beginPath();
-      ctx.moveTo(lonToX(sl.line[0][0] / Q), latToY(sl.line[0][1] / Q));
-      for (let i = 1; i < sl.line.length; i++) {
-        ctx.lineTo(lonToX(sl.line[i][0] / Q), latToY(sl.line[i][1] / Q));
-      }
-      ctx.stroke();
-    }
-
     // --- footways ---
     for (const fw of fws) {
       if (!onLayer(fw)) continue;
@@ -751,6 +729,28 @@ function draw() {
       if (clipped) ctx.restore();
     }
     ctx.lineCap = "round";
+
+    // --- standalone stop lines (car ways without drawn lane markings) ---
+    const sls2 =
+      lodVisible("laneMarkings") && stopLineIndex
+        ? queryIndex(stopLineIndex, bbox)
+        : [];
+    for (const sl of sls2) {
+      if (!onLayer(sl)) continue;
+      const px2 = pxPerMeter();
+      // the shared boundary polyline between the entering road area and
+      // the junction area
+      if (!sl.line || sl.line.length < 2) continue;
+      ctx.strokeStyle = "#e8e8e8";
+      ctx.setLineDash([]);
+      ctx.lineWidth = Math.max(2, 0.4 * px2);
+      ctx.beginPath();
+      ctx.moveTo(lonToX(sl.line[0][0] / Q), latToY(sl.line[0][1] / Q));
+      for (let i = 1; i < sl.line.length; i++) {
+        ctx.lineTo(lonToX(sl.line[i][0] / Q), latToY(sl.line[i][1] / Q));
+      }
+      ctx.stroke();
+    }
 
     // --- fences: black lines ---
     if (lodVisible("fences") && fenceIndex) {
