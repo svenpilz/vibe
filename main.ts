@@ -529,7 +529,16 @@ function draw() {
       : [];
   const crs =
     lodVisible("crossings") && lineIndexes
-      ? queryIndex(lineIndexes.crossings, bbox)
+      ? // FOOTWAY crossings paint AFTER cycleway ones: where a
+        // footway crossing runs over a cycleway crossing (a combined
+        // pedestrian+cycle crossing), the footway's markings win
+        queryIndex(lineIndexes.crossings, bbox).sort((a, b) =>
+          a.highway === "footway" && b.highway !== "footway"
+            ? 1
+            : b.highway === "footway" && a.highway !== "footway"
+              ? -1
+              : 0,
+        )
       : [];
   const kws =
     lodVisible("kerbs") && kerbWayIndex ? queryIndex(kerbWayIndex, bbox) : [];
@@ -706,15 +715,18 @@ function draw() {
       const widthM = cr.width ?? (m.includes("zebra") ? 3 : 1.5);
       const clipped = clipToAreas(cr.areaIds);
       if (stripe) {
-        ctx.strokeStyle = "#5a5a60";
-        ctx.lineWidth = Math.max(2, widthM * px);
-        ctx.beginPath();
-        strokePolyline(cr.coords);
-        ctx.stroke();
-
         if (m.includes("zebra")) {
+          // zebra crossings keep their dark band under the stripes
+          ctx.strokeStyle = "#5a5a60";
+          ctx.lineWidth = Math.max(2, widthM * px);
+          ctx.beginPath();
+          strokePolyline(cr.coords);
+          ctx.stroke();
           drawZebra(cr, widthM, stripe);
         } else if (m.includes("dash")) {
+          // DASHED crossings draw ONLY the dashed lines — no filled
+          // band underneath (the road surface stays visible between
+          // the dashes)
           drawBoundaryDashes(cr, widthM, stripe);
         } else {
           ctx.strokeStyle = stripe;
