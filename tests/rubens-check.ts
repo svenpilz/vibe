@@ -137,39 +137,17 @@ for (const p of lm) {
     `maxDev:${maxDev.toFixed(2)} m over ${n} samples`,
   );
 }
-// pieces OUTSIDE the bus-stop zone keep a stable road width: their
-// measured spans stay within 0.15 m of the road-wide median (the
-// ray-shot model reads them directly, no rectangle smoothing). The
-// bus-stop pieces (the platform zone — the area boundary genuinely
-// cuts INTO the road there, on one or both sides) legitimately
-// measure narrower: the road IS narrower at the platforms, the new
-// model shows that honestly and the lane grid fills the narrower
-// road
-const BUS_STOP = new Set(["w4", "w6"]);
-const widths = lm
-  .filter((p) => !BUS_STOP.has(p.id))
-  .map((p) => (p.laneW ?? 0) * (p.lanes ?? 2));
+// road width stable along the whole road, INCLUDING the bus-stop
+// zone: a bus platform denting into the road takes only the parking
+// lane on that side — it must NOT narrow the traffic lanes or bend
+// the block. All pieces keep the road-wide lane width
+const widths = lm.map((p) => (p.laneW ?? 0) * (p.lanes ?? 2));
 const medW = [...widths].sort((a, b) => a - b)[Math.floor(widths.length / 2)];
 for (const p of lm) {
-  if (BUS_STOP.has(p.id)) continue;
   const w = (p.laneW ?? 0) * (p.lanes ?? 2);
   check(
-    `piece ${p.id}: road width stable outside the bus-stop zone (< 0.15 m from median)`,
+    `piece ${p.id}: lane width stable along the road, bus dents included (< 0.15 m from median)`,
     Math.abs(w - medW) < 0.15,
-    `w:${w.toFixed(2)} med:${medW.toFixed(2)}`,
-  );
-}
-// inside the bus-stop zone the measured span genuinely shrinks (the
-// platforms cut into the road) — the honest geometry the ray-shot
-// model must show
-for (const p of lm) {
-  if (!BUS_STOP.has(p.id)) continue;
-  const sp = p.spline ?? [];
-  if (!sp.length) continue;
-  const w = (p.laneW ?? 0) * (p.lanes ?? 2);
-  check(
-    `piece ${p.id}: bus-stop piece measures its genuinely narrower road`,
-    w < medW - 0.5,
     `w:${w.toFixed(2)} med:${medW.toFixed(2)}`,
   );
 }
@@ -231,31 +209,18 @@ for (const p of lm) {
       tileDetail,
     );
   }
-  // SMALLER RECTANGLES AT THE BUS DENTS: the bus-stop zone (w4/w6/w7
-  // area shoulders) genuinely narrows — the dented segments' fitted
-  // spans must be BELOW the road-wide median fitted span, proving the
-  // model shows the dents instead of papering over them
-  const fits = lm.flatMap((p) =>
-    (p.spline ?? []).map((s) => ({
-      id: p.id,
-      seg: s.seg ?? 0,
-      span: s.leftM + s.rightM,
-    })),
+  // STRAIGHT MIDDLE LINE THROUGH THE BUS DENTS: the platform takes
+  // the parking lane, so the virtual middle line's lateral offset must
+  // stay flat along the whole road — no lateral swing at the dents
+  const midOffs = lm.flatMap((p) =>
+    (p.spline ?? []).map((s) => s.midM ?? 0),
   );
-  const segSpans: { id: string; seg: number; span: number }[] = [];
-  for (const f of fits) {
-    const last = segSpans[segSpans.length - 1];
-    if (!last || last.id !== f.id || last.seg !== f.seg) segSpans.push(f);
-    else last.span = (last.span + f.span) / 2;
-  }
-  const medFit = [...segSpans.map((s) => s.span)].sort((a, b) => a - b)[
-    Math.floor(segSpans.length / 2)
-  ];
-  const minFit = Math.min(...segSpans.map((s) => s.span));
+  const medMid = [...midOffs].sort((a, b) => a - b)[Math.floor(midOffs.length / 2)];
+  const maxSwing = Math.max(...midOffs.map((m) => Math.abs(m - medMid)));
   check(
-    "bus-dent segments measure SMALLER spans than the road-wide median",
-    medFit - minFit > 0.5,
-    `min:${minFit.toFixed(2)} med:${medFit.toFixed(2)}`,
+    "middle line stays straight through the bus dents (< 0.4 m lateral swing)",
+    maxSwing < 0.4,
+    `maxSwing:${maxSwing.toFixed(2)} m`,
   );
 }
 

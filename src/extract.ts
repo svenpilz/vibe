@@ -2476,19 +2476,18 @@ export function extractFeatures(
         idx: number[],
         i: number,
       ): number => {
-        const pts = idx.map((j) => [arcOf2[j], vals[j]]);
-        if (pts.length < 3) return median2(idx.map((j) => vals[j]));
-        const slopes: number[] = [];
-        for (let a = 0; a < pts.length; a++)
-          for (let b = a + 1; b < pts.length; b++) {
-            const dx = pts[b][0] - pts[a][0];
-            if (dx > 0.5) slopes.push((pts[b][1] - pts[a][1]) / dx);
-          }
-        const slope = slopes.length > 0 ? median2(slopes) : 0;
-        const base = median2(
-          pts.map((p) => p[1] - slope * p[0]),
-        );
-        return base + slope * arcOf2[i];
+        // the STABLE SPAN reference: the 75th percentile of the
+        // window's values. A trend reference (Theil-Sen over the
+        // window) follows a dent longer than the window and never
+        // flags it — a ~20 m bus platform inside an 18 m window
+        // reads as the road's own trend and bends the whole lane
+        // block. The upper quartile is robust against a MINORITY of
+        // dented samples (the window also sees the undented spans)
+        // while still tracking genuine trends well enough for the
+        // gentle drifts real roads show
+        const xs = idx.map((j) => vals[j]).sort((a, b) => a - b);
+        const q = xs[Math.min(xs.length - 1, Math.floor(0.75 * (xs.length - 1)))];
+        return q;
       };
       const repair = (vals: number[], other: number[]): number[] => {
         const out = [...vals];

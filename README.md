@@ -147,10 +147,15 @@ every drawn marking), so the solid centerline is continuous within the area.
 The lane markings are drawn as **offsets of that middle spline**; each
 sample's measured edges are re-based onto the middle line (the half-width on
 each side). One-sided boundary dents (a bus platform cutting into the road on
-one side while the other side stays on its trend) are repaired against a
-robust linear trend of each edge along the arc before the middle line is
-built — a road may drift laterally (slanted parallelogram) or change width
-genuinely (trapezoid) without being misread as a dent.
+one side) are repaired against the stable span of the neighbourhood (upper
+quartile over an ~18 m arc window) before the middle line is built — a trend
+reference would follow a dent longer than the window (the ~20 m Rubensstraße
+platforms) and bend the whole lane block. A platform dent consumes only the
+parking lane on its side: the traffic lanes keep the road-wide width and the
+drawn boundaries stay straight; a road may still drift laterally (slanted
+parallelogram) or change width genuinely (trapezoid) without being misread as
+a dent. Every OSM way vertex is always a sample point (property switches
+happen exactly there), with ~2 m sub-samples between vertices.
 Continuity across the pieces of one road:
 - **Per-piece unit width**: every piece's width units (traffic lanes +
   parking) split its OWN measured road width evenly — the grid fills the
