@@ -1459,6 +1459,35 @@ function drawTurnArrows(cl: LineFeature) {
       Math.min(s.leftM - MARGIN, offM),
     );
   };
+  // screen-space normals of the spline polyline, computed EXACTLY
+  // like drawLaneMarkings' splineNormals: averaged vertex normals in
+  // SCREEN coordinates. The boundary offsets are RIGHT-positive in
+  // this convention, and reusing the extractor's geographic normal
+  // (left of travel, north-positive) mirrors the lanes depending on
+  // the way's compass direction (north-south ways mirrored,
+  // east-west ones not) — way 319894492's left|left|through|none
+  // rendered as none|through|right|right
+  const screenPts: [number, number][] = hasSpline
+    ? sp!.map((s) => [lonToX(s.pt[0] / Q), latToY(s.pt[1] / Q)] as [number, number])
+    : [];
+  const screenNormals: [number, number][] = screenPts.map((_, i) => {
+    let nx = 0,
+      ny = 0;
+    for (const [a, b] of [
+      [Math.max(0, i - 1), i],
+      [i, Math.min(screenPts.length - 1, i + 1)],
+    ] as [number, number][]) {
+      const dx = screenPts[b][0] - screenPts[a][0],
+        dy = screenPts[b][1] - screenPts[a][1];
+      const l = Math.hypot(dx, dy);
+      if (l > 0) {
+        nx += -dy / l;
+        ny += dx / l;
+      }
+    }
+    const l = Math.hypot(nx, ny);
+    return l > 0 ? ([nx / l, ny / l] as [number, number]) : ([0, 0] as [number, number]);
+  });
   const laneCentreM = (k: number): number => -leftM + (k + 0.5) * cl.laneW!;
   const laneBoundaryM = (k: number): number => -leftM + k * cl.laneW!;
   const lanePts = (k: number): [number, number][] =>
@@ -1470,8 +1499,8 @@ function drawTurnArrows(cl: LineFeature) {
           const centre =
             (clampOf(i, laneBoundaryM(k)) + clampOf(i, laneBoundaryM(k + 1))) / 2;
           return [
-            lonToX(s.pt[0] / Q) + s.nx * centre * px,
-            latToY(s.pt[1] / Q) + s.ny * centre * px,
+            screenPts[i][0] + screenNormals[i][0] * centre * px,
+            screenPts[i][1] + screenNormals[i][1] * centre * px,
           ];
         })
       : cl.coords.map((c, i) => {
@@ -1522,19 +1551,22 @@ function drawTurnArrows(cl: LineFeature) {
     ctx.lineWidth = shaftW;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
+    // SCREEN SPACE has y pointing down, so a geographic LEFT turn is a
+    // NEGATIVE math rotation here — left/slight_left/sharp_left take
+    // negative angles, the right variants positive
     const dirAngle = (v: string): number =>
       v === "left"
-        ? Math.PI / 2
+        ? -Math.PI / 2
         : v === "slight_left"
-          ? Math.PI / 4
+          ? -Math.PI / 4
           : v === "sharp_left"
-            ? (3 * Math.PI) / 4
+            ? (-3 * Math.PI) / 4
             : v === "right"
-              ? -Math.PI / 2
+              ? Math.PI / 2
               : v === "slight_right"
-                ? -Math.PI / 4
+                ? Math.PI / 4
                 : v === "sharp_right"
-                  ? (-3 * Math.PI) / 4
+                  ? (3 * Math.PI) / 4
                   : v === "reverse"
                     ? Math.PI
                     : 0; // through, merge_to_* -> straight
@@ -1589,11 +1621,13 @@ function drawTurnArrows(cl: LineFeature) {
         // driving direction, like a left U-turn)
         for (let k = 1; k <= 10; k++) {
           const t = (k / 10) * Math.PI;
-          const p = loc(fEnd + r * Math.sin(t), off + r * (1 - Math.cos(t)));
+          // the hook bends LEFT of the driving direction (nx is the
+          // right vector -> negative lateral)
+          const p = loc(fEnd + r * Math.sin(t), off - r * (1 - Math.cos(t)));
           ctx.lineTo(p[0], p[1]);
         }
         ctx.stroke();
-        const hp = loc(fEnd, off + 2 * r);
+        const hp = loc(fEnd, off - 2 * r);
         drawHead(hp, -ux, -uy);
         return;
       }
