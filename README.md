@@ -199,14 +199,16 @@ Continuity across the pieces of one road:
 variants, wiki values `left`, `slight_left`, `sharp_left`, `through`,
 `right`, `slight_right`, `sharp_right`, `reverse`, `merge_to_left/right`,
 none/empty, `;` combinations) are painted as white arrows inside the
-lanes on the approach to a junction: the arrows sit in the lane centres,
-point along the road and end ~0.6 m before the junction mouth — a piece
-flowing into a `junction=yes`/`area:highway=junction` area carries arrows
-only at that end, so nothing is drawn on the junction area itself. A one-way
-street's arrows follow its own direction (`oneway=-1` handled), a
-bidirectional road draws the forward list at its end and the backward list
-at its start, and incompletely tagged lists are padded with untagged
-(arrowless) lanes.
+lanes: one arrow every 4 m along each lane's centreline, sized from the
+lane width, with the shape following the turn values (bent heads, U-turn
+hook, straight for through/merge). The arrows follow the TAGGING —
+wherever a way carries `turn:lanes` its piece shows them — and since a
+marking piece never extends into a `junction=yes`/`area:highway=junction`
+area (and is clipped to its own road area at draw time), nothing renders
+within junctions. A one-way street's arrows follow its own direction
+(`oneway=-1` handled), a bidirectional road draws the forward and backward
+lists on their own sides, and incompletely tagged lists are padded with
+untagged (arrowless) lanes.
 
 **Parking lanes.** A parking lane consumes road width but does not count as a traffic
 lane. It is recognised from three taggings:

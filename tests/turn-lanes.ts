@@ -68,16 +68,16 @@ way(rect(19550, 30450, 450), { "area:highway": "tertiary", surface: "asphalt" })
 way(rect(18000, 19550, 450), { "area:highway": "tertiary", junction: "yes" });
 way(rect(30450, 32000, 450), { "area:highway": "tertiary", junction: "yes" });
 
-// road WITHOUT a junction at its end: no arrows
+// road WITHOUT turn:lanes: no arrows, junction or not
 way([node(40000, 0), node(45000, 0), node(50000, 0)], {
   highway: "tertiary",
   surface: "asphalt",
   lanes: "2",
   name: "C-Straße",
   oneway: "yes",
-  "turn:lanes": "left|right",
 });
 way(rect(39550, 50450, 450), { "area:highway": "tertiary", surface: "asphalt" });
+way(rect(50450, 52000, 450), { "area:highway": "tertiary", junction: "yes" });
 
 // oneway=-1 flowing into a junction at the way's START (in travel
 // direction): turn:lanes:backward applies, reversed into the way frame
@@ -129,7 +129,7 @@ check(
 
 const c = lm.find((m) => m.name === "C-Straße");
 check(
-  "no junction at the end: no arrows",
+  "untagged way: no arrows",
   c?.turnLanesFwd === undefined && c?.turnLanesBwd === undefined,
 );
 

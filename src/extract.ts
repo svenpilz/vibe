@@ -2885,43 +2885,6 @@ export function extractFeatures(
     }
     // junction adjacency + lane clipping for the stop line boundary
     const junctionAreasStop = areas.filter((a) => a.junction);
-    // the JUNCTION SIDE of the piece, in the way's own direction: a
-    // junction area adjacent to the piece's road area clips the turn
-    // arrows at that end — arrows are drawn only on the APPROACH up to
-    // the junction mouth, never on the junction area itself
-    const hasJunctionAt = (p: MarkingSample & { cl: LineFeature }, end: "start" | "end"): boolean => {
-      for (const ja of junctionAreasStop) {
-        if (!bboxOverlap(ja.bbox, p.area.bbox)) continue;
-        if (sharedBoundaryQ(p.area, ja, 10).length === 0) continue;
-        // adjacency is not enough: the shared boundary must lie at the
-        // piece's END — the boundary's nearest point to the way's end
-        // vertex must be much closer to that end than to the way's
-        // midpoint (a junction the road passes along its side, e.g. a
-        // long junction area sharing the road's left edge, must not
-        // cut the arrows at the wrong end)
-        const endQ = end === "end" ? p.cl.coords[p.cl.coords.length - 1] : p.cl.coords[0];
-        const midQ = p.cl.coords[Math.floor(p.cl.coords.length / 2)];
-        const dEnd = nearestBoundaryDistance2(p.area, ja, endQ);
-        const dMid = nearestBoundaryDistance2(p.area, ja, midQ);
-        if (dEnd === Infinity) continue;
-        if (dEnd < (dMid === Infinity ? Infinity : dMid)) return true;
-      }
-      return false;
-    };
-    const nearestBoundaryDistance2 = (
-      road: AreaFeature,
-      junction: AreaFeature,
-      ptQ: number[],
-    ): number => {
-      let d = Infinity;
-      for (const chain of sharedBoundaryQ(road, junction, 10)) {
-        for (const bpt of chain) {
-          const dd = (bpt[0] - ptQ[0]) ** 2 + (bpt[1] - ptQ[1]) ** 2;
-          if (dd < d) d = dd;
-        }
-      }
-      return d;
-    };
     const findJunctionForStopLine = (
       road: AreaFeature,
       sigQ: number[] | undefined,
@@ -3198,20 +3161,16 @@ export function extractFeatures(
       let turnLanesFwd: string[][] | undefined;
       let turnLanesBwd: string[][] | undefined;
       // oneway=-1: the forward direction's traffic flows AGAINST the
-      // way — its approach end is the way's START, and turnRev tells
-      // the renderer to point the arrows against the way
+      // way — the arrows point towards the way's start (turnRev)
       const rev = p.cl.turnRev === true;
-      if (
-        fwd > 0 &&
-        p.cl.turnLanes !== undefined &&
-        hasJunctionAt(p, rev ? "start" : "end")
-      )
+      // the arrows follow the TAGGING, not the junction: a way tagged
+      // with turn:lanes carries them wherever its piece is drawn. A
+      // marking piece never extends into a junction area (its samples
+      // lie strictly inside its own road area, and the renderer clips
+      // to that area), so nothing renders within junctions
+      if (fwd > 0 && p.cl.turnLanes !== undefined)
         turnLanesFwd = padTurnLanes(p.cl.turnLanes, fwd);
-      if (
-        bidirectional &&
-        p.cl.turnLanesBackward !== undefined &&
-        hasJunctionAt(p, "start")
-      )
+      if (bidirectional && p.cl.turnLanesBackward !== undefined)
         turnLanesBwd = padTurnLanes(p.cl.turnLanesBackward, p.cl.lanes! - fwd);
       laneMarkings.push({
         ...p.cl,

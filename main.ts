@@ -1428,61 +1428,58 @@ function drawTurnArrows(cl: LineFeature) {
   const total = cl.lanes!;
   const leftM = cl.laneLeftM ?? (total * cl.laneW!) / 2;
   // lane block: boundaries at -leftM + k*laneW; lane k (counted from the
-  // block's LEFT) spans [-leftM + k*laneW, -leftM + (k+1)*laneW]
-  // forward lanes: the RIGHTMOST fwd lanes of the block (right-hand
-  // traffic keeps right of the middle line); backward lanes fill the rest
-  const laneCentreM = (k: number): number =>
-    -leftM + (k + 0.5) * cl.laneW!;
+  // block's LEFT) spans [-leftM + k*laneW, -leftM + (k+1)*laneW].
+  // ARROW REPEAT: one arrow every ARROW_STEP meters of arc along the lane
+  // centreline, starting ARROW_INSET from the piece's ends so arrows
+  // never touch the piece boundaries
+  const ARROW_STEP = 4;
+  const ARROW_INSET = 1.5;
+  const laneCentreM = (k: number): number => -leftM + (k + 0.5) * cl.laneW!;
   const sp = cl.spline;
   const hasSpline =
     sp !== undefined && sp.length >= 2 && sp.every((s) => s.pt.length === 2);
-  const drawOne = (
-    turns: string[],
-    centreOffM: number,
-    dir: 1 | -1,
-  ): void => {
-    // sample points of the lane centreline in screen coords
-    const pts: [number, number][] = hasSpline
+  // lane centreline polyline in screen coords
+  const lanePts = (centreOffM: number): [number, number][] =>
+    hasSpline
       ? sp!.map((s) => [
           lonToX(s.pt[0] / Q) + s.nx * centreOffM * px,
           latToY(s.pt[1] / Q) + s.ny * centreOffM * px,
         ])
-      : cl.coords.map((c, i) => {
-          const nx = -normalOf(cl, i)[1],
-            ny = normalOf(cl, i)[0];
-          return [
-            lonToX(c[0] / Q) + nx * centreOffM * px,
-            latToY(c[1] / Q) + ny * centreOffM * px,
-          ];
-        });
-    if (pts.length < 2) return;
-    if (dir === -1) pts.reverse();
-    // the last ARROW_LEN meters of the approach, ending a little before
-    // the junction mouth
-    const ARROW_LEN = 5;
-    const tip = pts[pts.length - 1];
-    const back = pointAtArcDistance(pts, ARROW_LEN * px);
-    if (!back) return;
-    const dx = tip[0] - back[0],
-      dy = tip[1] - back[1];
+      : cl.coords.map((c, i) => [
+          lonToX(c[0] / Q) + normalOf(cl, i)[0] * centreOffM * px,
+          latToY(c[1] / Q) + normalOf(cl, i)[1] * centreOffM * px,
+        ]);
+  const drawArrowAt = (
+    turns: string[],
+    pts: [number, number][],
+    arcAt: number,
+  ): void => {
+    // position + direction of the lane centreline at arc distance arcAt
+    const here = pointAtArcDistance(pts, arcAt);
+    const ahead = pointAtArcDistance(pts, arcAt + 0.5 * px);
+    if (!here || !ahead) return;
+    const dx = ahead[0] - here[0],
+      dy = ahead[1] - here[1];
     const l = Math.hypot(dx, dy);
-    if (l < 2) return;
+    if (l === 0) return;
     const ux = dx / l,
       uy = dy / l;
     const nx = -uy,
       ny = ux;
-    // arrow dimensions in pixels, clamped for visibility
-    const len = Math.min(l, ARROW_LEN * px);
-    const halfW = Math.max(2.5, Math.min(len * 0.18, 0.45 * px * cl.laneW!));
-    const head = Math.min(len * 0.45, 1.2 * px);
-    const stemW = Math.max(1.5, halfW * 0.28);
-    // base point of the arrow, set back from the tip so the arrow ends
-    // ~0.6 m before the junction boundary
-    const setBack = 0.6 * px;
-    const bx = tip[0] - ux * setBack,
-      by = tip[1] - uy * setBack;
-    const tailX = bx - ux * (len - setBack),
-      tailY = by - uy * (len - setBack);
+    // size follows the LANE WIDTH: the arrow fills a good share of the
+    // lane without touching its boundaries
+    const lanePx = cl.laneW! * px;
+    const len = Math.min(2.5 * px, Math.max(6, lanePx * 1.1));
+    const halfW = Math.max(1.5, Math.min(len * 0.22, lanePx * 0.28));
+    const head = Math.min(len * 0.45, lanePx * 0.5);
+    const stemW = Math.max(1, halfW * 0.3);
+    // the arrow is CENTRED on arcAt along the lane
+    const cx = here[0] - (ux * len) / 2,
+      cy = here[1] - (uy * len) / 2;
+    const bx = cx + ux * len,
+      by = cy + uy * len;
+    const tailX = cx,
+      tailY = cy;
     ctx.strokeStyle = "#e8e8e8";
     ctx.fillStyle = "#e8e8e8";
     ctx.setLineDash([]);
@@ -1507,16 +1504,16 @@ function drawTurnArrows(cl: LineFeature) {
     const dirs = turns.map(dirAngle).sort((a, b) => a - b);
     if (dirs.length === 0) return;
     // one shaft per direction, fanned symmetrically inside the lane
-    const spread = dirs.length > 1 ? halfW * 0.9 : 0;
+    const spread = dirs.length > 1 ? halfW * 0.8 : 0;
     dirs.forEach((angle, i) => {
-      const off = dirs.length > 1 ? (i / (dirs.length - 1) - 0.5) * 2 * spread * 0.5 : 0;
+      const off =
+        dirs.length > 1 ? (i / (dirs.length - 1) - 0.5) * spread : 0;
       const sx0 = tailX + nx * off,
         sy0 = tailY + ny * off;
       const ex = bx + nx * off,
         ey = by + ny * off;
       const c = Math.cos(angle),
         s = Math.sin(angle);
-      // rotate around the arrow tip: the head branches bend by angle
       const hx = ex + (ux * c - uy * s) * head,
         hy = ey + (ux * s + uy * c) * head;
       ctx.lineWidth = stemW;
@@ -1524,29 +1521,48 @@ function drawTurnArrows(cl: LineFeature) {
       ctx.moveTo(sx0, sy0);
       ctx.lineTo(ex, ey);
       ctx.stroke();
-      // head: two barbs from the branch tip, or a U-turn hook
       if (angle === Math.PI) {
-        // reverse: hook back around the tip
         ctx.beginPath();
         ctx.moveTo(ex - ux * head + nx * head, ey - uy * head + ny * head);
-        ctx.quadraticCurveTo(ex + nx * head, ey + ny * head, ex + ux * head + nx * head, ey + uy * head + ny * head);
+        ctx.quadraticCurveTo(
+          ex + nx * head,
+          ey + ny * head,
+          ex + ux * head + nx * head,
+          ey + uy * head + ny * head,
+        );
         ctx.stroke();
       } else {
-        const barb = Math.max(2.5, head * 0.45);
+        const barb = Math.max(2, head * 0.45);
         const hx2 = hx + (ux * c + uy * s) * barb,
           hy2 = hy + (-ux * s + uy * c) * barb;
         ctx.beginPath();
         ctx.moveTo(hx, hy);
         ctx.lineTo(hx2, hy2);
         ctx.stroke();
-        // merge/through share the straight-ahead shape; barb back to the
-        // shaft gives the classic arrow look
         ctx.beginPath();
         ctx.moveTo(ex, ey);
         ctx.lineTo(hx2, hy2);
         ctx.stroke();
       }
     });
+  };
+  const drawRepeat = (turns: string[], centreOffM: number, dir: 1 | -1) => {
+    let pts = lanePts(centreOffM);
+    if (pts.length < 2) return;
+    if (dir === -1) pts = pts.slice().reverse();
+    // total arc length of the lane centreline in pixels
+    let arc = 0;
+    for (let i = 1; i < pts.length; i++)
+      arc += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+    const stepPx = ARROW_STEP * px;
+    const insetPx = ARROW_INSET * px;
+    if (arc < 2 * insetPx + stepPx * 0.5) {
+      // very short piece: one centred arrow
+      drawArrowAt(turns, pts, arc / 2);
+      return;
+    }
+    for (let pos = insetPx; pos <= arc - insetPx; pos += stepPx)
+      drawArrowAt(turns, pts, pos);
   };
   if (cl.turnLanesFwd && fwd > 0) {
     // forward lanes are the RIGHTMOST fwd lanes: lane index (from the
@@ -1561,7 +1577,7 @@ function drawTurnArrows(cl: LineFeature) {
     for (let j = 0; j < fwd; j++) {
       const turns = cl.turnLanesFwd[j] ?? [];
       if (turns.length === 0) continue;
-      drawOne(turns, laneOff(j), dir);
+      drawRepeat(turns, laneOff(j), dir);
     }
   }
   if (cl.turnLanesBwd && fwd < total) {
@@ -1569,7 +1585,7 @@ function drawTurnArrows(cl: LineFeature) {
     for (let j = 0; j < bwd; j++) {
       const turns = cl.turnLanesBwd[j] ?? [];
       if (turns.length === 0) continue;
-      drawOne(turns, laneCentreM(j), -1);
+      drawRepeat(turns, laneCentreM(j), -1);
     }
   }
 }
