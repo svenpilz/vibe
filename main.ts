@@ -1475,8 +1475,12 @@ function drawTurnArrows(cl: LineFeature) {
     // size follows the LANE WIDTH: the arrow fills a good share of the
     // lane without touching its boundaries
     const lanePx = cl.laneW! * px;
-    const len = Math.min(2.5 * px, Math.max(6, lanePx * 1.1));
-    const halfW = Math.max(1.5, Math.min(len * 0.22, lanePx * 0.28));
+    // ALL dimensions in METERS scaled by the ground scale — a 4 m arrow
+    // cadence with a <= 2.4 m arrow leaves visible gaps at every zoom;
+    // the previous pixel-space clamps (Math.max(6, …)) blew the arrow up
+    // at low zoom until arrows overlapped and the cadence vanished
+    const len = Math.min(2.4 * px, lanePx * 0.9);
+    const halfW = Math.min(len * 0.22, lanePx * 0.28);
     const head = Math.min(len * 0.45, lanePx * 0.5);
     const stemW = Math.max(1, halfW * 0.3);
     // the arrow is CENTRED on arcAt along the lane
@@ -1513,7 +1517,8 @@ function drawTurnArrows(cl: LineFeature) {
                     : 0; // through, merge_to_* -> straight
     const dirs = turns.map(dirAngle).sort((a, b) => a - b);
     if (dirs.length === 0) return;
-    const spread = dirs.length > 1 ? Math.min(halfW * 0.8, lanePx * 0.22) : 0;
+    const spread =
+      dirs.length > 1 ? Math.min(halfW * 0.8, lanePx * 0.22) : 0;
     dirs.forEach((angle, i) => {
       const off =
         dirs.length > 1 ? (i / (dirs.length - 1) - 0.5) * spread : 0;
@@ -1543,7 +1548,7 @@ function drawTurnArrows(cl: LineFeature) {
       // head: the symmetric V — two barbs from the tip back to the head
       // base sides, opening BACKWARD along the arrow axis
       ctx.moveTo(tipX, tipY);
-      const barb = Math.max(2.5, head * 0.55);
+      const barb = head * 0.55;
       const backX = tipX - (ux * c - uy * s) * barb,
         backY = tipY - (ux * s + uy * c) * barb;
       const openX = nx * barb * 0.75,
