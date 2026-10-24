@@ -184,12 +184,16 @@ Continuity across the pieces of one road:
   never overlap the area boundary even where the road narrows below the
   block (a bus platform shows as unpainted road).
 
-**Rendering modes.** Two lane-marking rendering modes (panel selector):
+**Rendering modes.** Three lane-marking rendering modes (panel selector):
 - **smooth (spline)** — the middle line's sample points are connected and
   Chaikin-smoothed into flowing curves (default);
-- **piece-wise linear** — the smooth spline is disabled and the sample
-  points are connected with straight segments, so the raw sample grid is
-  visible.
+- **piece-wise linear** — the smooth spline is disabled: the sample points
+  are re-based onto their RAW (pre-smoothing) middle-line offsets and
+  connected with straight segments, so the unsmoothed extracted polyline
+  is visible and genuinely differs from the smooth mode;
+- **middle line sample points** — only the solid middle line is drawn, with
+  its sample points marked as red dots, so the ~2 m sample grid is
+  directly visible.
 
 **Turn lane indicators.** `turn:lanes=*` (and the `:forward`/`:backward`
 variants, wiki values `left`, `slight_left`, `sharp_left`, `through`,

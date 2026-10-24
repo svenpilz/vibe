@@ -1558,6 +1558,9 @@ export function extractFeatures(
      *  meters (positive = left of the way) — the spline points are the
      *  way points shifted by this along the sample normal */
     midM?: number;
+    /** the RAW middle-line offset before the median/average smoothing
+     *  (piece-wise linear rendering draws this unsmoothed polyline) */
+    midRawM?: number;
     /** index of the chain line-segment the sample projects onto */
     seg?: number;
     /** arc-length position of the sample on the chain (internal) */
@@ -2585,6 +2588,7 @@ export function extractFeatures(
             leftM: s.rightM,
             rightM: s.leftM,
             midM: -(s.midM ?? 0),
+            midRawM: -(s.midRawM ?? 0),
           }
         : { ...s, rev: false };
     // ---- the VIRTUAL MIDDLE LINE: half the width at each sample, in
@@ -2637,6 +2641,7 @@ export function extractFeatures(
         leftM: half,
         rightM: half,
         midM: midSm[i],
+        midRawM: midOff[i],
       };
     });
     // the SAMPLE POINTS move onto the middle line: the renderer offsets
@@ -2711,6 +2716,7 @@ export function extractFeatures(
           leftM: s.leftM,
           rightM: s.rightM,
           midM: s.midM,
+          midRawM: s.midRawM,
           seg: s.seg,
           rev: s.rev,
         }));

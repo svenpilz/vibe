@@ -77,6 +77,9 @@ export interface LineFeature {
      *  point lies ON the middle line, and leftM/rightM are the measured
      *  half-widths to each side of it */
     midM?: number;
+    /** the same offset BEFORE the median/average smoothing — the
+     *  piece-wise linear rendering mode draws this raw polyline */
+    midRawM?: number;
   }[];
   /**
    * Stop line (markings only): the centerline flows from a non-junction

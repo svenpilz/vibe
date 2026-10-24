@@ -55,12 +55,11 @@ let stopLineIndex: Indexed<StopLineFeature> | null = null;
 
 /** lane marking rendering mode: "spline" interpolates the offset
  *  samples (Chaikin-smoothed flowing curves), "linear" draws them
- *  piece-wise linear — the crisp extracted polyline without
- *  interpolation */
-let laneSmoothness: "spline" | "linear" = "spline";
-
-/** debug: draw only the middle-line boundary and mark its sample points */
-const laneMarkingsDebug = false;
+ *  piece-wise linear — the crisp extracted polyline connecting the
+ *  sample points directly — and "samples" draws ONLY the middle line
+ *  with its sample points marked, so the extracted sample grid is
+ *  directly visible */
+let laneSmoothness: "spline" | "linear" | "samples" = "spline";
 
 const layers = {
   areas: true,
@@ -1215,7 +1214,20 @@ function drawLaneMarkings(cl: LineFeature) {
     sp.length >= 2 &&
     sp.every((s) => s.pt.length === 2);
   const splineBase: [number, number][] | null = hasSpline
-    ? sp!.map((s) => [lonToX(s.pt[0] / Q), latToY(s.pt[1] / Q)])
+    ? sp!.map((s) => {
+        // PIECE-WISE LINEAR mode: shift the sample point back onto the
+        // RAW (unsmoothed) middle-line offset — meters to quantized
+        // degrees like the extractor's re-basing — so the straight
+        // segments genuinely differ from the smoothed spline
+        if (laneSmoothness === "linear" && s.midRawM !== undefined && s.midM !== undefined) {
+          const dm = s.midRawM - s.midM;
+          const cosLat = Math.cos((s.pt[1] / Q) * (Math.PI / 180));
+          const lonQ = s.pt[0] + (s.nx * dm * 1e7) / (111320 * cosLat);
+          const latQ = s.pt[1] + (s.ny * dm * 1e7) / 111320;
+          return [lonToX(lonQ / Q), latToY(latQ / Q)] as [number, number];
+        }
+        return [lonToX(s.pt[0] / Q), latToY(s.pt[1] / Q)] as [number, number];
+      })
     : null;
   // screen-space normals of the spline polyline: the offset direction
   // must be perpendicular IN SCREEN SPACE, and offM * px (ground scale)
@@ -1280,6 +1292,7 @@ function drawLaneMarkings(cl: LineFeature) {
   // the piece-wise linear polyline through the same offset samples
   // exactly as extracted — crisp segments, no interpolation
   const linear = laneSmoothness === "linear";
+  const samplesOnly = laneSmoothness === "samples";
   const drawOffsetLine = (
     offAt: (i: number) => number,
     solid: boolean,
@@ -1309,7 +1322,7 @@ function drawLaneMarkings(cl: LineFeature) {
       ctx.lineTo(smooth[i][0], smooth[i][1]);
     ctx.stroke();
     if (!solid) ctx.setLineDash([]);
-    if (laneMarkingsDebug) {
+    if (samplesOnly) {
       ctx.fillStyle = "#ff3355";
       for (const p of pts) {
         ctx.beginPath();
@@ -1326,7 +1339,7 @@ function drawLaneMarkings(cl: LineFeature) {
   if (cl.parkingRight) boundaryOffsets.push(-leftM + total * cl.laneW!);
   for (const offPx of boundaryOffsets.map((o) => o * px)) {
     if (hasSpline) break;
-    if (laneMarkingsDebug) break;
+    if (samplesOnly) break;
     const offset: [number, number][] = base.map((p, i) => [
       p[0] + normals[i][0] * offPx,
       p[1] + normals[i][1] * offPx,
@@ -1341,7 +1354,7 @@ function drawLaneMarkings(cl: LineFeature) {
     ctx.stroke();
     ctx.setLineDash([]);
   }
-  if (hasSpline && sp && !laneMarkingsDebug) {
+  if (hasSpline && sp && !samplesOnly) {
     // parking boundaries sit at the block's outer edges — the SAME
     // offsets as the non-spline path (negative = left of the centerline):
     // the parking strip occupies the unit between the block edge and the
@@ -1355,7 +1368,7 @@ function drawLaneMarkings(cl: LineFeature) {
       );
   }
   for (let k = 1; k < total; k++) {
-    if (laneMarkingsDebug && !(fwd > 0 && fwd < total && k === total - fwd))
+    if (samplesOnly && !(fwd > 0 && fwd < total && k === total - fwd))
       continue;
     // distance from the centerline, negative = left side
     const offPx = (-leftM + k * cl.laneW!) * px;
@@ -1379,7 +1392,7 @@ function drawLaneMarkings(cl: LineFeature) {
   // stop line: the shared boundary polyline between the entering road
   // area and the junction area (not necessarily orthogonal to the road),
   // already clipped to the lanes flowing into the signal
-  if (cl.stopLinesQ && !laneMarkingsDebug) {
+  if (cl.stopLinesQ && !samplesOnly) {
     ctx.strokeStyle = "#e8e8e8";
     ctx.setLineDash([]);
     ctx.lineWidth = Math.max(2, 0.4 * px);
@@ -1394,7 +1407,7 @@ function drawLaneMarkings(cl: LineFeature) {
     }
     ctx.lineWidth = lineW;
   }
-  if (!laneMarkingsDebug) drawTurnArrows(cl);
+  if (!samplesOnly) drawTurnArrows(cl);
 }
 
 /**
@@ -2335,6 +2348,7 @@ function buildLayerPanel() {
   for (const [value, label] of [
     ["spline", "lane markings: smooth (spline)"],
     ["linear", "lane markings: piece-wise linear"],
+    ["samples", "lane markings: middle line sample points"],
   ] as [string, string][]) {
     const opt = document.createElement("option");
     opt.value = value;
@@ -2343,7 +2357,7 @@ function buildLayerPanel() {
   }
   smoothSelect.value = laneSmoothness;
   smoothSelect.addEventListener("change", () => {
-    laneSmoothness = smoothSelect.value as "spline" | "linear";
+    laneSmoothness = smoothSelect.value as "spline" | "linear" | "samples";
     requestDraw();
   });
   wrap.appendChild(smoothSelect);
@@ -2530,6 +2544,7 @@ function loadPbfFile(file: File) {
     type: "module",
   });
   currentWorker = worker;
+  const loadStart = performance.now();
 
   const dropzone = document.getElementById("dropzone")!;
   const pbar = document.getElementById("progressbar")!;
@@ -2546,8 +2561,20 @@ function loadPbfFile(file: File) {
       pfill.style.width = `${Math.min(100, m.pct).toFixed(1)}%`;
       plabel.textContent = `${m.phase} — ${Math.min(100, m.pct).toFixed(0)}% (${m.msg})`;
       statusEl.textContent = `${m.phase}…`;
+    } else if (m.type === "timing") {
+      // step runtimes so far, newest last — logged as a whole on done
+      (worker as unknown as { __timings: unknown[] }).__timings = m.timings;
     } else if (m.type === "done") {
+      const t1 = performance.now();
       ingestResult(m.result as ExtractResult, file.name);
+      const t2 = performance.now();
+      const timings = (m.timings ?? []) as { step: string; sec: number }[];
+      timings.push({ step: "main: ingest + index", sec: (t2 - t1) / 1000 });
+      timings.push({ step: "TOTAL", sec: (t2 - loadStart) / 1000 });
+      console.group(`load ${file.name}: step runtimes`);
+      for (const { step, sec } of timings)
+        console.log(`${step.padEnd(48)} ${sec.toFixed(2)} s`);
+      console.groupEnd();
       worker.terminate();
       currentWorker = null;
       pbar.style.display = "none";
