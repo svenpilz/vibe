@@ -382,8 +382,12 @@ dist/
 ```
 
 The build injects the current git commit id, shown in the UI status bar. Deploy to any
-static host — GitHub Pages workflow included (`.github/workflows/pages.yml`, just
-`npm install && npm run build`, no PBF download in CI).
+static host — the GitHub Pages workflow (`.github/workflows/pages.yml`, just
+`npm install && npm run build`, no data download in CI) deploys **two builds from one site**:
+
+- `main` → site root: https://svenpilz.github.io/vibe/
+- `heightfield` → subfolder: https://svenpilz.github.io/vibe/vibe-heightfield/ (the 3D
+  heightfield feature, incl. the bundled `public/data/` Berlin example)
 
 ## Scripts
 
