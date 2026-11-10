@@ -2,7 +2,7 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    branches: [main, heightfield]
   workflow_dispatch:
 
 permissions:
@@ -18,7 +18,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      # main branch -> site root (https://svenpilz.github.io/vibe/)
       - uses: actions/checkout@v4
+        with:
+          ref: main
 
       - uses: actions/setup-node@v4
         with:
@@ -29,6 +32,20 @@ jobs:
 
       - name: Build static site
         run: npm run build
+
+      # heightfield branch -> subfolder (https://svenpilz.github.io/vibe/vibe-heightfield/)
+      - uses: actions/checkout@v4
+        with:
+          ref: heightfield
+          path: heightfield-src
+
+      - name: Install dependencies (heightfield)
+        run: npm install
+        working-directory: heightfield-src
+
+      - name: Build heightfield site into dist/vibe-heightfield
+        run: npm run build -- --outDir ../dist/vibe-heightfield --emptyOutDir
+        working-directory: heightfield-src
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
