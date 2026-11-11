@@ -24,9 +24,13 @@ npm run dev      # open the printed URL
 
 Then drag a `*-latest.osm.pbf` from [download.geofabrik.de](https://download.geofabrik.de/index.html)
 onto the page. The file is parsed entirely in your browser — it is not uploaded anywhere.
-Scroll to zoom, drag to pan, click any feature to inspect its tags (including a link to the
-object on openstreetmap.org). The status bar shows the current zoom level and the deployed
-git commit.
+Scroll to zoom (towards the cursor), drag to pan, right-drag to orbit/tilt in 3D, click any
+feature to inspect its tags (including a link to the object on openstreetmap.org). The
+status bar shows the current zoom level and the deployed git commit.
+
+> This branch (`heightfield`) renders everything with **WebGL** — polygons are tessellated
+> on the CPU and piped to the GPU; no Canvas2D is used. Straight down (pitch 0) it looks
+> exactly like the flat 2D map; orbiting gives a Google-Earth-style 3D view.
 
 ## Specification
 
@@ -34,7 +38,11 @@ git commit.
 
 - Positions are stored as integers quantized to 1e-7 degrees (~1 cm); all geometry
   (containment, intersections, ray casts) operates on these integers.
-- Rendering uses a Web Mercator projection on a `<canvas>` (no map library, no tiles).
+- Rendering uses a Web Mercator projection piped to **WebGL** (`src/gl.ts`): polygons are
+  ear-clipping tessellated, strokes become miter-joined triangle strips, patterns are
+  procedural RGBA textures — no map library, no tiles, no Canvas2D. World units are
+  Mercator pixels at reference scale 2000 px/degree; a perspective camera maps world to
+  screen (at pitch 0 this is exactly the flat `screen = (world - center) · scale/2000`).
 - Meter-based sizes (crossing widths, lane widths, line widths, kerb radii) are converted to
   pixels with the local ground scale: `px/m = mercatorScale / (6 371 000 · cos(latitude))`.
   The latitude factor is essential — without it everything renders ~40 % too small at
@@ -363,7 +371,8 @@ on openstreetmap.org (`way/`, `node/`, `relation/` derived from the feature id).
 your .osm.pbf (drag & drop)
   └── src/osm-pbf.ts    streaming PBF parser (blob → primitive_block → dense nodes/ways/relations)
        └── src/extract.ts   feature extraction & derivation (runs in a web worker, src/worker.ts)
-            └── main.ts          canvas renderer, selectors, picking
+            └── main.ts          WebGL scene builder, selectors, picking
+                 └── src/gl.ts   tessellation + WebGL renderer + camera
 ```
 
 - Parsing and extraction run in a **web worker**; the main thread stays responsive. The
@@ -387,7 +396,7 @@ static host — the GitHub Pages workflow (`.github/workflows/pages.yml`, just
 
 - `main` → site root: https://svenpilz.github.io/vibe/
 - `heightfield` → subfolder: https://svenpilz.github.io/vibe/vibe-heightfield/ (the 3D
-  heightfield feature, incl. the bundled `public/data/` Berlin example)
+  WebGL port of the renderer — same look, Google-Earth-style mouse interaction, no canvas)
 
 ## Scripts
 
@@ -395,7 +404,7 @@ static host — the GitHub Pages workflow (`.github/workflows/pages.yml`, just
 |---|---|
 | `npm run dev`       | vite dev server |
 | `npm run build`     | typecheck + production build to `dist/` |
-| `npm test`          | PBF parser round-trip tests against a synthetic fixture |
+| `npm test`          | PBF parser round-trip tests, GL tessellation tests, extraction regressions |
 | `npm run make-fixture` | regenerate `tests/fixtures/synthetic.osm.pbf` |
 
 ## Notes

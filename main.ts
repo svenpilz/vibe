@@ -19,9 +19,28 @@ import type {
   Q,
 } from "./src/features";
 import { surfaceColor, normalizeSurface } from "./src/features";
+import {
+  GlMap,
+  R0,
+  mercY,
+  invMercY,
+  parseColor,
+  rgba,
+  grassTileData,
+  stoneTileData,
+  type Pt,
+  type RGBA,
+  type FillSpec,
+} from "./src/gl";
 
 const canvas = document.getElementById("map") as HTMLCanvasElement;
-const ctx = canvas.getContext("2d")!;
+let g: GlMap;
+try {
+  g = new GlMap(canvas);
+} catch (err) {
+  document.getElementById("status")!.textContent = String(err);
+  throw err;
+}
 const statusEl = document.getElementById("status")!;
 const infoEl = document.getElementById("info")!;
 
@@ -30,6 +49,10 @@ interface View {
   cy: number;
   scale: number; // pixels per degree longitude
 }
+
+/** 3D camera orbit state (Google Earth style): heading + pitch in radians;
+ *  pitch 0 looks straight down and reproduces the flat map exactly */
+let cam = { heading: 0, pitch: 0 };
 
 let view: View = { cx: 10.0, cy: 51.0, scale: 2000 };
 let dataset: Dataset | null = null;
@@ -163,36 +186,45 @@ function layerSortKey(f: { layer?: number; level?: number }): number {
 }
 
 // ---------------- projection ----------------
+// World space: Web Mercator pixels at reference scale (R0 per radian of
+// longitude), x east, y north. All geometry is built in these world units
+// (z=0 plane); the WebGL camera maps world -> screen. At pitch 0 the mapping
+// is exactly the old flat-canvas one: screen = (world - center) * scale/2000.
 const Q = 1e7;
-function mercY(latDeg: number): number {
-  const clamped = Math.max(-85, Math.min(85, latDeg));
-  const rad = (clamped * Math.PI) / 180;
-  return Math.log(Math.tan(Math.PI / 4 + rad / 2));
-}
 function lonToX(lonDeg: number): number {
-  return (((lonDeg - view.cx) * Math.PI) / 180) * R() + canvas.width / 2;
+  return (lonDeg * Math.PI * R0) / 180;
 }
 function latToY(latDeg: number): number {
-  return -(mercY(latDeg) - mercY(view.cy)) * R() + canvas.height / 2;
+  return mercY(latDeg) * R0;
+}
+function xToLon(x: number): number {
+  return (x * 180) / (Math.PI * R0);
+}
+function yToLat(y: number): number {
+  return invMercY(y / R0);
 }
 /** R: pixels per radian of longitude. Keeps x/y scales equal (no distortion). */
 function R(): number {
   return view.scale * (180 / Math.PI);
 }
+/** world units per css pixel at the current zoom */
+function pxToWorld(px: number): number {
+  return px / (view.scale / 2000);
+}
 /**
- * Pixels per meter on the ground at the current view latitude. Mercator
+ * World units per meter on the ground at the current view latitude. Mercator
  * stretches by 1/cos(lat): one radian of longitude spans 6_371_000 * cos(lat)
  * meters on the ground, so the equator-only formula underestimates by ~40%
  * at mid latitudes (e.g. Berlin) and lane/crossing sizes look too small.
  */
 function pxPerMeter(): number {
-  return R() / (6_371_000 * Math.cos((view.cy * Math.PI) / 180));
+  return R0 / (6_371_000 * Math.cos((view.cy * Math.PI) / 180));
 }
 function viewBboxQ(): [number, number, number, number] {
   const degPerPx = 180 / (Math.PI * R());
-  const halfW = (canvas.width / 2) * degPerPx;
+  const halfW = (canvas.clientWidth / 2) * degPerPx;
   const halfH =
-    (canvas.height / 2) * degPerPx * Math.cos((view.cy * Math.PI) / 180) * 1.1;
+    (canvas.clientHeight / 2) * degPerPx * Math.cos((view.cy * Math.PI) / 180) * 1.1;
   return [
     Math.round((view.cx - halfW) * Q),
     Math.round((view.cy - halfH) * Q),
@@ -202,31 +234,37 @@ function viewBboxQ(): [number, number, number, number] {
 }
 
 // ---------------- rendering ----------------
-function drawRing(ring: Q[][], close: boolean) {
-  if (ring.length === 0) return;
-  ctx.moveTo(lonToX(ring[0][0] / Q), latToY(ring[0][1] / Q));
-  for (let i = 1; i < ring.length; i++) {
-    ctx.lineTo(lonToX(ring[i][0] / Q), latToY(ring[i][1] / Q));
-  }
-  if (close) ctx.closePath();
+/** quantized ring -> world points */
+function ringPts(ring: Q[][]): Pt[] {
+  return ring.map(([x, y]) => [lonToX(x / Q), latToY(y / Q)] as Pt);
 }
-
-function strokePolyline(coords: Q[][]) {
-  if (coords.length < 2) return;
-  let lastX = lonToX(coords[0][0] / Q);
-  let lastY = latToY(coords[0][1] / Q);
-  ctx.moveTo(lastX, lastY);
+/** closed ring as a stroke path (first point appended) */
+function closedRingPts(ring: Q[][]): Pt[] {
+  const pts = ringPts(ring);
+  if (pts.length > 0) pts.push(pts[0]);
+  return pts;
+}
+function linePts(coords: Q[][]): Pt[] {
+  if (coords.length < 2) return coords.map(([x, y]) => [lonToX(x / Q), latToY(y / Q)] as Pt);
+  const minStep = pxToWorld(2);
+  const out: Pt[] = [[lonToX(coords[0][0] / Q), latToY(coords[0][1] / Q)]];
+  let lastX = out[0][0],
+    lastY = out[0][1];
   for (let i = 1; i < coords.length; i++) {
     const x = lonToX(coords[i][0] / Q);
     const y = latToY(coords[i][1] / Q);
     const dx = x - lastX,
       dy = y - lastY;
     // skip vertices closer than ~2px on screen to the last drawn vertex
-    if (dx * dx + dy * dy < 4 && i < coords.length - 1) continue;
-    ctx.lineTo(x, y);
+    if (dx * dx + dy * dy < minStep * minStep && i < coords.length - 1) continue;
+    out.push([x, y]);
     lastX = x;
     lastY = y;
   }
+  return out;
+}
+function withAlpha(c: RGBA, a: number): RGBA {
+  return [c[0], c[1], c[2], c[3] * a];
 }
 
 function kerbColor(kerb: string, tactilePaving?: string): string {
@@ -255,162 +293,37 @@ function crossingStripeColor(markings?: string): string | null {
 function featureColor(
   surface: string | undefined,
   colour: string | undefined,
-): string {
+): RGBA {
   if (colour) {
-    ctx.fillStyle = "#000";
-    ctx.fillStyle = colour;
-    if (ctx.fillStyle !== "#000000") return ctx.fillStyle as string;
+    const c = parseColor(colour);
+    if (c) return c;
   }
   const key = surface ? normalizeSurfaceKey(surface) : "";
-  if (PATTERN_AVG[key]) return PATTERN_AVG[key];
-  return surfaceColor(normalizeSurface(surface) ?? undefined);
+  if (PATTERN_AVG[key]) return rgba(PATTERN_AVG[key]);
+  return rgba(surfaceColor(normalizeSurface(surface) ?? undefined));
 }
 
 // ---------------- surface patterns ----------------
+// Patterns are generated procedurally into RGBA tiles (src/gl.ts) and drawn
+// as repeating WebGL textures with a constant screen-space tile size,
+// anchored to the world origin modulo one tile — same look as the old
+// canvas patterns, no Canvas2D involved.
 
-/** deterministic pseudo-random from an integer seed */
-function rand(seed: number): number {
-  let t = (seed + 0x6d2b79f5) | 0;
-  t = Math.imul(t ^ (t >>> 15), t | 1);
-  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-}
-
-/** stone tile pattern in a greyish tone; null for plain surfaces */
 /** base green tone per green kind: scrub darker than grass/garden */
 function greenBase(kind: string): [number, number, number] {
   if (kind === "scrub") return [73, 94, 55];
   return [93, 122, 68]; // #5d7a44
 }
 
-function greenColor(kind: string): string {
-  const [r, g, b] = greenBase(kind);
-  return `rgb(${r},${g},${b})`;
-}
-
-/**
- * Grass-like texture: mottled patches of varying greens over a base tone,
- * so large areas don't read as one flat color. Deterministic per tile cell.
- */
-function grassPatternTile(kind: string): CanvasPattern | null {
-  // constant screen-space patch size (see stone pattern)
-  const cell = 6;
-  const tile = document.createElement("canvas");
-  tile.width = cell * 2;
-  tile.height = cell * 2;
-  const tctx = tile.getContext("2d")!;
-  const base = greenBase(kind);
-  tctx.fillStyle = `rgb(${base[0]},${base[1]},${base[2]})`;
-  tctx.fillRect(0, 0, tile.width, tile.height);
-  // 2x2 patch cells, each seeded: mix of lighter/darker greens
-  for (let ry = 0; ry < 2; ry++) {
-    for (let rx = 0; rx < 2; rx++) {
-      const seed = ry * 13 + rx * 7 + 5;
-      // vary brightness and hue slightly per patch
-      const d = Math.round((rand(seed) - 0.45) * 34);
-      tctx.fillStyle = `rgb(${base[0] + d},${base[1] + d + Math.round((rand(seed + 1) - 0.5) * 10)},${base[2] + d - Math.round((rand(seed + 2) - 0.5) * 14)})`;
-      tctx.fillRect(rx * cell, ry * cell, cell, cell);
-      // sprinkle a few smaller darker/lighter blades-patches within
-      for (let k = 0; k < 6; k++) {
-        const sd = seed * 37 + k;
-        const bx = rand(sd) * cell,
-          by = rand(sd + 11) * cell;
-        const bw = 2 + rand(sd + 21) * cell * 0.22;
-        const bh = 2 + rand(sd + 31) * cell * 0.22;
-        const dd = Math.round((rand(sd + 41) - 0.5) * 46);
-        tctx.fillStyle = `rgb(${base[0] + dd},${base[1] + dd + 6},${base[2] + dd - 8})`;
-        tctx.fillRect(rx * cell + bx, ry * cell + by, bw, bh);
-      }
-    }
-  }
-  return ctx.createPattern(tile, "repeat");
-}
-
-function stonePatternTile(surface: string): CanvasPattern | null {
-  const s = normalizeSurfaceKey(surface);
-  if (s !== "paving_stones" && s !== "sett" && s !== "cobblestone") return null;
-  const isSett = s !== "paving_stones";
-  // constant screen-space stone size so the pattern does not change with
-  // zoom; sett stones are distinctly smaller than paving stones
-  const size = isSett ? 5 : 8;
-  const stoneGap = isSett ? 1 : 1;
-  const gap = stoneGap;
-  const tile = document.createElement("canvas");
-  // 2x2 stones per tile for paving_stones (regular grid), running bond for sett
-  const cell = size + gap;
-  tile.width = cell * 2;
-  tile.height = cell * 2;
-  const tctx = tile.getContext("2d")!;
-  const base = isSett ? 110 : 128; // greyish tone
-  tctx.fillStyle = `rgb(${base - 22},${base - 22},${base - 22})`; // gap/joint color (darker)
-  tctx.fillRect(0, 0, tile.width, tile.height);
-  const drawStone = (
-    x: number,
-    y: number,
-    w: number,
-    h: number,
-    seed: number,
-  ): void => {
-    // per-stone brightness variation, more irregular for sett
-    const jitter = isSett ? 22 : 9;
-    const v = base + Math.round((rand(seed) - 0.5) * jitter * 2);
-    tctx.fillStyle = `rgb(${v},${v},${v + (isSett ? -4 : 0)})`;
-    let px0 = x,
-      py0 = y,
-      pw = w,
-      ph = h;
-    if (isSett) {
-      // irregular placement/size for sett
-      px0 += (rand(seed + 1) - 0.5) * gap * 2;
-      py0 += (rand(seed + 2) - 0.5) * gap * 2;
-      pw *= 0.86 + rand(seed + 3) * 0.26;
-      ph *= 0.86 + rand(seed + 4) * 0.26;
-    }
-    tctx.fillRect(
-      Math.round(px0),
-      Math.round(py0),
-      Math.max(2, Math.round(pw)),
-      Math.max(2, Math.round(ph)),
-    );
-  };
-  if (isSett) {
-    // running bond: offset every other row by half a stone
-    for (let ry = 0; ry < 2; ry++) {
-      for (let rx = -1; rx < 3; rx++) {
-        const x = rx * cell + (ry % 2 === 1 ? cell / 2 : 0);
-        drawStone(
-          x + gap / 2,
-          ry * cell + gap / 2,
-          size,
-          size,
-          ry * 31 + rx * 7 + 13,
-        );
-      }
-    }
-  } else {
-    // regular grid of larger stones with slight per-stone variance
-    for (let ry = 0; ry < 2; ry++) {
-      for (let rx = 0; rx < 2; rx++) {
-        drawStone(
-          rx * cell + gap / 2,
-          ry * cell + gap / 2,
-          size,
-          size,
-          ry * 17 + rx * 5 + 3,
-        );
-      }
-    }
-  }
-  const pat = ctx.createPattern(tile, "repeat");
-  return pat;
+function greenColor(kind: string): RGBA {
+  const [r, g2, b] = greenBase(kind);
+  return [r / 255, g2 / 255, b / 255, 1];
 }
 
 function normalizeSurfaceKey(surface: string): string {
   const base = surface.split(";")[0].split(":")[0];
   return base;
 }
-
-const patternCache = new Map<string, CanvasPattern | null>();
 
 /** patterns only render from zoom 25 — below that the average pattern color reads better */
 const PATTERN_ZOOM = 25;
@@ -422,66 +335,37 @@ const PATTERN_AVG: Record<string, string> = {
   cobblestone: "#676767",
 };
 
-/** anchor a cached pattern to the map so it pans with the scene */
-function anchorPattern(
-  pat: CanvasPattern | null,
-  tileW: number,
-  tileH: number,
-): CanvasPattern | null {
-  if (!pat) return null;
-  // anchor to the map: use the screen position of the geographic origin
-  // MODULO one tile period. The absolute screen position can be a huge
-  // number far from the prime meridian, which overflows/invalidates the
-  // pattern transform; the modulo keeps the same registration.
-  const m = new DOMMatrix();
-  const ox = lonToX(0),
-    oy = latToY(0);
-  const tx = tileW > 0 ? ((ox % tileW) + tileW) % tileW : 0;
-  const ty = tileH > 0 ? ((oy % tileH) + tileH) % tileH : 0;
-  m.translateSelf(tx - tileW, ty - tileH);
-  pat.setTransform(m);
-  return pat;
-}
-
-/** stone pattern for a surface at the current zoom, cached per surface+px */
-function stonePattern(surface: string | undefined): CanvasPattern | null {
+/** stone pattern fill for a surface at the current zoom; null below PATTERN_ZOOM */
+function stonePatternFill(surface: string | undefined): FillSpec | null {
   if (!surface) return null;
   if (zoomLevel() < PATTERN_ZOOM) return null;
-  // constant screen-space tile: no zoom dependence, so a single cached
-  // pattern suffices (no scale in the cache key needed)
-  const key = normalizeSurfaceKey(surface);
-  const isSett = key !== "paving_stones";
+  const key = "stone:" + normalizeSurfaceKey(surface);
+  const isSett = normalizeSurfaceKey(surface) !== "paving_stones";
   const cell = (isSett ? 5 : 8) + 1;
-  if (patternCache.has(key))
-    return anchorPattern(patternCache.get(key)!, cell * 2, cell * 2);
-  const pat = stonePatternTile(surface);
-  patternCache.set(key, pat);
-  return anchorPattern(pat, cell * 2, cell * 2);
+  g.registerPattern(key, () => stoneTileData(surface));
+  return { pattern: { key, w: cell * 2, h: cell * 2 } };
 }
 
-/** grass-like texture at the current zoom, cached per kind */
-function grassPattern(kind: string): CanvasPattern | null {
-  if (zoomLevel() < PATTERN_ZOOM) return null;
-  const key = `green:${kind}`;
-  const cell = 6;
-  if (patternCache.has(key))
-    return anchorPattern(patternCache.get(key)!, cell * 2, cell * 2);
-  const pat = grassPatternTile(kind);
-  patternCache.set(key, pat);
-  return anchorPattern(pat, cell * 2, cell * 2);
+/** grass-like texture fill at the current zoom, or the plain base green */
+function grassFill(kind: string): FillSpec {
+  if (zoomLevel() < PATTERN_ZOOM) return { color: greenColor(kind) };
+  const key = "green:" + kind;
+  g.registerPattern(key, () => grassTileData(kind));
+  return { pattern: { key, w: 12, h: 12 } };
 }
 
 function draw() {
   const dpr = window.devicePixelRatio || 1;
+  g.dpr = dpr;
   const w = canvas.clientWidth,
     h = canvas.clientHeight;
-  canvas.width = w * dpr;
-  canvas.height = h * dpr;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-  ctx.fillStyle = "#222226";
-  ctx.fillRect(0, 0, w, h);
-  if (!dataset) return;
+  g.setViewState(w, h, dpr);
+  g.setCamera(lonToX(view.cx), latToY(view.cy), view.scale, cam.heading, cam.pitch);
+  g.begin();
+  if (!dataset) {
+    g.end();
+    return;
+  }
 
   const bbox = viewBboxQ();
 
@@ -548,120 +432,97 @@ function draw() {
     const onLayer = (f: { layer?: number; level?: number }) =>
       (f.layer ?? 0) === layer && layerVisible(f);
 
-    // --- landuse fills: residential (very light orange), commercial
-    //     (light yellow) — translucent background, not the main focus
+    // --- landuse fills: opaque average paving-stone grey — reads like
+    //     paving stones when zoomed out, consistent with the pattern fill
     if (lodVisible("landuse") && landuseIndex) {
       const lus = queryIndex(landuseIndex, bbox);
+      const fill = rgba(PATTERN_AVG.paving_stones);
+      // same-color seam stroke keeps adjacent landuse polygons continuous
+      const seamW = Math.max(pxToWorld(4), 0.3 * px);
       for (const lu of lus) {
         if (!onLayer(lu)) continue;
-        // opaque average paving-stone grey: reads like paving stones when
-        // zoomed out, consistent with the pattern color at high zoom
-        ctx.fillStyle = PATTERN_AVG.paving_stones;
-        ctx.beginPath();
-        for (const ring of lu.outer) drawRing(ring, true);
-        for (const hole of lu.holes) drawRing(hole, true);
-        ctx.fill("evenodd");
-        // same-color seam stroke keeps adjacent landuse polygons continuous
-        ctx.lineWidth = Math.max(4, 0.3 * px);
-        ctx.lineJoin = "round";
-        ctx.strokeStyle = ctx.fillStyle as string;
-        ctx.stroke();
+        const outer = lu.outer.map(ringPts),
+          holes = lu.holes.map(ringPts);
+        g.fillPolygon(outer, holes, { color: fill });
+        for (const ring of lu.outer) g.stroke(closedRingPts(ring), seamW, { color: fill });
+        for (const ring of lu.holes) g.stroke(closedRingPts(ring), seamW, { color: fill });
       }
     }
 
     // --- parking areas: filled with their own surface directly
     if (lodVisible("parking") && parkingIndex) {
       const pks = queryIndex(parkingIndex, bbox);
+      const seamW = Math.max(pxToWorld(4), 0.3 * px);
       for (const pk of pks) {
         if (!onLayer(pk)) continue;
-        const fill =
+        const pat = !pk.surfaceColour ? stonePatternFill(pk.surface) : null;
+        const solid =
           pk.surface || pk.surfaceColour
             ? featureColor(pk.surface, pk.surfaceColour)
-            : "#4a4a50";
-        const pat = !pk.surfaceColour ? stonePattern(pk.surface) : null;
-        ctx.fillStyle = pat ?? fill;
-        ctx.beginPath();
-        for (const ring of pk.outer) drawRing(ring, true);
-        for (const hole of pk.holes) drawRing(hole, true);
-        ctx.fill("evenodd");
-        ctx.lineWidth = Math.max(4, 0.3 * px);
-        ctx.lineJoin = "round";
-        ctx.strokeStyle = pat ?? fill;
-        ctx.stroke();
+            : rgba("#4a4a50");
+        const fillSpec: FillSpec = pat ?? { color: solid };
+        const outer = pk.outer.map(ringPts),
+          holes = pk.holes.map(ringPts);
+        g.fillPolygon(outer, holes, fillSpec);
+        for (const ring of pk.outer) g.stroke(closedRingPts(ring), seamW, { color: solid });
+        for (const ring of pk.holes) g.stroke(closedRingPts(ring), seamW, { color: solid });
       }
     }
 
     // --- green areas: landuse=grass / leisure=garden (same look),
     //     natural=scrub (darker) — mottled texture from zoom 25
-    for (const g of gs) {
-      if (!onLayer(g)) continue;
-      const fill = grassPattern(g.kind) ?? greenColor(g.kind);
-      ctx.fillStyle = fill;
-      ctx.beginPath();
-      for (const ring of g.outer) drawRing(ring, true);
-      for (const hole of g.holes) drawRing(hole, true);
-      ctx.fill("evenodd");
-      ctx.lineWidth = Math.max(4, 0.3 * px);
-      ctx.lineJoin = "round";
-      ctx.strokeStyle = ctx.fillStyle as string;
-      ctx.stroke();
+    const seamW = Math.max(pxToWorld(4), 0.3 * px);
+    for (const gr of gs) {
+      if (!onLayer(gr)) continue;
+      const fillSpec = grassFill(gr.kind);
+      const solid = greenColor(gr.kind);
+      const outer = gr.outer.map(ringPts),
+        holes = gr.holes.map(ringPts);
+      g.fillPolygon(outer, holes, fillSpec);
+      for (const ring of gr.outer) g.stroke(closedRingPts(ring), seamW, { color: solid });
+      for (const ring of gr.holes) g.stroke(closedRingPts(ring), seamW, { color: solid });
     }
 
     // --- highway areas (surface fill) ---
     for (const area of areas) {
       if (!onLayer(area) || !areaLodVisible(area)) continue;
-      const pat = !area.surfaceColour ? stonePattern(area.surface) : null;
-      ctx.fillStyle =
-        pat ??
-        (area.surface || area.surfaceColour
+      const pat = !area.surfaceColour ? stonePatternFill(area.surface) : null;
+      const solid =
+        area.surface || area.surfaceColour
           ? featureColor(area.surface, area.surfaceColour)
-          : "#4a4a50");
-      ctx.beginPath();
-      for (const ring of area.outer) drawRing(ring, true);
-      if (area.holes.length > 0) {
-        for (const hole of area.holes) {
-          drawRing(hole, true);
-        }
-      }
-      ctx.fill("evenodd");
+          : rgba("#4a4a50");
+      const fillSpec: FillSpec = pat ?? { color: solid };
+      const outer = area.outer.map(ringPts),
+        holes = area.holes.map(ringPts);
+      g.fillPolygon(outer, holes, fillSpec);
       // same-color edge stroke: covers antialiased boundaries and cm-scale
       // geometric gaps between neighboring polygons so areas read as one
       // continuous surface — without letting lower layers shine through the
       // seams at high zoom, the stroke scales with the ground resolution
-      ctx.lineWidth = Math.max(4, 0.3 * px);
-      ctx.lineJoin = "round";
-      ctx.strokeStyle = ctx.fillStyle as string;
-      ctx.stroke();
+      for (const ring of area.outer) g.stroke(closedRingPts(ring), seamW, { color: solid });
+      for (const ring of area.holes) g.stroke(closedRingPts(ring), seamW, { color: solid });
     }
 
     // --- buildings: translucent fill (residential light orange, other
     //     even lighter) + outline; not the main focus of the rendering
     for (const b of bl) {
       if (!onLayer(b)) continue;
-      ctx.globalAlpha = 0.45;
-      ctx.fillStyle = b.usage === "residential" ? "#f0b98a" : "#f5e9d8";
-      ctx.beginPath();
-      for (const ring of b.outer) drawRing(ring, true);
-      ctx.fill("evenodd");
-      ctx.globalAlpha = 1;
-      ctx.strokeStyle = "#8a8a94";
-      ctx.lineWidth = 1.5;
-      ctx.lineJoin = "round";
-      ctx.beginPath();
-      for (const ring of b.outer) drawRing(ring, true);
-      ctx.stroke();
+      const fill = rgba(b.usage === "residential" ? "#f0b98a" : "#f5e9d8", 0.45);
+      const outer = b.outer.map(ringPts);
+      g.fillPolygon(outer, [], { color: fill });
+      const outline = rgba("#8a8a94");
+      for (const ring of b.outer)
+        g.stroke(closedRingPts(ring), pxToWorld(1.5), { color: outline });
     }
 
     // --- centerlines (surface detail) ---
     for (const cl of cls) {
       if (!onLayer(cl)) continue;
-      ctx.strokeStyle = featureColor(cl.surface, cl.surfaceColour);
-      ctx.lineWidth = Math.max(1, (cl.width ?? 1.5) * px * 0.5);
-      ctx.globalAlpha = 0.9;
-      ctx.beginPath();
-      strokePolyline(cl.coords);
-      ctx.stroke();
-      ctx.globalAlpha = 1;
+      g.stroke(
+        linePts(cl.coords),
+        Math.max(pxToWorld(1), (cl.width ?? 1.5) * px * 0.5),
+        { color: withAlpha(featureColor(cl.surface, cl.surfaceColour), 0.9) },
+      );
     }
 
     // --- lane markings ---
@@ -669,23 +530,24 @@ function draw() {
       if (!onLayer(lm)) continue;
       const clipped = clipToAreas(lm.areaIds);
       drawLaneMarkings(lm);
-      if (clipped) ctx.restore();
+      if (clipped) g.popClip();
     }
     // --- footways ---
     for (const fw of fws) {
       if (!onLayer(fw)) continue;
-      ctx.strokeStyle =
-        fw.surface || fw.surfaceColour
-          ? featureColor(fw.surface, fw.surfaceColour)
-          : "#cfcfd6";
-      ctx.lineWidth = Math.max(0.8, (fw.width ?? 1.8) * px * 0.3);
-      ctx.beginPath();
-      strokePolyline(fw.coords);
-      ctx.stroke();
+      g.stroke(
+        linePts(fw.coords),
+        Math.max(pxToWorld(0.8), (fw.width ?? 1.8) * px * 0.3),
+        {
+          color:
+            fw.surface || fw.surfaceColour
+              ? featureColor(fw.surface, fw.surfaceColour)
+              : rgba("#cfcfd6"),
+        },
+      );
     }
 
     // --- crossings with markings ---
-    ctx.lineCap = "butt";
     for (const cr of crs) {
       if (!onLayer(cr)) continue;
       const stripe = crossingStripeColor(cr.crossingMarkings);
@@ -695,11 +557,10 @@ function draw() {
       if (stripe) {
         if (m.includes("zebra")) {
           // zebra crossings keep their dark band under the stripes
-          ctx.strokeStyle = "#5a5a60";
-          ctx.lineWidth = Math.max(2, widthM * px);
-          ctx.beginPath();
-          strokePolyline(cr.coords);
-          ctx.stroke();
+          g.stroke(linePts(cr.coords), Math.max(pxToWorld(2), widthM * px), {
+            color: rgba("#5a5a60"),
+            cap: "butt",
+          });
           drawZebra(cr, widthM, stripe);
         } else if (m.includes("dash")) {
           // DASHED crossings draw ONLY the dashed lines — no filled
@@ -707,28 +568,22 @@ function draw() {
           // the dashes)
           drawBoundaryDashes(cr, widthM, stripe);
         } else {
-          ctx.strokeStyle = stripe;
-          ctx.setLineDash([2, 3]);
-          ctx.lineWidth = Math.max(1.5, widthM * px * 0.35);
-          ctx.beginPath();
-          strokePolyline(cr.coords);
-          ctx.stroke();
-          ctx.setLineDash([]);
+          g.stroke(linePts(cr.coords), Math.max(pxToWorld(1.5), widthM * px * 0.35), {
+            color: rgba(stripe),
+            dash: [pxToWorld(2), pxToWorld(3)],
+            cap: "butt",
+          });
         }
       } else if (layers.footways) {
         // crossings without markings render as a plain footway band: they
         // belong to the footways toggle, not the crossings (markings) one
-        ctx.strokeStyle = "#8a8a92";
-        ctx.lineWidth = Math.max(1.5, widthM * px * 0.4);
-        ctx.globalAlpha = 0.7;
-        ctx.beginPath();
-        strokePolyline(cr.coords);
-        ctx.stroke();
-        ctx.globalAlpha = 1;
+        g.stroke(linePts(cr.coords), Math.max(pxToWorld(1.5), widthM * px * 0.4), {
+          color: rgba("#8a8a92", 0.7),
+          cap: "butt",
+        });
       }
-      if (clipped) ctx.restore();
+      if (clipped) g.popClip();
     }
-    ctx.lineCap = "round";
 
     // --- standalone stop lines (car ways without drawn lane markings) ---
     const sls2 =
@@ -741,28 +596,19 @@ function draw() {
       // the shared boundary polyline between the entering road area and
       // the junction area
       if (!sl.line || sl.line.length < 2) continue;
-      ctx.strokeStyle = "#e8e8e8";
-      ctx.setLineDash([]);
-      ctx.lineWidth = Math.max(2, 0.4 * px2);
-      ctx.beginPath();
-      ctx.moveTo(lonToX(sl.line[0][0] / Q), latToY(sl.line[0][1] / Q));
-      for (let i = 1; i < sl.line.length; i++) {
-        ctx.lineTo(lonToX(sl.line[i][0] / Q), latToY(sl.line[i][1] / Q));
-      }
-      ctx.stroke();
+      g.stroke(linePts(sl.line), Math.max(pxToWorld(2), 0.4 * px2), {
+        color: rgba("#e8e8e8"),
+      });
     }
 
     // --- fences: black lines ---
     if (lodVisible("fences") && fenceIndex) {
       const fs = queryIndex(fenceIndex, bbox);
-      ctx.strokeStyle = "#1a1a1a";
-      ctx.lineWidth = Math.max(1, 0.08 * px);
-      ctx.lineJoin = "round";
+      const fw2 = Math.max(pxToWorld(1), 0.08 * px);
+      const fc = rgba("#1a1a1a");
       for (const f of fs) {
         if (!onLayer(f)) continue;
-        ctx.beginPath();
-        strokePolyline(f.coords);
-        ctx.stroke();
+        g.stroke(linePts(f.coords), fw2, { color: fc });
       }
     }
 
@@ -774,7 +620,12 @@ function draw() {
 
     // --- street lamps: yellow dot with a radial halo fading out ---
     if (lodVisible("streetLamps") && streetLampGrid) {
-      const halo = Math.max(6, Math.min(24, 2.5 * px));
+      const halo = Math.max(pxToWorld(6), Math.min(pxToWorld(24), 2.5 * px));
+      const margin = halo + pxToWorld(10);
+      const cxw = lonToX(view.cx),
+        cyw = latToY(view.cy);
+      const hw = (w / 2) * (2000 / view.scale) + margin,
+        hh = (h / 2) * (2000 / view.scale) + margin;
       for (const cell of cellsForBbox(bbox, 50000)) {
         const arr = streetLampGrid.get(cell);
         if (!arr) continue;
@@ -782,27 +633,27 @@ function draw() {
           if (!onLayer(sl)) continue;
           const x = lonToX(sl.lon / Q),
             y = latToY(sl.lat / Q);
-          if (x < -halo || y < -halo || x > w + halo || y > h + halo) continue;
-          const grad = ctx.createRadialGradient(x, y, 0, x, y, halo);
-          grad.addColorStop(0, "rgba(255,225,120,0.95)");
-          grad.addColorStop(0.35, "rgba(255,210,80,0.45)");
-          grad.addColorStop(1, "rgba(255,200,60,0)");
-          ctx.fillStyle = grad;
-          ctx.beginPath();
-          ctx.arc(x, y, halo, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.beginPath();
-          ctx.arc(x, y, Math.max(1.5, halo * 0.12), 0, Math.PI * 2);
-          ctx.fillStyle = "#ffe178";
-          ctx.fill();
+          if (x < cxw - hw || y < cyw - hh || x > cxw + hw || y > cyw + hh)
+            continue;
+          g.halo([x, y], halo, [
+            [0, rgba("rgb(255,225,120)", 0.95)],
+            [0.35, rgba("rgb(255,210,80)", 0.45)],
+            [1, rgba("rgb(255,200,60)", 0)],
+          ]);
+          g.circle([x, y], Math.max(pxToWorld(1.5), halo * 0.12), rgba("#ffe178"));
         }
       }
     }
 
     // --- manholes: dark anthracite circle with lighter stripes ---
     if (lodVisible("manholes") && manholeGrid) {
-      const mr = Math.max(2, Math.min(10, 0.4 * px)); // ~80 cm cover
-      const stripe = Math.max(1, mr * 0.16);
+      const mr = Math.max(pxToWorld(2), Math.min(pxToWorld(10), 0.4 * px)); // ~80 cm cover
+      const stripe = Math.max(pxToWorld(1), mr * 0.16);
+      const margin = pxToWorld(10);
+      const cxw = lonToX(view.cx),
+        cyw = latToY(view.cy);
+      const hw = (w / 2) * (2000 / view.scale) + margin,
+        hh = (h / 2) * (2000 / view.scale) + margin;
       for (const cell of cellsForBbox(bbox, 50000)) {
         const arr = manholeGrid.get(cell);
         if (!arr) continue;
@@ -810,29 +661,32 @@ function draw() {
           if (!onLayer(mh)) continue;
           const x = lonToX(mh.lon / Q),
             y = latToY(mh.lat / Q);
-          if (x < -10 || y < -10 || x > w + 10 || y > h + 10) continue;
-          ctx.beginPath();
-          ctx.arc(x, y, mr, 0, Math.PI * 2);
-          ctx.fillStyle = "#2f3134";
-          ctx.fill();
+          if (x < cxw - hw || y < cyw - hh || x > cxw + hw || y > cyw + hh)
+            continue;
+          g.circle([x, y], mr, rgba("#2f3134"));
           // lighter stripes across the cover
-          ctx.strokeStyle = "#565a60";
-          ctx.lineWidth = stripe;
-          ctx.beginPath();
+          const segs: Pt[][] = [];
           for (let k = -1; k <= 1; k++) {
             const yy = y + k * mr * 0.45;
             const half = Math.sqrt(Math.max(0, mr * mr - (k * mr * 0.45) ** 2));
-            ctx.moveTo(x - half, yy);
-            ctx.lineTo(x + half, yy);
+            segs.push([
+              [x - half, yy],
+              [x + half, yy],
+            ]);
           }
-          ctx.stroke();
+          g.strokeSegments(segs, stripe, rgba("#565a60"));
         }
       }
     }
 
     // --- bollards: black dots ---
     if (lodVisible("bollards") && bollardGrid) {
-      const br = Math.max(2.5, Math.min(8, 0.25 * px));
+      const br = Math.max(pxToWorld(2.5), Math.min(pxToWorld(8), 0.25 * px));
+      const margin = pxToWorld(10);
+      const cxw = lonToX(view.cx),
+        cyw = latToY(view.cy);
+      const hw = (w / 2) * (2000 / view.scale) + margin,
+        hh = (h / 2) * (2000 / view.scale) + margin;
       for (const cell of cellsForBbox(bbox, 50000)) {
         const arr = bollardGrid.get(cell);
         if (!arr) continue;
@@ -840,15 +694,14 @@ function draw() {
           if (!onLayer(b)) continue;
           const x = lonToX(b.lon / Q),
             y = latToY(b.lat / Q);
-          if (x < -10 || y < -10 || x > w + 10 || y > h + 10) continue;
-          ctx.beginPath();
-          ctx.arc(x, y, br, 0, Math.PI * 2);
-          ctx.fillStyle = "#2f3134"; // dark anthracite
-          ctx.fill();
+          if (x < cxw - hw || y < cyw - hh || x > cxw + hw || y > cyw + hh)
+            continue;
+          g.circle([x, y], br, rgba("#2f3134")); // dark anthracite
         }
       }
     }
   }
+  g.end();
 }
 
 /** kerb height class of a kerb=* value */
@@ -873,11 +726,11 @@ function drawKerbWays(
   onLayer: (f: { layer?: number; level?: number }) => boolean,
   px: number,
 ): void {
-  const kerbW = Math.max(1.5, 0.18 * px); // ~18 cm kerb width
+  const kerbW = Math.max(pxToWorld(1.5), 0.18 * px); // ~18 cm kerb width
   const shadowW = kerbW * 0.3;
   // darker than paving-stone grey (#808080): the visual break
-  const dark = "#3a3a3e";
-  const bright = "#9a9a9e";
+  const dark = rgba("#3a3a3e");
+  const bright = rgba("#9a9a9e");
 
   for (const kw of kws) {
     if (!onLayer(kw)) continue;
@@ -921,7 +774,7 @@ function drawKerbWays(
     // kerb node on the way
     const types: ("high" | "lowered" | "flush")[] = pts.map(() => base);
     if (kw.overrides && kw.overrides.length > 0) {
-      const rPx = Math.max(1, px); // 1 m radius
+      const rPx = Math.max(pxToWorld(1), px); // 1 m radius
       for (const o of kw.overrides) {
         const cls = kerbClass(o.kerb);
         if (o.idx >= pts.length) continue;
@@ -934,8 +787,6 @@ function drawKerbWays(
     }
 
     // draw segment by segment, grouped by local type
-    ctx.lineCap = "butt";
-    ctx.lineJoin = "round";
     for (let i = 1; i < pts.length; i++) {
       const t = types[i];
       const tPrev = types[i - 1];
@@ -947,49 +798,23 @@ function drawKerbWays(
 
       if (t === "high" || tPrev === "high") {
         // solid dark kerb line
-        ctx.strokeStyle = dark;
-        ctx.lineWidth = kerbW;
-        ctx.beginPath();
-        ctx.moveTo(a[0], a[1]);
-        ctx.lineTo(b[0], b[1]);
-        ctx.stroke();
+        g.stroke([a, b], kerbW, { color: dark, cap: "butt" });
         // shadow on the road side (right)
-        ctx.strokeStyle = "rgba(0,0,0,0.28)";
-        ctx.lineWidth = kerbW;
-        ctx.beginPath();
-        ctx.moveTo(
-          a[0] + (na[0] * (kerbW + shadowW)) / 2,
-          a[1] + (na[1] * (kerbW + shadowW)) / 2,
+        g.stroke(
+          [
+            [a[0] + (na[0] * (kerbW + shadowW)) / 2, a[1] + (na[1] * (kerbW + shadowW)) / 2],
+            [b[0] + (nb[0] * (kerbW + shadowW)) / 2, b[1] + (nb[1] * (kerbW + shadowW)) / 2],
+          ],
+          kerbW,
+          { color: rgba("#000000", 0.28), cap: "butt" },
         );
-        ctx.lineTo(
-          b[0] + (nb[0] * (kerbW + shadowW)) / 2,
-          b[1] + (nb[1] * (kerbW + shadowW)) / 2,
-        );
-        ctx.stroke();
       } else if (t === "lowered" || tPrev === "lowered") {
         // gradient across the kerb width: bright (sidewalk, left) fading
-        // to dark (road, right) — appears 3D-shaped
-        const mx = (a[0] + b[0]) / 2,
-          my = (a[1] + b[1]) / 2;
-        const nmx = (na[0] + nb[0]) / 2,
-          nmy = (na[1] + nb[1]) / 2;
-        const grad = ctx.createLinearGradient(
-          mx - (nmx * kerbW) / 2,
-          my - (nmy * kerbW) / 2,
-          mx + (nmx * kerbW) / 2,
-          my + (nmy * kerbW) / 2,
-        );
-        grad.addColorStop(0, bright);
-        grad.addColorStop(1, dark);
-        ctx.strokeStyle = grad;
-        ctx.lineWidth = kerbW;
-        ctx.beginPath();
-        ctx.moveTo(a[0], a[1]);
-        ctx.lineTo(b[0], b[1]);
-        ctx.stroke();
+        // to dark (road, right) — appears 3D-shaped; per-vertex colors on
+        // the two strip edges reproduce the linear gradient
+        g.stroke([a, b], kerbW, { color: bright, colorPos: dark, cap: "butt" });
       }
     }
-    ctx.lineCap = "round";
   }
 }
 
@@ -1012,10 +837,10 @@ function kerbsInBbox(bbox: [number, number, number, number]): KerbFeature[] {
 function drawZebra(cr: LineFeature, widthM: number, color: string) {
   const px = pxPerMeter();
   const halfW = (widthM * px) / 2;
-  ctx.strokeStyle = color;
-  ctx.lineWidth = Math.max(1.2, widthM * px * 0.14);
-  const stripeGap = Math.max(widthM * px * 0.22, 3);
+  const lineW = Math.max(pxToWorld(1.2), widthM * px * 0.14);
+  const stripeGap = Math.max(widthM * px * 0.22, pxToWorld(3));
 
+  const segs: Pt[][] = [];
   let walked = 0;
   for (let i = 1; i < cr.coords.length; i++) {
     const [x0, y0] = cr.coords[i - 1];
@@ -1035,14 +860,15 @@ function drawZebra(cr: LineFeature, widthM: number, color: string) {
     while (t < segLen) {
       const cxp = X0 + ux * t,
         cyp = Y0 + uy * t;
-      ctx.beginPath();
-      ctx.moveTo(cxp + nx * halfW, cyp + ny * halfW);
-      ctx.lineTo(cxp - nx * halfW, cyp - ny * halfW);
-      ctx.stroke();
+      segs.push([
+        [cxp + nx * halfW, cyp + ny * halfW],
+        [cxp - nx * halfW, cyp - ny * halfW],
+      ]);
       t += stripeGap;
     }
     walked += segLen;
   }
+  g.strokeSegments(segs, lineW, rgba(color));
 }
 
 /**
@@ -1054,15 +880,15 @@ function drawZebra(cr: LineFeature, widthM: number, color: string) {
 function drawBoundaryDashes(cr: LineFeature, widthM: number, color: string) {
   const px = pxPerMeter();
   const halfW = (widthM * px) / 2;
-  const lineW = Math.max(1, 0.1 * px);
+  const lineW = Math.max(pxToWorld(1), 0.1 * px);
   const offset = Math.max(0, halfW - lineW / 2);
-  ctx.strokeStyle = color;
-  ctx.lineWidth = lineW;
-  ctx.setLineDash([Math.max(4, 0.5 * px), Math.max(3, 0.35 * px)]);
-  ctx.lineCap = "butt";
+  const dash: [number, number] = [
+    Math.max(pxToWorld(4), 0.5 * px),
+    Math.max(pxToWorld(3), 0.35 * px),
+  ];
 
-  const pts: [number, number][] = [];
-  const normals: [number, number][] = [];
+  const pts: Pt[] = [];
+  const normals: Pt[] = [];
   for (let i = 0; i < cr.coords.length; i++) {
     pts.push([lonToX(cr.coords[i][0] / Q), latToY(cr.coords[i][1] / Q)]);
     if (i > 0) {
@@ -1074,7 +900,7 @@ function drawBoundaryDashes(cr: LineFeature, widthM: number, color: string) {
   }
 
   for (const side of [-1, 1] as const) {
-    ctx.beginPath();
+    const off: Pt[] = [];
     for (let i = 0; i < pts.length; i++) {
       let nx: number, ny: number;
       if (i === 0) {
@@ -1087,14 +913,10 @@ function drawBoundaryDashes(cr: LineFeature, widthM: number, color: string) {
         const bl = Math.hypot(nx1 + nx2, ny1 + ny2);
         [nx, ny] = bl === 0 ? [nx1, ny1] : [(nx1 + nx2) / bl, (ny1 + ny2) / bl];
       }
-      const ox = pts[i][0] + nx * offset * side,
-        oy = pts[i][1] + ny * offset * side;
-      if (i === 0) ctx.moveTo(ox, oy);
-      else ctx.lineTo(ox, oy);
+      off.push([pts[i][0] + nx * offset * side, pts[i][1] + ny * offset * side]);
     }
-    ctx.stroke();
+    g.stroke(off, lineW, { color: rgba(color), dash, cap: "butt" });
   }
-  ctx.setLineDash([]);
 }
 
 function cellsForBbox(
@@ -1121,20 +943,20 @@ function areaById(id: string): AreaFeature | null {
   return null;
 }
 
-/** build a canvas clip path from an area's rings; returns false if not found */
+/** push a stencil clip from area rings onto the GL batch; false if not found */
 function clipToAreas(areaIds: string[] | undefined): boolean {
   if (!areaIds || areaIds.length === 0) return false;
   const found = areaIds
     .map((id) => areaById(id))
     .filter((a) => a !== null) as AreaFeature[];
   if (found.length === 0) return false;
-  ctx.save();
-  ctx.beginPath();
+  const outer: Pt[][] = [],
+    holes: Pt[][] = [];
   for (const area of found) {
-    for (const ring of area.outer) drawRing(ring, true);
-    for (const hole of area.holes) drawRing(hole, true);
+    for (const ring of area.outer) outer.push(ringPts(ring));
+    for (const hole of area.holes) holes.push(ringPts(hole));
   }
-  ctx.clip("evenodd");
+  g.pushClip(outer, holes);
   return true;
 }
 
@@ -1178,15 +1000,13 @@ function chaikin(pts: [number, number][], iterations = 2): [number, number][] {
 function drawLaneMarkings(cl: LineFeature) {
   if (cl.lanes === undefined || cl.laneW === undefined || cl.lanes! < 2) return;
   const px = pxPerMeter();
-  const lineW = Math.max(1, 0.12 * px);
+  const lineW = Math.max(pxToWorld(1), 0.12 * px);
   // forward lane count EXACTLY like the extractor's fwdOf: a one-way
   // road runs ALL its lanes forward — the bidirectional fallback here
   // misread one-way roads and misplaced the middle line and the turn
   // arrows' lane mapping
   const fwd = cl.lanesFwd ?? (cl.oneway ? cl.lanes : Math.ceil(cl.lanes / 2));
   const total = cl.lanes;
-  ctx.lineWidth = lineW;
-  ctx.lineCap = "round";
 
   // centerline in screen coordinates
   const base: [number, number][] = cl.coords.map((c) => [
@@ -1340,22 +1160,16 @@ function drawLaneMarkings(cl: LineFeature) {
     // the piece-wise linear polyline through the same offset samples
     // exactly as extracted — crisp segments, no interpolation
     const smooth = linear ? pts : chaikin(pts, 2);
-    ctx.strokeStyle = "#e8e8e8";
-    if (!solid)
-      ctx.setLineDash([Math.max(3, 1.2 * px), Math.max(2, 1.0 * px)]);
-    ctx.beginPath();
-    ctx.moveTo(smooth[0][0], smooth[0][1]);
-    for (let i = 1; i < smooth.length; i++)
-      ctx.lineTo(smooth[i][0], smooth[i][1]);
-    ctx.stroke();
-    if (!solid) ctx.setLineDash([]);
+    g.stroke(smooth, lineW, {
+      color: rgba("#e8e8e8"),
+      dash: solid
+        ? undefined
+        : [Math.max(pxToWorld(3), 1.2 * px), Math.max(pxToWorld(2), 1.0 * px)],
+      cap: "round",
+    });
     if (samplesOnly) {
-      ctx.fillStyle = "#ff3355";
-      for (const p of pts) {
-        ctx.beginPath();
-        ctx.arc(p[0], p[1], 2, 0, Math.PI * 2);
-        ctx.fill();
-      }
+      const dot = rgba("#ff3355");
+      for (const p of pts) g.circle(p, pxToWorld(2), dot);
     }
   };
 
@@ -1372,14 +1186,11 @@ function drawLaneMarkings(cl: LineFeature) {
       p[1] + normals[i][1] * offPx,
     ]);
     const smooth = chaikin(offset, 2);
-    ctx.strokeStyle = "#e8e8e8";
-    ctx.setLineDash([Math.max(3, 1.2 * px), Math.max(2, 1.0 * px)]);
-    ctx.beginPath();
-    ctx.moveTo(smooth[0][0], smooth[0][1]);
-    for (let i = 1; i < smooth.length; i++)
-      ctx.lineTo(smooth[i][0], smooth[i][1]);
-    ctx.stroke();
-    ctx.setLineDash([]);
+    g.stroke(smooth, lineW, {
+      color: rgba("#e8e8e8"),
+      dash: [Math.max(pxToWorld(3), 1.2 * px), Math.max(pxToWorld(2), 1.0 * px)],
+      cap: "round",
+    });
   }
   if (hasSpline && sp && !samplesOnly) {
     // parking boundaries sit at the block's outer edges — the SAME
@@ -1425,19 +1236,12 @@ function drawLaneMarkings(cl: LineFeature) {
   // area and the junction area (not necessarily orthogonal to the road),
   // already clipped to the lanes flowing into the signal
   if (cl.stopLinesQ && !samplesOnly) {
-    ctx.strokeStyle = "#e8e8e8";
-    ctx.setLineDash([]);
-    ctx.lineWidth = Math.max(2, 0.4 * px);
     for (const line of cl.stopLinesQ) {
       if (line.length < 2) continue;
-      ctx.beginPath();
-      ctx.moveTo(lonToX(line[0][0] / Q), latToY(line[0][1] / Q));
-      for (let i = 1; i < line.length; i++) {
-        ctx.lineTo(lonToX(line[i][0] / Q), latToY(line[i][1] / Q));
-      }
-      ctx.stroke();
+      g.stroke(linePts(line), Math.max(pxToWorld(2), 0.4 * px), {
+        color: rgba("#e8e8e8"),
+      });
     }
-    ctx.lineWidth = lineW;
   }
   if (!samplesOnly) drawTurnArrows(cl);
 }
@@ -1568,12 +1372,7 @@ function drawTurnArrows(cl: LineFeature) {
       cx + ux * fwd + nx * left,
       cy + uy * fwd + ny * left,
     ];
-    ctx.strokeStyle = "#e8e8e8";
-    ctx.fillStyle = "#e8e8e8";
-    ctx.setLineDash([]);
-    ctx.lineWidth = shaftW;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
+    const arrowCol = rgba("#e8e8e8");
     // SCREEN SPACE has y pointing down, so a geographic LEFT turn is a
     // NEGATIVE math rotation here — left/slight_left/sharp_left take
     // negative angles, the right variants positive
@@ -1623,33 +1422,23 @@ function drawTurnArrows(cl: LineFeature) {
         p[0] + tx * headLen,
         p[1] + ty * headLen,
       ];
-      ctx.beginPath();
-      ctx.moveTo(b1[0], b1[1]);
-      ctx.lineTo(tip[0], tip[1]);
-      ctx.lineTo(b2[0], b2[1]);
-      ctx.closePath();
-      ctx.fill();
+      g.fillPolygon([[b1, tip, b2]], [], { color: arrowCol });
     };
     if (dirs.length === 1 && dirs[0] === Math.PI) {
       // REVERSE: straight shaft, then a U-shaped hook turning
       // back; the head points backwards at the hook's end
       const r = Math.min(lanePx * 0.18, len * 0.22);
       const fEnd = len / 2 - r * 2;
-      ctx.beginPath();
-      const p0 = loc(-len / 2, 0);
-      ctx.moveTo(p0[0], p0[1]);
-      const pA = loc(fEnd, 0);
-      ctx.lineTo(pA[0], pA[1]);
+      const hook: Pt[] = [loc(-len / 2, 0), loc(fEnd, 0)];
       // semicircle: from direction (1,0) turning to (-1,0) in the
       // local frame, approximated with segments; the hook bends LEFT
       // of the driving direction (nx is the right vector -> negative
       // lateral)
       for (let k = 1; k <= 10; k++) {
         const t = (k / 10) * Math.PI;
-        const p = loc(fEnd + r * Math.sin(t), -r * (1 - Math.cos(t)));
-        ctx.lineTo(p[0], p[1]);
+        hook.push(loc(fEnd + r * Math.sin(t), -r * (1 - Math.cos(t))));
       }
-      ctx.stroke();
+      g.stroke(hook, shaftW, { color: arrowCol, cap: "round" });
       const hp = loc(fEnd, -2 * r);
       drawHead(hp, -ux, -uy);
       return;
@@ -1663,10 +1452,7 @@ function drawTurnArrows(cl: LineFeature) {
       const shaftTop = through ? len / 2 - headLen : len / 2 - headLen * 0.5;
       const p0 = loc(-len / 2, 0);
       const pTop = loc(shaftTop, 0);
-      ctx.beginPath();
-      ctx.moveTo(p0[0], p0[1]);
-      ctx.lineTo(pTop[0], pTop[1]);
-      ctx.stroke();
+      g.stroke([p0, pTop], shaftW, { color: arrowCol, cap: "round" });
       if (through) drawHead(loc(len / 2 - headLen, 0), ux, uy);
       for (const angle of turns2) {
         // branch: from the shaft's upper end diagonally into the
@@ -1691,10 +1477,7 @@ function drawTurnArrows(cl: LineFeature) {
           fork[0] + (ux * ex - uy * ey) * dBranch,
           fork[1] + (ux * ey + uy * ex) * dBranch,
         ];
-        ctx.beginPath();
-        ctx.moveTo(fork[0], fork[1]);
-        ctx.lineTo(P2[0], P2[1]);
-        ctx.stroke();
+        g.stroke([fork, P2], shaftW, { color: arrowCol, cap: "round" });
         drawHead(P2, ux * ex - uy * ey, ux * ey + uy * ex);
       }
       return;
@@ -1703,10 +1486,7 @@ function drawTurnArrows(cl: LineFeature) {
     {
       const p0 = loc(-len / 2, 0);
       const pTop = loc(len / 2 - headLen, 0);
-      ctx.beginPath();
-      ctx.moveTo(p0[0], p0[1]);
-      ctx.lineTo(pTop[0], pTop[1]);
-      ctx.stroke();
+      g.stroke([p0, pTop], shaftW, { color: arrowCol, cap: "round" });
       drawHead(loc(len / 2 - headLen, 0), ux, uy);
     }
   };
@@ -1799,32 +1579,56 @@ function pointAndDirAtArc(
 }
 
 // ---------------- interaction ----------------
-let dragging = false;
+// Google Earth style: left-drag pans, wheel zooms to the cursor,
+// right/middle-drag (or ctrl+drag) orbits heading+pitch, click picks.
+let dragMode = 0; // 0 = none, 1 = pan, 2 = orbit
 let lastX = 0,
   lastY = 0;
 let moved = 0;
 
 canvas.addEventListener("mousedown", (e) => {
-  dragging = true;
+  dragMode = e.button === 2 || e.button === 1 || e.ctrlKey ? 2 : 1;
   moved = 0;
   lastX = e.clientX;
   lastY = e.clientY;
   canvas.classList.add("dragging");
+  if (e.button === 2 || e.button === 1) e.preventDefault();
 });
+canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+
+function setViewFromWorld(tx: number, ty: number): void {
+  view.cx = xToLon(tx);
+  view.cy = yToLat(ty);
+}
+
 window.addEventListener("mousemove", (e) => {
-  if (!dragging) return;
+  if (!dragMode) return;
   const dx = e.clientX - lastX,
     dy = e.clientY - lastY;
   moved += Math.abs(dx) + Math.abs(dy);
   lastX = e.clientX;
   lastY = e.clientY;
-  const r = R();
-  view.cx -= (dx / r) * (180 / Math.PI);
-  view.cy += (dy / r) * (180 / Math.PI) * Math.cos((view.cy * Math.PI) / 180);
+  if (dragMode === 2) {
+    // orbit: horizontal drag turns heading, vertical drag tilts pitch
+    cam.heading += dx * 0.005;
+    cam.pitch = Math.max(0, Math.min(1.45, cam.pitch - dy * 0.005));
+  } else {
+    // pan: move the ground target opposite to the drag so the map follows
+    // the cursor (camera right / ground-projected up axes)
+    const s = view.scale / 2000;
+    const r = g.groundRight(),
+      u = g.groundUp();
+    const tx = lonToX(view.cx),
+      ty = latToY(view.cy);
+    setViewFromWorld(
+      tx - (dx * r[0] - dy * u[0]) / s,
+      ty - (dx * r[1] - dy * u[1]) / s,
+    );
+  }
   requestDraw();
 });
 window.addEventListener("mouseup", () => {
-  dragging = false;
+  dragMode = 0;
   canvas.classList.remove("dragging");
 });
 
@@ -1832,8 +1636,34 @@ canvas.addEventListener(
   "wheel",
   (e) => {
     e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left,
+      my = e.clientY - rect.top;
     const factor = Math.exp(-e.deltaY * 0.0015);
-    view.scale = Math.max(500, Math.min(3_000_000, view.scale * factor));
+    const newScale = Math.max(500, Math.min(3_000_000, view.scale * factor));
+    if (newScale === view.scale) return;
+    // zoom towards the cursor: remember the ground point under it
+    const under = g.screenToWorld(mx, my);
+    view.scale = newScale;
+    if (under) {
+      g.setCamera(
+        lonToX(view.cx),
+        latToY(view.cy),
+        newScale,
+        cam.heading,
+        cam.pitch,
+      );
+      const p = g.worldToScreen(under);
+      const s2 = newScale / 2000;
+      const r = g.groundRight(),
+        u = g.groundUp();
+      const tx = lonToX(view.cx),
+        ty = latToY(view.cy);
+      setViewFromWorld(
+        tx + ((p[0] - mx) / s2) * r[0] + ((my - p[1]) / s2) * u[0],
+        ty + ((p[0] - mx) / s2) * r[1] + ((my - p[1]) / s2) * u[1],
+      );
+    }
     requestDraw();
     statusEl.textContent = `zoom ${zoomLevel().toFixed(1)} (scale ${Math.round(view.scale)}) · ${__COMMIT__}`;
   },
@@ -1844,16 +1674,22 @@ canvas.addEventListener(
 canvas.addEventListener("click", (e) => {
   if (moved > 6 || !dataset) return;
   const rect = canvas.getBoundingClientRect();
-  const px = e.clientX - rect.left,
-    py = e.clientY - rect.top;
+  const mx = e.clientX - rect.left,
+    my = e.clientY - rect.top;
+  const gp = g.screenToWorld(mx, my);
+  if (!gp) return;
   const bbox = viewBboxQ();
-  const feature = pickFeature(px, py, bbox);
+  const feature = pickFeature(
+    Math.round(xToLon(gp[0]) * Q),
+    Math.round(yToLat(gp[1]) * Q),
+    bbox,
+  );
   showInfo(feature);
 });
 
 function pickFeature(
-  px: number,
-  py: number,
+  lonQ: number,
+  latQ: number,
   bbox: [number, number, number, number],
 ):
   | (
@@ -1872,11 +1708,6 @@ function pickFeature(
     )
   | null {
   const tol = 6;
-  const lon = view.cx + (((px - canvas.width / 2) / R()) * 180) / Math.PI;
-  const mercC = mercY(view.cy) - (py - canvas.height / 2) / R();
-  const lat = ((2 * Math.atan(Math.exp(mercC)) - Math.PI / 2) * 180) / Math.PI;
-  const lonQ = Math.round(lon * Q),
-    latQ = Math.round(lat * Q);
   const tolQ = Math.round((tol / view.scale) * Q);
 
   // areas: point-in-polygon
@@ -2675,10 +2506,12 @@ viewFromUrl();
 
 // ---------------- URL viewport sync ----------------
 
-/** write the current viewport (center + zoom) into the URL hash */
+/** write the current viewport (zoom, center, heading, pitch) into the URL hash */
 function syncUrl(): void {
   const z = zoomLevel().toFixed(2);
-  const hash = `#map=${z}/${view.cy.toFixed(6)}/${view.cx.toFixed(6)}`;
+  const hdg = ((cam.heading * 180) / Math.PI).toFixed(1);
+  const pitch = ((cam.pitch * 180) / Math.PI).toFixed(1);
+  const hash = `#map=${z}/${view.cy.toFixed(6)}/${view.cx.toFixed(6)}/${hdg}/${pitch}`;
   if (location.hash !== hash) {
     history.replaceState(null, "", hash);
   }
@@ -2686,7 +2519,9 @@ function syncUrl(): void {
 
 /** restore the viewport from the URL hash; false when absent/invalid */
 function viewFromUrl(): boolean {
-  const m = /^#map=([\d.]+)\/(-?[\d.]+)\/(-?[\d.]+)$/.exec(location.hash);
+  const m = /^#map=([\d.]+)\/(-?[\d.]+)\/(-?[\d.]+)(?:\/(-?[\d.]+)\/(-?[\d.]+))?$/.exec(
+    location.hash,
+  );
   if (!m) return false;
   const z = parseFloat(m[1]);
   const lat = parseFloat(m[2]);
@@ -2699,6 +2534,14 @@ function viewFromUrl(): boolean {
   // zoom -> scale: invert zoomLevel() = log2(scale/1200)*2 + 11
   const scale = 1200 * Math.pow(2, (z - 11) / 2);
   view = { cx: lon, cy: lat, scale: Math.max(500, Math.min(3_000_000, scale)) };
+  if (m[4] !== undefined && m[5] !== undefined) {
+    const hdg = parseFloat(m[4]);
+    const pitch = parseFloat(m[5]);
+    if (Number.isFinite(hdg) && Number.isFinite(pitch)) {
+      cam.heading = (hdg * Math.PI) / 180;
+      cam.pitch = Math.max(0, Math.min(1.45, (pitch * Math.PI) / 180));
+    }
+  }
   return true;
 }
 
@@ -2797,7 +2640,7 @@ function loadPbfFile(file: File) {
 }
 
 function ingestResult(result: ExtractResult, name: string) {
-  patternCache.clear();
+  g.clearPatternCache();
   const t0 = performance.now();
   osmLayers = result.layers ?? [];
   osmLevels = result.levels ?? [];
@@ -2888,7 +2731,7 @@ function ingestResult(result: ExtractResult, name: string) {
   // keep the current viewport when the URL carries one (hot-reload style
   // testing: reload, drop the PBF, land on the same spot); otherwise fit
   if (!viewFromUrl()) fitToBounds(result.bounds);
-  statusEl.textContent = `${name}: loaded ${total.toLocaleString()} features in ${((performance.now() - t0) / 1000).toFixed(1)}s — scroll to zoom, drag to pan · ${__COMMIT__}`;
+  statusEl.textContent = `${name}: loaded ${total.toLocaleString()} features in ${((performance.now() - t0) / 1000).toFixed(1)}s — scroll to zoom, drag to pan, right-drag to orbit · ${__COMMIT__}`;
   requestDraw();
 }
 
@@ -2922,8 +2765,15 @@ window.addEventListener("drop", (e) => {
   view = { cx, cy, scale };
   requestDraw();
 };
-(window as any).__pick = (px: number, py: number) =>
-  pickFeature(px, py, viewBboxQ());
+(window as any).__pick = (px: number, py: number) => {
+  const gp = g.screenToWorld(px, py);
+  if (!gp) return null;
+  return pickFeature(
+    Math.round(xToLon(gp[0]) * Q),
+    Math.round(yToLat(gp[1]) * Q),
+    viewBboxQ(),
+  );
+};
 (window as any).__state = () => ({
   hasDataset: dataset !== null,
   areas: dataset?.areas.length ?? 0,
