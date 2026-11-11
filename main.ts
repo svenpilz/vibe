@@ -2505,7 +2505,10 @@ function requestDraw() {
 }
 
 window.addEventListener("resize", requestDraw);
-viewFromUrl();
+/** whether the URL carried a viewport hash at page load — if so, the
+ *  restored view is kept on load; otherwise the first load centers on the
+ *  data bounds (a hash written by our own boot draw must not count) */
+let urlHashAtBoot = viewFromUrl();
 requestDraw();
 // when deployed with the bundled example (public/data), open straight into
 // it — the camera centers on the data bounds via fitToBounds()
@@ -2756,7 +2759,10 @@ function ingestResult(result: ExtractResult, name: string) {
   buildLayerPanel();
   // keep the current viewport when the URL carries one (hot-reload style
   // testing: reload, drop the PBF, land on the same spot); otherwise fit
-  if (!viewFromUrl()) fitToBounds(result.bounds);
+  if (!urlHashAtBoot) {
+    fitToBounds(result.bounds);
+    urlHashAtBoot = true; // later loads keep the current viewport
+  }
   statusEl.textContent = `${name}: loaded ${total.toLocaleString()} features in ${((performance.now() - t0) / 1000).toFixed(1)}s — scroll to zoom, drag to pan, right-drag to orbit · ${__COMMIT__}`;
   requestDraw();
 }
