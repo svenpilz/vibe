@@ -57,6 +57,10 @@ let cam = { heading: 0, pitch: 0 };
 
 let view: View = { cx: 10.0, cy: 51.0, scale: 2000 };
 let dataset: Dataset | null = null;
+/** bounds of the loaded dataset, quantized — the scene graph is built from
+ *  the full dataset so per-frame frustum culling (not a viewport bbox)
+ *  decides what is drawn */
+let datasetBounds: [number, number, number, number] | null = null;
 let areaIndex: Indexed<AreaFeature> | null = null;
 let buildingIndex: Indexed<BuildingFeature> | null = null;
 let grassIndex: Indexed<GrassFeature> | null = null;
@@ -391,11 +395,10 @@ function draw() {
   if (scene) g.renderScene(scene);
 }
 
-/** tessellate everything LOD-visible in the viewport into the scene graph */
+/** tessellate everything LOD-visible in the whole dataset into the scene
+ *  graph; per-frame frustum culling renders only what is on screen */
 function buildGeometry() {
-  const w = canvas.clientWidth,
-    h = canvas.clientHeight;
-  const bbox = viewBboxQ();
+  const bbox = datasetBounds ?? viewBboxQ();
 
   // Bird's eye: draw ALL classes in ascending layer order, so a higher layer
   // occludes everything below it regardless of feature class (previously
@@ -403,11 +406,10 @@ function buildGeometry() {
   // a layer-1 bridge's lane markings). Explicit layer selection draws only
   // that layer.
   const px = pxPerMeter();
-  const visible = viewportValues();
   const layersToDraw: number[] =
     selectedLayer !== null
       ? [selectedLayer]
-      : [...visible.layers].sort((a, b) => a - b);
+      : [...osmLayers].sort((a, b) => a - b);
 
   const gs =
     lodVisible("grass") && grassIndex ? queryIndex(grassIndex, bbox) : [];
@@ -649,27 +651,16 @@ function buildGeometry() {
     // --- street lamps: yellow dot with a radial halo fading out ---
     if (lodVisible("streetLamps") && streetLampGrid) {
       const halo = Math.max(pxToWorld(6), Math.min(pxToWorld(24), 2.5 * px));
-      const margin = halo + pxToWorld(10);
-      const cxw = lonToX(view.cx),
-        cyw = latToY(view.cy);
-      const hw = (w / 2) * (2000 / view.scale) + margin,
-        hh = (h / 2) * (2000 / view.scale) + margin;
-      for (const cell of cellsForBbox(bbox, 50000)) {
-        const arr = streetLampGrid.get(cell);
-        if (!arr) continue;
-        for (const sl of arr) {
-          if (!onLayer(sl)) continue;
-          const x = lonToX(sl.lon / Q),
-            y = latToY(sl.lat / Q);
-          if (x < cxw - hw || y < cyw - hh || x > cxw + hw || y > cyw + hh)
-            continue;
-          g.halo([x, y], halo, [
-            [0, rgba("rgb(255,225,120)", 0.95)],
-            [0.35, rgba("rgb(255,210,80)", 0.45)],
-            [1, rgba("rgb(255,200,60)", 0)],
-          ]);
-          g.circle([x, y], Math.max(pxToWorld(1.5), halo * 0.12), rgba("#ffe178"));
-        }
+      for (const sl of allGridValues(streetLampGrid)) {
+        if (!onLayer(sl)) continue;
+        const x = lonToX(sl.lon / Q),
+          y = latToY(sl.lat / Q);
+        g.halo([x, y], halo, [
+          [0, rgba("rgb(255,225,120)", 0.95)],
+          [0.35, rgba("rgb(255,210,80)", 0.45)],
+          [1, rgba("rgb(255,200,60)", 0)],
+        ]);
+        g.circle([x, y], Math.max(pxToWorld(1.5), halo * 0.12), rgba("#ffe178"));
       }
     }
 
@@ -677,58 +668,43 @@ function buildGeometry() {
     if (lodVisible("manholes") && manholeGrid) {
       const mr = Math.max(pxToWorld(2), Math.min(pxToWorld(10), 0.4 * px)); // ~80 cm cover
       const stripe = Math.max(pxToWorld(1), mr * 0.16);
-      const margin = pxToWorld(10);
-      const cxw = lonToX(view.cx),
-        cyw = latToY(view.cy);
-      const hw = (w / 2) * (2000 / view.scale) + margin,
-        hh = (h / 2) * (2000 / view.scale) + margin;
-      for (const cell of cellsForBbox(bbox, 50000)) {
-        const arr = manholeGrid.get(cell);
-        if (!arr) continue;
-        for (const mh of arr) {
-          if (!onLayer(mh)) continue;
-          const x = lonToX(mh.lon / Q),
-            y = latToY(mh.lat / Q);
-          if (x < cxw - hw || y < cyw - hh || x > cxw + hw || y > cyw + hh)
-            continue;
-          g.circle([x, y], mr, rgba("#2f3134"));
-          // lighter stripes across the cover
-          const segs: Pt[][] = [];
-          for (let k = -1; k <= 1; k++) {
-            const yy = y + k * mr * 0.45;
-            const half = Math.sqrt(Math.max(0, mr * mr - (k * mr * 0.45) ** 2));
-            segs.push([
-              [x - half, yy],
-              [x + half, yy],
-            ]);
-          }
-          g.strokeSegments(segs, stripe, rgba("#565a60"));
+      for (const mh of allGridValues(manholeGrid)) {
+        if (!onLayer(mh)) continue;
+        const x = lonToX(mh.lon / Q),
+          y = latToY(mh.lat / Q);
+        g.circle([x, y], mr, rgba("#2f3134"));
+        // lighter stripes across the cover
+        const segs: Pt[][] = [];
+        for (let k = -1; k <= 1; k++) {
+          const yy = y + k * mr * 0.45;
+          const half = Math.sqrt(Math.max(0, mr * mr - (k * mr * 0.45) ** 2));
+          segs.push([
+            [x - half, yy],
+            [x + half, yy],
+          ]);
         }
+        g.strokeSegments(segs, stripe, rgba("#565a60"));
       }
     }
 
     // --- bollards: black dots ---
     if (lodVisible("bollards") && bollardGrid) {
       const br = Math.max(pxToWorld(2.5), Math.min(pxToWorld(8), 0.25 * px));
-      const margin = pxToWorld(10);
-      const cxw = lonToX(view.cx),
-        cyw = latToY(view.cy);
-      const hw = (w / 2) * (2000 / view.scale) + margin,
-        hh = (h / 2) * (2000 / view.scale) + margin;
-      for (const cell of cellsForBbox(bbox, 50000)) {
-        const arr = bollardGrid.get(cell);
-        if (!arr) continue;
-        for (const b of arr) {
-          if (!onLayer(b)) continue;
-          const x = lonToX(b.lon / Q),
-            y = latToY(b.lat / Q);
-          if (x < cxw - hw || y < cyw - hh || x > cxw + hw || y > cyw + hh)
-            continue;
-          g.circle([x, y], br, rgba("#2f3134")); // dark anthracite
-        }
+      for (const b of allGridValues(bollardGrid)) {
+        if (!onLayer(b)) continue;
+        const x = lonToX(b.lon / Q),
+          y = latToY(b.lat / Q);
+        g.circle([x, y], br, rgba("#2f3134")); // dark anthracite
       }
     }
   }
+}
+
+/** all values of a point grid (the scene graph covers the whole dataset) */
+function allGridValues<T>(grid: Map<number, T[]>): T[] {
+  const out: T[] = [];
+  for (const arr of grid.values()) for (const v of arr) out.push(v);
+  return out;
 }
 
 /** kerb height class of a kerb=* value */
@@ -2691,6 +2667,7 @@ function loadPbfBuffer(buf: ArrayBuffer, name: string) {
 function ingestResult(result: ExtractResult, name: string) {
   g.clearPatternCache();
   const t0 = performance.now();
+  datasetBounds = result.bounds;
   osmLayers = result.layers ?? [];
   osmLevels = result.levels ?? [];
   selectedLayer = null;

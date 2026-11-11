@@ -379,11 +379,12 @@ your .osm.pbf (drag & drop)
   zlib-compressed PBF blobs are inflated with the web-standard `DecompressionStream`.
 - Feature geometry is quantized to 1e-7 degree integers end-to-end; typed-array stores
   hold node coordinates for large extracts.
-- Rendering uses a **scene graph** (`src/gl.ts`): geometry is tessellated once per zoom
-  band into a loose quadtree of GPU buffers (the 2D renderer's zoom-level LOD thresholds
-  decide what is baked in). Every frame only frustum-visible leaves are drawn — pan and
-  orbit at the same zoom re-cull without re-tessellating; paint order is preserved via
-  per-command depth values.
+- Rendering uses a **scene graph** (`src/gl.ts`): the full LOD-visible dataset is
+  tessellated once per zoom band into a loose quadtree of GPU buffers (the 2D renderer's
+  zoom-level LOD thresholds decide what is baked in). Every frame only frustum-visible
+  leaves are drawn — pan and orbit at the same zoom re-cull without re-tessellating;
+  paint order is preserved via per-command depth values. (Spatial indexes still serve
+  click-picking and the layer panel, which stay viewport-based.)
 
 ## Deployment
 
