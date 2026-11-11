@@ -21,6 +21,7 @@ import type {
 import { surfaceColor, normalizeSurface } from "./src/features";
 import {
   GlMap,
+  SceneGraph,
   R0,
   mercY,
   invMercY,
@@ -354,19 +355,46 @@ function grassFill(kind: string): FillSpec {
   return { pattern: { key, w: 12, h: 12 } };
 }
 
+// ---------------- scene graph ----------------
+// Geometry is tessellated into a quadtree scene graph (src/gl.ts) only when
+// the zoom band or a layer/LOD-affecting setting changes; the 2D renderer's
+// LOD logic (lodVisible/areaLodVisible on integer zoom levels) decides what
+// gets baked in. Pan/orbit at the same zoom reuses the graph and just
+// frustum-culls per frame — only visible cells are drawn.
+let scene: SceneGraph | null = null;
+let sceneKey = "";
+
+function sceneKeyOf(): string {
+  return [
+    dataset ? "ds" : "none",
+    Math.floor(zoomLevel()),
+    JSON.stringify(layers),
+    selectedLayer,
+    selectedLevel,
+    laneSmoothness,
+  ].join("|");
+}
+
 function draw() {
   const dpr = window.devicePixelRatio || 1;
   g.dpr = dpr;
+  g.setViewState(canvas.clientWidth, canvas.clientHeight, dpr);
+  g.setCamera(lonToX(view.cx), latToY(view.cy), view.scale, cam.heading, cam.pitch);
+  const key = sceneKeyOf();
+  g.beginFrame();
+  if (!scene || key !== sceneKey) {
+    g.beginRecord();
+    if (dataset) buildGeometry();
+    scene = g.finishScene();
+    sceneKey = key;
+  }
+  if (scene) g.renderScene(scene);
+}
+
+/** tessellate everything LOD-visible in the viewport into the scene graph */
+function buildGeometry() {
   const w = canvas.clientWidth,
     h = canvas.clientHeight;
-  g.setViewState(w, h, dpr);
-  g.setCamera(lonToX(view.cx), latToY(view.cy), view.scale, cam.heading, cam.pitch);
-  g.begin();
-  if (!dataset) {
-    g.end();
-    return;
-  }
-
   const bbox = viewBboxQ();
 
   // Bird's eye: draw ALL classes in ascending layer order, so a higher layer
@@ -701,7 +729,6 @@ function draw() {
       }
     }
   }
-  g.end();
 }
 
 /** kerb height class of a kerb=* value */
@@ -2503,6 +2530,10 @@ function requestDraw() {
 
 window.addEventListener("resize", requestDraw);
 viewFromUrl();
+requestDraw();
+// when deployed with the bundled example (public/data), open straight into
+// it — the camera centers on the data bounds via fitToBounds()
+void loadBundledExample();
 
 // ---------------- URL viewport sync ----------------
 
@@ -2568,6 +2599,26 @@ function fitToBounds(bounds: [number, number, number, number]) {
 let currentWorker: Worker | null = null;
 
 function loadPbfFile(file: File) {
+  file.arrayBuffer().then((buf) => loadPbfBuffer(buf, file.name));
+}
+
+/** load the bundled Berlin example (public/data) when the page is deployed
+ *  with it; false when there is none (plain drag & drop then). With no URL
+ *  hash, ingestResult falls back to fitToBounds(), so the camera centers on
+ *  the loaded data and something is visible immediately. */
+async function loadBundledExample(): Promise<boolean> {
+  try {
+    const res = await fetch("data/berlin-example.osm.pbf");
+    if (!res.ok) return false;
+    const buf = await res.arrayBuffer();
+    loadPbfBuffer(buf, "berlin-example.osm.pbf");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function loadPbfBuffer(buf: ArrayBuffer, name: string) {
   if (currentWorker) currentWorker.terminate();
   const worker = new Worker(new URL("./src/worker.ts", import.meta.url), {
     type: "module",
@@ -2584,9 +2635,9 @@ function loadPbfFile(file: File) {
   dropzone.style.display = "none";
   pbar.style.display = "block";
   spinner.style.display = "block";
-  spinnerTxt.textContent = `loading ${file.name}…`;
+  spinnerTxt.textContent = `loading ${name}…`;
   document.getElementById("layers")!.style.display = "none";
-  statusEl.textContent = `loading ${file.name} (${(file.size / 1e6).toFixed(1)} MB)…`;
+  statusEl.textContent = `loading ${name} (${(buf.byteLength / 1e6).toFixed(1)} MB)…`;
 
   worker.onmessage = (e: MessageEvent) => {
     const m = e.data;
@@ -2600,7 +2651,7 @@ function loadPbfFile(file: File) {
       (worker as unknown as { __timings: unknown[] }).__timings = m.timings;
     } else if (m.type === "done") {
       const t1 = performance.now();
-      ingestResult(m.result as ExtractResult, file.name);
+      ingestResult(m.result as ExtractResult, name);
       const t2 = performance.now();
       const timings = (m.timings ?? []) as { step: string; sec: number }[];
       const pbfMs = (timings.find((t) => t.step === "parse PBF")?.sec ?? 0) * 1000;
@@ -2609,7 +2660,7 @@ function loadPbfFile(file: File) {
         .reduce((sum, t) => sum + t.sec * 1000, 0);
       timings.push({ step: "main: ingest + index", sec: (t2 - t1) / 1000 });
       timings.push({ step: "TOTAL", sec: (t2 - loadStart) / 1000 });
-      console.group(`load ${file.name}: step runtimes (ms)`);
+      console.group(`load ${name}: step runtimes (ms)`);
       for (const { step, sec } of timings)
         console.log(`${step.padEnd(48)} ${(sec * 1000).toFixed(0)} ms`);
       console.groupEnd();
@@ -2634,9 +2685,7 @@ function loadPbfFile(file: File) {
     }
   };
 
-  file.arrayBuffer().then((buf) => {
-    worker.postMessage({ type: "parse", buffer: buf, name: file.name }, [buf]);
-  });
+  worker.postMessage({ type: "parse", buffer: buf, name }, [buf]);
 }
 
 function ingestResult(result: ExtractResult, name: string) {
@@ -2776,6 +2825,7 @@ window.addEventListener("drop", (e) => {
 };
 (window as any).__state = () => ({
   hasDataset: dataset !== null,
+  sceneCmds: scene?.totalCmds ?? -1,
   areas: dataset?.areas.length ?? 0,
   buildings: dataset?.buildings.length ?? 0,
   grass: dataset?.grass.length ?? 0,

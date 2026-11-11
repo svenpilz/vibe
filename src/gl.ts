@@ -344,6 +344,10 @@ export function stoneTileData(surface: string): TileData | null {
 }
 
 // ---------------- renderer ----------------
+// Scene-graph renderer: geometry is recorded once per zoom band into a loose
+// quadtree (SceneGraph); each frame only frustum-visible leaves are drawn.
+// Paint order (the 2D renderer's draw order) is preserved through the depth
+// buffer: every recorded command gets a unique z = order/total.
 
 export type FillSpec =
   | { color: RGBA }
@@ -363,6 +367,209 @@ interface Cmd {
   pattern: { key: string; w: number; h: number } | null;
   clip: number | null;
   mask: { outer: Pt[][]; holes: Pt[][] } | null;
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+interface DrawRange {
+  start: number;
+  count: number;
+  pattern: string | null;
+  z: number;
+  clip: number | null;
+  mask: MaskRange | null;
+}
+
+interface MaskRange {
+  outer: { start: number; count: number };
+  holes: { start: number; count: number };
+}
+
+const MAX_ITEMS_PER_LEAF = 48;
+const MIN_LEAF_HALF = 256; // world units
+
+class SceneNode {
+  children: SceneNode[] | null = null;
+  items: Cmd[] = [];
+  // leaf GPU data
+  vao: WebGLVertexArrayObject | null = null;
+  buf: WebGLBuffer | null = null;
+  ranges: DrawRange[] = [];
+  clipMasks = new Map<number, MaskRange>();
+  // loose bounds (cell expanded by its half size on each side)
+  constructor(
+    public cx: number,
+    public cy: number,
+    public half: number,
+  ) {}
+  loose(): [number, number, number, number] {
+    return [this.cx - 2 * this.half, this.cy - 2 * this.half, this.cx + 2 * this.half, this.cy + 2 * this.half];
+  }
+  contains(x0: number, y0: number, x1: number, y1: number): boolean {
+    const [lx0, ly0, lx1, ly1] = this.loose();
+    return x0 >= lx0 && y0 >= ly0 && x1 <= lx1 && y1 <= ly1;
+  }
+  insert(cmd: Cmd, root: SceneNode): void {
+    let node: SceneNode = root;
+    for (;;) {
+      if (node.children) {
+        const [x0, y0, x1, y1] = [cmd.minX, cmd.minY, cmd.maxX, cmd.maxY];
+        const child = node.children.find((c) => c.contains(x0, y0, x1, y1));
+        if (child) {
+          node = child;
+          continue;
+        }
+      }
+      node.items.push(cmd);
+      if (
+        !node.children &&
+        node.items.length > MAX_ITEMS_PER_LEAF &&
+        node.half > MIN_LEAF_HALF
+      ) {
+        const h = node.half / 2;
+        node.children = [
+          new SceneNode(node.cx - h, node.cy - h, h),
+          new SceneNode(node.cx + h, node.cy - h, h),
+          new SceneNode(node.cx - h, node.cy + h, h),
+          new SceneNode(node.cx + h, node.cy + h, h),
+        ];
+        const rest: Cmd[] = [];
+        for (const it of node.items) {
+          const child = node.children.find((c) =>
+            c.contains(it.minX, it.minY, it.maxX, it.maxY),
+          );
+          if (child) child.items.push(it);
+          else rest.push(it);
+        }
+        node.items = rest;
+      }
+      return;
+    }
+  }
+}
+
+export class SceneGraph {
+  root: SceneNode;
+  totalCmds = 0;
+  constructor(
+    public gl: WebGL2RenderingContext,
+    cmds: Cmd[],
+    verts: Float32Array,
+    clipRefs: Map<number, { outer: Pt[][]; holes: Pt[][] }>,
+  ) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const c of cmds) {
+      x0 = Math.min(x0, c.minX); y0 = Math.min(y0, c.minY);
+      x1 = Math.max(x1, c.maxX); y1 = Math.max(y1, c.maxY);
+    }
+    if (!Number.isFinite(x0)) { x0 = 0; y0 = 0; x1 = 1; y1 = 1; }
+    const pad = Math.max(x1 - x0, y1 - y0, 1) * 0.05 + 1;
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+    const half = Math.max((x1 - x0) / 2, (y1 - y0) / 2) + pad;
+    this.root = new SceneNode(cx, cy, half);
+    this.totalCmds = cmds.length;
+    for (const c of cmds) this.root.insert(c, this.root);
+    this.uploadAll(cmds, verts, clipRefs);
+  }
+
+  private triangulateMask(
+    outer: Pt[][],
+    holes: Pt[][],
+    data: number[],
+  ): MaskRange {
+    const pushRingTris = (rings: Pt[][]): { start: number; count: number } => {
+      const start = data.length / 8;
+      for (const ring of rings) {
+        const tris = earclip(ring);
+        for (let i = 0; i < tris.length; i += 3)
+          for (const idx of [tris[i], tris[i + 1], tris[i + 2]]) {
+            const p = ring[idx];
+            data.push(p[0], p[1], 1, 1, 1, 1, 0, 0);
+          }
+      }
+      return { start, count: data.length / 8 - start };
+    };
+    return { outer: pushRingTris(outer), holes: pushRingTris(holes) };
+  }
+
+  private uploadAll(
+    cmds: Cmd[],
+    verts: Float32Array,
+    clipRefs: Map<number, { outer: Pt[][]; holes: Pt[][] }>,
+  ): void {
+    const gl = this.gl;
+    const cmdOrder = new Map<Cmd, number>();
+    cmds.forEach((c, i) => cmdOrder.set(c, i));
+    const walk = (node: SceneNode): void => {
+      if (node.children) {
+        for (const c of node.children) walk(c);
+        return;
+      }
+      if (node.items.length === 0) return;
+      const data: number[] = [];
+      for (const cmd of node.items) {
+        const start = data.length / 8;
+        for (let i = cmd.start * 8; i < (cmd.start + cmd.count) * 8; i++)
+          data.push(verts[i]);
+        const range: DrawRange = {
+          start,
+          count: cmd.count,
+          pattern: cmd.pattern ? cmd.pattern.key : null,
+          z: (cmdOrder.get(cmd)! + 0.5) / Math.max(1, this.totalCmds),
+          clip: cmd.clip,
+          mask: null,
+        };
+        if (cmd.mask) range.mask = this.triangulateMask(cmd.mask.outer, cmd.mask.holes, data);
+        if (cmd.clip !== null && !node.clipMasks.has(cmd.clip)) {
+          const clip = clipRefs.get(cmd.clip);
+          if (clip)
+            node.clipMasks.set(cmd.clip, this.triangulateMask(clip.outer, clip.holes, data));
+        }
+        node.ranges.push(range);
+      }
+      node.buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, node.buf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
+      node.vao = gl.createVertexArray();
+    };
+    walk(this.root);
+  }
+}
+
+/** frustum planes (a,b,c,d with ax+by+cz+d>=0 inside) from a column-major mvp */
+function frustumPlanes(m: Float32Array): number[][] {
+  const r = (i: number) => [m[i], m[4 + i], m[8 + i], m[12 + i]];
+  const r0 = r(0), r1 = r(1), r2 = r(2), r3 = r(3);
+  const combos: number[][] = [];
+  for (const [a, b] of [
+    [r3, r0], [r3, r1], [r3, r2],
+  ] as const) {
+    combos.push(a.map((v, i) => v + b[i]));
+    combos.push(a.map((v, i) => v - b[i]));
+  }
+  return combos.map((p) => {
+    const l = Math.hypot(p[0], p[1], p[2]) || 1;
+    return [p[0] / l, p[1] / l, p[2] / l, p[3] / l];
+  });
+}
+
+/** is the z=0 AABB visible against the frustum? */
+function aabbVisible(
+  planes: number[][],
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+): boolean {
+  for (const [a, b, c, d] of planes) {
+    const px = a >= 0 ? x1 : x0;
+    const py = b >= 0 ? y1 : y0;
+    if (a * px + b * py + d < 0) return false; // z = 0
+    void c;
+  }
+  return true;
 }
 
 const FOVY = (60 * Math.PI) / 180;
@@ -371,10 +578,13 @@ export class GlMap {
   readonly canvas: HTMLCanvasElement;
   private gl: WebGL2RenderingContext;
   private prog: WebGLProgram;
-  private buf: WebGLBuffer;
-  private maskBuf: WebGLBuffer;
   private uMvp: WebGLUniformLocation;
+  private uZ: WebGLUniformLocation;
   private uUseTex: WebGLUniformLocation;
+  private uTex: WebGLUniformLocation;
+  private aPos: number;
+  private aColor: number;
+  private aUv: number;
   private verts = new Float32Array(1 << 16);
   private vertCount = 0;
   private cmds: Cmd[] = [];
@@ -408,10 +618,12 @@ export class GlMap {
 
     const vs = `#version 300 es
 in vec2 a_pos; in vec4 a_color; in vec2 a_uv;
-uniform mat4 u_mvp;
+uniform mat4 u_mvp; uniform float u_z;
 out vec4 v_color; out vec2 v_uv;
 void main() {
-  gl_Position = u_mvp * vec4(a_pos, 0.0, 1.0);
+  vec4 p = u_mvp * vec4(a_pos, 0.0, 1.0);
+  p.z = (u_z * 2.0 - 1.0) * p.w;
+  gl_Position = p;
   v_color = a_color; v_uv = a_uv;
 }`;
     const fs = `#version 300 es
@@ -440,12 +652,16 @@ void main() {
       throw new Error("link: " + gl.getProgramInfoLog(prog));
     this.prog = prog;
     this.uMvp = gl.getUniformLocation(prog, "u_mvp")!;
+    this.uZ = gl.getUniformLocation(prog, "u_z")!;
     this.uUseTex = gl.getUniformLocation(prog, "u_useTex")!;
-    this.buf = gl.createBuffer()!;
-    this.maskBuf = gl.createBuffer()!;
+    this.uTex = gl.getUniformLocation(prog, "u_tex")!;
+    this.aPos = gl.getAttribLocation(prog, "a_pos");
+    this.aColor = gl.getAttribLocation(prog, "a_color");
+    this.aUv = gl.getAttribLocation(prog, "a_uv");
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    gl.disable(gl.DEPTH_TEST);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
   }
 
   registerPattern(key: string, make: () => TileData | null): void {
@@ -554,19 +770,41 @@ void main() {
   }
 
   worldToScreen(p: Pt): Pt {
-    const W = this.cssW * this.dpr,
-      H = this.cssH * this.dpr;
-    // project through mvp
     const m = this.mvp;
-    const x = p[0], y = p[1], z = 0;
-    const cx = m[0] * x + m[4] * y + m[8] * z + m[12];
-    const cy = m[1] * x + m[5] * y + m[9] * z + m[13];
-    const cw = m[3] * x + m[7] * y + m[11] * z + m[15];
+    const x = p[0], y = p[1];
+    const cx = m[0] * x + m[4] * y + m[12];
+    const cy = m[1] * x + m[5] * y + m[13];
+    const cw = m[3] * x + m[7] * y + m[15];
     if (cw <= 0) return [NaN, NaN];
     return [((cx / cw) * 0.5 + 0.5) * this.cssW, (0.5 - (cy / cw) * 0.5) * this.cssH];
   }
 
-  // ---- vertex accumulation ----
+  // ---- frame + recording ----
+
+  /** clear + viewport for a new frame (call every frame) */
+  beginFrame(): void {
+    const gl = this.gl;
+    const w = Math.max(1, Math.round(this.canvas.clientWidth * this.dpr));
+    const h = Math.max(1, Math.round(this.canvas.clientHeight * this.dpr));
+    if (this.canvas.width !== w || this.canvas.height !== h) {
+      this.canvas.width = w;
+      this.canvas.height = h;
+    }
+    this.setViewState(this.canvas.clientWidth, this.canvas.clientHeight, this.dpr || 1);
+    gl.viewport(0, 0, w, h);
+    gl.clearColor(0x22 / 255, 0x22 / 255, 0x26 / 255, 1);
+    gl.clearStencil(0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.STENCIL_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  }
+
+  /** start recording geometry (scene-graph build) */
+  beginRecord(): void {
+    this.vertCount = 0;
+    this.cmds = [];
+    this.clipStack = [];
+    this.clipRefs.clear();
+    this.nextClip = 1;
+  }
 
   private pushVert(x: number, y: number, c: RGBA, u: number, v: number): void {
     if ((this.vertCount + 1) * 8 > this.verts.length) {
@@ -584,6 +822,13 @@ void main() {
     this.verts[o + 6] = u;
     this.verts[o + 7] = v;
     this.vertCount++;
+    const cmd = this.cmds[this.cmds.length - 1];
+    if (cmd) {
+      if (x < cmd.minX) cmd.minX = x;
+      if (y < cmd.minY) cmd.minY = y;
+      if (x > cmd.maxX) cmd.maxX = x;
+      if (y > cmd.maxY) cmd.maxY = y;
+    }
   }
 
   private beginCmd(): Cmd {
@@ -594,6 +839,10 @@ void main() {
       pattern: null,
       clip: top ? top.id : null,
       mask: null,
+      minX: Infinity,
+      minY: Infinity,
+      maxX: -Infinity,
+      maxY: -Infinity,
     };
     this.cmds.push(cmd);
     return cmd;
@@ -665,7 +914,6 @@ void main() {
   ): void {
     const n = pts.length;
     if (n < 2) return;
-    // per-segment unit normals (left of travel in y-up space)
     const segN: Pt[] = [];
     for (let i = 0; i < n - 1; i++) {
       const dx = pts[i + 1][0] - pts[i][0],
@@ -673,7 +921,6 @@ void main() {
       const l = Math.hypot(dx, dy);
       segN.push(l > 0 ? [-dy / l, dx / l] : [0, 0]);
     }
-    // miter outline offset per vertex
     const off: Pt[] = [];
     for (let i = 0; i < n; i++) {
       if (i === 0) off.push(segN[0]);
@@ -701,8 +948,6 @@ void main() {
     }
     if (cap === "round") {
       const K = 6;
-      // semicircle fan at `center`, bulging along `bulge` (unit), spanning
-      // from -nrm*half to +nrm*half around the bulge direction
       const capFan = (center: Pt, bulge: Pt, nrm: Pt) => {
         let prev: Pt | null = null;
         for (let k = 0; k <= K; k++) {
@@ -733,7 +978,6 @@ void main() {
     const colorPos = o.colorPos ?? o.color;
     const half = width / 2;
     if (o.dash && o.dash[0] > 0) {
-      // split into dash sub-polylines along arc length
       const [on, off] = o.dash;
       let cur: Pt[] = [pts[0]];
       let inDash = true;
@@ -839,148 +1083,102 @@ void main() {
     this.clipStack.pop();
   }
 
-  // ---- frame ----
-
-  begin(): void {
-    const gl = this.gl;
-    const w = Math.max(1, Math.round(this.canvas.clientWidth * this.dpr));
-    const h = Math.max(1, Math.round(this.canvas.clientHeight * this.dpr));
-    if (this.canvas.width !== w || this.canvas.height !== h) {
-      this.canvas.width = w;
-      this.canvas.height = h;
-    }
-    this.setViewState(this.canvas.clientWidth, this.canvas.clientHeight, this.dpr || 1);
-    gl.viewport(0, 0, w, h);
-    gl.clearColor(0x22 / 255, 0x22 / 255, 0x26 / 255, 1);
-    gl.clearStencil(0);
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
-    this.vertCount = 0;
-    this.cmds = [];
-    this.clipStack = [];
-    this.clipRefs.clear();
-    this.nextClip = 1;
+  /** build the persistent scene graph from the recorded frame */
+  finishScene(): SceneGraph {
+    return new SceneGraph(this.gl, this.cmds, this.verts.subarray(0, this.vertCount * 8), this.clipRefs);
   }
 
-  end(): void {
+  /** draw only the frustum-visible leaves of the scene graph */
+  renderScene(scene: SceneGraph): void {
     const gl = this.gl;
-    if (this.vertCount === 0) return;
+    if (scene.totalCmds === 0) return;
     gl.useProgram(this.prog);
     gl.uniformMatrix4fv(this.uMvp, false, this.mvp);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.buf);
-    gl.bufferData(gl.ARRAY_BUFFER, this.verts.subarray(0, this.vertCount * 8), gl.DYNAMIC_DRAW);
-    const stride = 32;
-    const loc = (name: string) => gl.getAttribLocation(this.prog, name);
-    const aPos = loc("a_pos"),
-      aColor = loc("a_color"),
-      aUv = loc("a_uv");
-    gl.enableVertexAttribArray(aPos);
-    gl.enableVertexAttribArray(aColor);
-    gl.enableVertexAttribArray(aUv);
-    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, stride, 0);
-    gl.vertexAttribPointer(aColor, 4, gl.FLOAT, false, stride, 8);
-    gl.vertexAttribPointer(aUv, 2, gl.FLOAT, false, stride, 24);
-
-    // Stencil state: clip masks persist in the stencil buffer until the
-    // active clip id changes; per-command hole masks (fills with holes,
-    // never combined with a clip) rebuild the buffer for that one command.
-    let curClip: number | null = null;
-    for (const cmd of this.cmds) {
-      if (cmd.clip !== curClip) {
-        gl.disable(gl.STENCIL_TEST);
-        curClip = cmd.clip;
-        if (cmd.clip !== null) {
-          const clip = this.clipRefs.get(cmd.clip);
+    const planes = frustumPlanes(this.mvp);
+    const walk = (node: SceneNode): void => {
+      const [x0, y0, x1, y1] = node.loose();
+      if (!aabbVisible(planes, x0, y0, x1, y1)) return;
+      if (node.children) {
+        for (const c of node.children) walk(c);
+        return;
+      }
+      if (!node.buf || !node.vao || node.ranges.length === 0) return;
+      gl.bindVertexArray(node.vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, node.buf);
+      gl.enableVertexAttribArray(this.aPos);
+      gl.enableVertexAttribArray(this.aColor);
+      gl.enableVertexAttribArray(this.aUv);
+      gl.vertexAttribPointer(this.aPos, 2, gl.FLOAT, false, 32, 0);
+      gl.vertexAttribPointer(this.aColor, 4, gl.FLOAT, false, 32, 8);
+      gl.vertexAttribPointer(this.aUv, 2, gl.FLOAT, false, 32, 24);
+      const drawnClips = new Set<number>();
+      for (const range of node.ranges) {
+        let stenciled = false;
+        if (range.clip !== null) {
+          const mask = node.clipMasks.get(range.clip);
+          if (mask) {
+            if (!drawnClips.has(range.clip)) {
+              gl.clearStencil(0);
+              gl.clear(gl.STENCIL_BUFFER_BIT);
+              this.drawMaskRange(mask, gl.INCR, gl.DECR);
+              drawnClips.add(range.clip);
+            }
+            gl.enable(gl.STENCIL_TEST);
+            gl.stencilFunc(gl.EQUAL, 1, 0xff);
+            gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
+            stenciled = true;
+          }
+        }
+        if (range.mask !== null) {
+          gl.disable(gl.STENCIL_TEST);
           gl.clearStencil(0);
           gl.clear(gl.STENCIL_BUFFER_BIT);
-          if (clip) this.drawMask(clip.outer, clip.holes);
+          this.drawMaskRange(range.mask, gl.INCR, gl.DECR);
           gl.enable(gl.STENCIL_TEST);
           gl.stencilFunc(gl.EQUAL, 1, 0xff);
           gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
+          stenciled = true;
         }
-      }
-      if (cmd.mask !== null) {
-        gl.disable(gl.STENCIL_TEST);
-        gl.clearStencil(0);
-        gl.clear(gl.STENCIL_BUFFER_BIT);
-        this.drawMask(cmd.mask.outer, cmd.mask.holes);
-        gl.enable(gl.STENCIL_TEST);
-        gl.stencilFunc(gl.EQUAL, 1, 0xff);
-        gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
-        curClip = null; // stencil now holds the hole mask, not a clip
-      }
-      if (cmd.pattern) {
-        const tex = this.patternTex(cmd.pattern.key);
-        if (tex) {
-          gl.activeTexture(gl.TEXTURE0);
-          gl.bindTexture(gl.TEXTURE_2D, tex);
-          gl.uniform1i(gl.getUniformLocation(this.prog, "u_tex"), 0);
-          gl.uniform1f(this.uUseTex, 1);
+        if (range.pattern) {
+          const tex = this.patternTex(range.pattern);
+          if (tex) {
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, tex);
+            gl.uniform1i(this.uTex, 0);
+            gl.uniform1f(this.uUseTex, 1);
+          } else {
+            gl.uniform1f(this.uUseTex, 0);
+          }
         } else {
           gl.uniform1f(this.uUseTex, 0);
         }
-      } else {
-        gl.uniform1f(this.uUseTex, 0);
+        gl.uniform1f(this.uZ, range.z);
+        gl.drawArrays(gl.TRIANGLES, range.start, range.count);
+        if (stenciled) gl.disable(gl.STENCIL_TEST);
       }
-      gl.drawArrays(gl.TRIANGLES, cmd.start, cmd.count);
-      if (cmd.clip !== null || cmd.mask !== null) gl.disable(gl.STENCIL_TEST);
-    }
+      gl.bindVertexArray(null);
+    };
+    walk(scene.root);
     gl.disable(gl.STENCIL_TEST);
   }
 
-  private drawMask(outer: Pt[][], holes: Pt[][]): void {
+  private drawMaskRange(
+    mask: MaskRange,
+    outerOp: number,
+    holeOp: number,
+  ): void {
     const gl = this.gl;
-    const col: RGBA = [1, 1, 1, 1];
-    const fill: FillSpec = { color: col };
-    const savedVerts = this.vertCount;
-    const savedCmds = this.cmds;
-    this.vertCount = 0;
-    this.cmds = [];
-    const cmd = this.beginCmd();
-    for (const ring of outer) {
-      const tris = earclip(ring);
-      for (let i = 0; i < tris.length; i += 3)
-        this.tri(cmd, ring[tris[i]], ring[tris[i + 1]], ring[tris[i + 2]], col, col, col, fill);
-    }
-    this.endCmd(cmd);
     gl.colorMask(false, false, false, false);
     gl.depthMask(false);
     gl.enable(gl.STENCIL_TEST);
     gl.stencilFunc(gl.ALWAYS, 1, 0xff);
-    gl.stencilOp(gl.KEEP, gl.KEEP, gl.INCR);
-    // separate buffer: the main command buffer must stay intact
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.maskBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, this.verts.subarray(0, this.vertCount * 8), gl.DYNAMIC_DRAW);
-    const stride = 32;
-    const aPos = gl.getAttribLocation(this.prog, "a_pos");
-    gl.enableVertexAttribArray(aPos);
-    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, stride, 0);
-    gl.drawArrays(gl.TRIANGLES, 0, this.vertCount);
-    // holes: decrement
-    this.vertCount = 0;
-    this.cmds = [];
-    const cmd2 = this.beginCmd();
-    for (const ring of holes) {
-      const tris = earclip(ring);
-      for (let i = 0; i < tris.length; i += 3)
-        this.tri(cmd2, ring[tris[i]], ring[tris[i + 1]], ring[tris[i + 2]], col, col, col, fill);
+    gl.stencilOp(gl.KEEP, gl.KEEP, outerOp);
+    gl.drawArrays(gl.TRIANGLES, mask.outer.start, mask.outer.count);
+    if (mask.holes.count > 0) {
+      gl.stencilOp(gl.KEEP, gl.KEEP, holeOp);
+      gl.drawArrays(gl.TRIANGLES, mask.holes.start, mask.holes.count);
     }
-    this.endCmd(cmd2);
-    if (this.vertCount > 0) {
-      gl.stencilOp(gl.KEEP, gl.KEEP, gl.DECR);
-      gl.bindBuffer(gl.ARRAY_BUFFER, this.maskBuf);
-      gl.bufferData(gl.ARRAY_BUFFER, this.verts.subarray(0, this.vertCount * 8), gl.DYNAMIC_DRAW);
-      gl.drawArrays(gl.TRIANGLES, 0, this.vertCount);
-    }
-    // restore the main buffer + attribute pointers for subsequent draws
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.buf);
-    const aColor = gl.getAttribLocation(this.prog, "a_color");
-    const aUv = gl.getAttribLocation(this.prog, "a_uv");
-    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 32, 0);
-    gl.vertexAttribPointer(aColor, 4, gl.FLOAT, false, 32, 8);
-    gl.vertexAttribPointer(aUv, 2, gl.FLOAT, false, 32, 24);
     gl.colorMask(true, true, true, true);
     gl.depthMask(true);
-    this.vertCount = savedVerts;
-    this.cmds = savedCmds;
   }
 }
