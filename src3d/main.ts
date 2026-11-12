@@ -38,6 +38,7 @@ camera.position.set(1600, 1100, 1600);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
 controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+controls.screenSpacePanning = false; // pan moves the target in the horizontal plane only, never changes its height
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.maxPolarAngle = Math.PI * 0.495;
