@@ -31,6 +31,14 @@ status bar shows the current zoom level and the deployed git commit.
 > This branch (`heightfield`) renders everything with **WebGL** — polygons are tessellated
 > on the CPU and piped to the GPU; no Canvas2D is used. Straight down (pitch 0) it looks
 > exactly like the flat 2D map; orbiting gives a Google-Earth-style 3D view.
+>
+> **Terrain displacement**: the bundled Berlin example ships a downsampled **ATKIS DGM1**
+> heightfield (`public/data/dem/`, Geoportal Berlin, EPSG:25833/DHHN2016, 10 m grid,
+> DL-DE Zero 2.0). Ground features on the lowest OSM layer (landuse, parking, grass,
+> `area:highway`) are displaced per-vertex to the DEM height, and buildings are extruded
+> from the DEM height at their footprint. Cells covered by a higher-`layer` feature
+> (bridge decks, buildings, …) are occluded "from above" and their height is interpolated
+> (Laplacian inpainting) from the surrounding visible ground cells.
 
 ## Specification
 

@@ -979,30 +979,30 @@ void main() {
 
   /** filled polygon(s) with optional holes (even-odd via stencil), at
    *  height z (world units; 0 = ground plane) */
-  fillPolygon(outer: Pt[][], holes: Pt[][], fill: FillSpec, z = 0): void {
+  fillPolygon(outer: Pt[][], holes: Pt[][], fill: FillSpec, z = 0, zAt?: (p: Pt) => number): void {
     const cmd = this.beginCmd();
     cmd.pattern = (fill as { pattern?: { key: string; w: number; h: number } }).pattern ?? null;
     if (holes.length > 0) cmd.mask = { outer, holes };
     const col = (fill as { color?: RGBA }).color ?? [1, 1, 1, 1];
     for (const ring of outer) {
       const { verts, tris } = triangulatePolygon(ring);
-      for (let i = 0; i < tris.length; i += 3)
-        this.tri(
-          cmd,
-          verts[tris[i]], verts[tris[i + 1]], verts[tris[i + 2]],
-          col, col, col,
-          fill,
-          z,
-        );
+      for (let i = 0; i < tris.length; i += 3) {
+        const a = verts[tris[i]],
+          b = verts[tris[i + 1]],
+          c = verts[tris[i + 2]];
+        if (zAt)
+          this.triZ(cmd, a, zAt(a), b, zAt(b), c, zAt(c), col, col, col, fill);
+        else this.tri(cmd, a, b, c, col, col, col, fill, z);
+      }
     }
     this.endCmd(cmd);
   }
 
   /** extruded prism: vertical walls along each outer ring edge plus a roof
    *  fill at `height` (world units). One command, so one paint-order z. */
-  extrude(outer: Pt[][], height: number, wall: RGBA, roof: RGBA): void {
+  extrude(outer: Pt[][], height: number, wall: RGBA, roof: RGBA, baseZ = 0): void {
     if (height <= 0) {
-      this.fillPolygon(outer, [], { color: roof });
+      this.fillPolygon(outer, [], { color: roof }, baseZ);
       return;
     }
     const cmd = this.beginCmd();
@@ -1013,9 +1013,9 @@ void main() {
       for (let i = 0; i < n; i++) {
         const a = ring[i],
           b = ring[(i + 1) % n];
-        // wall quad: (a,0) (b,0) (b,h) | (a,0) (b,h) (a,h)
-        this.triZ(cmd, a, 0, b, 0, b, height, wall, wall, wall, wallFill);
-        this.triZ(cmd, a, 0, b, height, a, height, wall, wall, wall, wallFill);
+        // wall quad: (a,baseZ) (b,baseZ) (b,baseZ+h) | (a,baseZ) (b,baseZ+h) (a,baseZ+h)
+        this.triZ(cmd, a, baseZ, b, baseZ, b, baseZ + height, wall, wall, wall, wallFill);
+        this.triZ(cmd, a, baseZ, b, baseZ + height, a, baseZ + height, wall, wall, wall, wallFill);
       }
       // roof at full height
       const { verts, tris } = triangulatePolygon(ring);
@@ -1025,7 +1025,7 @@ void main() {
           verts[tris[i]], verts[tris[i + 1]], verts[tris[i + 2]],
           roof, roof, roof,
           roofFill,
-          height,
+          baseZ + height,
         );
     }
     this.endCmd(cmd);

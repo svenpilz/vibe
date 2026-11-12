@@ -1,0 +1,15 @@
+{
+ "crs": "EPSG:25833",
+ "cellM": 10,
+ "originE": 376000,
+ "originN": 5809000,
+ "cols": 1400,
+ "rows": 900,
+ "heightOffsetM": 30,
+ "heightScaleM": 0.01,
+ "nodata": 65535,
+ "minHM": 27.7,
+ "maxHM": 118.82,
+ "source": "ATKIS DGM1 (1m), Geoportal Berlin gdi.berlin.de, Datenlizenz Deutschland Zero 2.0",
+ "area": "berlin-example.osm.pbf bbox + 1 km margin, downsampled to 10 m"
+}

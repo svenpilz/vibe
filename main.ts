@@ -19,6 +19,7 @@ import type {
   Q,
 } from "./src/features";
 import { surfaceColor, normalizeSurface } from "./src/features";
+import { DemField } from "./src/dem";
 import {
   GlMap,
   SceneGraph,
@@ -63,6 +64,8 @@ let cam = { heading: 0, pitch: 0 };
 
 let view: View = { cx: 10.0, cy: 51.0, scale: 2000 };
 let dataset: Dataset | null = null;
+/** terrain heightfield (DEM) for the bundled example, null when absent */
+let dem: DemField | null = null;
 /** bounds of the loaded dataset, quantized — the scene graph is built from
  *  the full dataset so per-frame frustum culling (not a viewport bbox)
  *  decides what is drawn */
@@ -423,6 +426,40 @@ function draw() {
 
 /** tessellate everything LOD-visible in the whole dataset into the scene
  *  graph; per-frame frustum culling renders only what is on screen */
+/** world-units height of the DEM at a world point (0 without DEM/coverage) */
+function demZAt(p: Pt): number {
+  if (!dem) return 0;
+  const m = dem.sampleM(xToLon(p[0]), yToLat(p[1]));
+  return m === null ? 0 : m * pxPerMeter();
+}
+
+/** rasterize occluders (buildings + higher-layer features) into the DEM grid
+ *  and inpaint the occluded cells from the surrounding visible ground, so
+ *  ground hidden under bridges/buildings gets an interpolated height */
+function setupDemOcclusion(): void {
+  if (!dem || !dataset) return;
+  const q2ll = (ring: Q[][]): [number, number][] =>
+    ring.map(([x, y]) => [x / Q, y / Q]);
+  for (const b of dataset.buildings)
+    for (const ring of b.outer) dem.occludeRing(q2ll(ring));
+  const polys = [
+    ...dataset.areas,
+    ...dataset.landuse,
+    ...dataset.parking,
+    ...dataset.grass,
+  ];
+  for (const f of polys)
+    if (f.layer > 0) for (const ring of f.outer) dem.occludeRing(q2ll(ring));
+  const lines = [
+    ...dataset.centerlines,
+    ...dataset.footways,
+    ...dataset.crossings,
+  ];
+  for (const f of lines)
+    if (f.layer > 0) dem.occludeRing(q2ll(f.coords), f.width ?? 6);
+  dem.inpaint();
+}
+
 function buildGeometry() {
   const bbox = datasetBounds ?? viewBboxQ();
 
@@ -499,7 +536,7 @@ function buildGeometry() {
         if (!onLayer(lu)) continue;
         const outer = lu.outer.map(ringPts),
           holes = lu.holes.map(ringPts);
-        g.fillPolygon(outer, holes, { color: fill });
+        g.fillPolygon(outer, holes, { color: fill }, 0, dem ? demZAt : undefined);
         for (const ring of lu.outer) g.stroke(closedRingPts(ring), seamW, { color: fill });
         for (const ring of lu.holes) g.stroke(closedRingPts(ring), seamW, { color: fill });
       }
@@ -519,7 +556,7 @@ function buildGeometry() {
         const fillSpec: FillSpec = pat ?? { color: solid };
         const outer = pk.outer.map(ringPts),
           holes = pk.holes.map(ringPts);
-        g.fillPolygon(outer, holes, fillSpec);
+        g.fillPolygon(outer, holes, fillSpec, 0, dem ? demZAt : undefined);
         for (const ring of pk.outer) g.stroke(closedRingPts(ring), seamW, { color: solid });
         for (const ring of pk.holes) g.stroke(closedRingPts(ring), seamW, { color: solid });
       }
@@ -534,7 +571,7 @@ function buildGeometry() {
       const solid = greenColor(gr.kind);
       const outer = gr.outer.map(ringPts),
         holes = gr.holes.map(ringPts);
-      g.fillPolygon(outer, holes, fillSpec);
+      g.fillPolygon(outer, holes, fillSpec, 0, dem ? demZAt : undefined);
       for (const ring of gr.outer) g.stroke(closedRingPts(ring), seamW, { color: solid });
       for (const ring of gr.holes) g.stroke(closedRingPts(ring), seamW, { color: solid });
     }
@@ -550,7 +587,7 @@ function buildGeometry() {
       const fillSpec: FillSpec = pat ?? { color: solid };
       const outer = area.outer.map(ringPts),
         holes = area.holes.map(ringPts);
-      g.fillPolygon(outer, holes, fillSpec);
+      g.fillPolygon(outer, holes, fillSpec, 0, dem ? demZAt : undefined);
       // same-color edge stroke: covers antialiased boundaries and cm-scale
       // geometric gaps between neighboring polygons so areas read as one
       // continuous surface — without letting lower layers shine through the
@@ -569,7 +606,15 @@ function buildGeometry() {
       const h = hM * px; // world units
       const wall: RGBA = [roof[0] * 0.55, roof[1] * 0.55, roof[2] * 0.55, 0.9];
       const outer = b.outer.map(ringPts);
-      g.extrude(outer, h, wall, roof);
+      // base sits on the terrain: DEM height at the footprint centroid
+      let baseZ = 0;
+      if (dem && b.outer[0]?.length) {
+        let sx = 0, sy = 0;
+        for (const [qx, qy] of b.outer[0]) { sx += qx / Q; sy += qy / Q; }
+        const m = dem.sampleM(sx / b.outer[0].length, sy / b.outer[0].length);
+        if (m !== null) baseZ = m * px;
+      }
+      g.extrude(outer, h, wall, roof, baseZ);
       const outline = rgba("#8a8a94");
       for (const ring of b.outer)
         g.stroke(closedRingPts(ring), pxToWorld(1.5), { color: outline });
@@ -2642,6 +2687,11 @@ async function loadBundledExample(): Promise<boolean> {
   try {
     const res = await fetch("data/berlin-example.osm.pbf");
     if (!res.ok) return false;
+    try {
+      dem = await DemField.load("data/dem/dgm1-berlin-example.json");
+    } catch {
+      dem = null;
+    }
     const buf = await res.arrayBuffer();
     loadPbfBuffer(buf, "berlin-example.osm.pbf");
     return true;
@@ -2783,6 +2833,7 @@ function ingestResult(result: ExtractResult, name: string) {
   }
   laneMarkingIndex = buildIndex(dataset.laneMarkings);
   stopLineIndex = buildIndex(dataset.stopLines);
+  setupDemOcclusion();
   kerbGrid = new Map();
   for (const k of dataset.kerbs) {
     const key = Math.floor(k.lon / 50000) * 100000 + Math.floor(k.lat / 50000);
