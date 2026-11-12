@@ -416,12 +416,30 @@ export interface StrokeOpts {
   zAt?: (p: Pt) => number;
 }
 
+/** render-time visibility of a recorded command: the scene graph is built
+ *  once per dataset and zoom/layer/toggle state only switches these */
+export interface Vis {
+  /** class LOD: minimum zoom level at which the class is drawn (0 = always) */
+  minZoom: number;
+  /** feature-class toggle key (layers panel), "" = always on */
+  cls: string;
+  /** OSM layer=* of the feature (layer combo box) */
+  layer: number;
+  /** OSM level=* of the feature, -1 = untagged (level combo box) */
+  level: number;
+  /** area: major road — still drawn below zoom 14 */
+  major: boolean;
+}
+
+const DEFAULT_VIS: Vis = { minZoom: 0, cls: "", layer: 0, level: -1, major: false };
+
 interface Cmd {
   start: number;
   count: number;
   pattern: { key: string; w: number; h: number } | null;
   clip: number | null;
   mask: { outer: Pt[][]; holes: Pt[][] } | null;
+  vis: Vis;
   minX: number;
   minY: number;
   maxX: number;
@@ -434,6 +452,7 @@ interface DrawRange {
   pattern: string | null;
   clip: number | null;
   mask: MaskRange | null;
+  vis: Vis;
 }
 
 interface MaskRange {
@@ -513,6 +532,10 @@ class SceneNode {
 export class SceneGraph {
   root: SceneNode;
   totalCmds = 0;
+  /** render-time visibility switch, evaluated per range every frame; null =
+   *  everything visible. Set by the app (zoom/LOD, class toggles, layer and
+   *  level selection) — the graph itself is never rebuilt for these */
+  visFilter: ((v: Vis) => boolean) | null = null;
   /** test hook: retain CPU-side vertex copies on nodes */
   static keepData = false;
   constructor(
@@ -584,6 +607,7 @@ export class SceneGraph {
             pattern: cmd.pattern ? cmd.pattern.key : null,
             clip: cmd.clip,
             mask: null,
+            vis: cmd.vis,
           };
           if (cmd.mask) range.mask = this.triangulateMask(cmd.mask.outer, cmd.mask.holes, data);
           if (cmd.clip !== null && !node.clipMasks.has(cmd.clip)) {
@@ -904,7 +928,13 @@ void main() {
     this.clipStack = [];
     this.clipRefs.clear();
     this.nextClip = 1;
+    this.recordVis = DEFAULT_VIS;
   }
+
+  /** visibility tag stamped onto every command recorded until changed —
+   *  the app sets this per feature class/feature while building the graph
+   *  once; render-time filtering reads it back */
+  recordVis: Vis = DEFAULT_VIS;
 
   private pushVert(x: number, y: number, c: RGBA, u: number, v: number, z = 0): void {
     // recording buffer is 9 floats/vertex (incl. geometric z); the paint
@@ -942,6 +972,7 @@ void main() {
       pattern: null,
       clip: top ? top.id : null,
       mask: null,
+      vis: this.recordVis,
       minX: Infinity,
       minY: Infinity,
       maxX: -Infinity,
@@ -1290,12 +1321,32 @@ void main() {
     };
     const drawNode = (node: SceneNode): void => {
       if (node.ranges.length === 0 || !node.vao || !node.buf) return;
+      const visFilter = scene.visFilter;
       if (wire) {
-        // wireframe: all triangle edges of the node as one LINES draw
+        // wireframe: triangle edges of the VISIBLE ranges as LINES draws
+        // (line buffer holds 2 line-verts per fill vertex, same order)
         if (!node.lineVao || !node.lineBuf || node.lineVerts === 0) return;
         setAttribs(node.lineVao, node.lineBuf);
         gl.uniform1f(this.uUseTex, 0);
-        gl.drawArrays(gl.LINES, 0, node.lineVerts);
+        const ranges = node.ranges;
+        let i = 0;
+        while (i < ranges.length) {
+          const range = ranges[i];
+          if (visFilter && !visFilter(range.vis)) { i++; continue; }
+          let end = range.start + range.count;
+          let j = i + 1;
+          while (
+            j < ranges.length &&
+            ranges[j].vis === range.vis &&
+            (!visFilter || visFilter(ranges[j].vis)) &&
+            ranges[j].start === end
+          ) {
+            end += ranges[j].count;
+            j++;
+          }
+          gl.drawArrays(gl.LINES, range.start * 2, (end - range.start) * 2);
+          i = j;
+        }
         gl.bindVertexArray(null);
         return;
       }
@@ -1305,8 +1356,9 @@ void main() {
       let i = 0;
       while (i < ranges.length) {
         const range = ranges[i];
+        if (visFilter && !visFilter(range.vis)) { i++; continue; }
         if (range.clip === null && range.mask === null) {
-          // merge adjacent plain ranges with the same pattern into one draw
+          // merge adjacent plain ranges with the same pattern+visibility
           let end = range.start + range.count;
           let j = i + 1;
           while (
@@ -1314,6 +1366,7 @@ void main() {
             ranges[j].clip === null &&
             ranges[j].mask === null &&
             ranges[j].pattern === range.pattern &&
+            ranges[j].vis === range.vis &&
             ranges[j].start === end
           ) {
             end += ranges[j].count;

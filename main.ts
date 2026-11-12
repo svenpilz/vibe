@@ -35,6 +35,7 @@ import {
   type Pt,
   type RGBA,
   type FillSpec,
+  type Vis,
 } from "./src/gl";
 import triangleWasmUrl from "triangle-wasm/triangle.out.wasm?url";
 
@@ -149,20 +150,6 @@ const MAJOR_ROADS = new Set([
   "primary_link",
   "secondary_link",
 ]);
-
-function lodVisible(key: keyof typeof layers): boolean {
-  if (!layers[key]) return false;
-  if (LOD[key] === 0) return true;
-  return zoomLevel() >= LOD[key];
-}
-
-/** below zoom 14 only major-road highway areas render */
-function areaLodVisible(area: AreaFeature): boolean {
-  if (!lodVisible("areas")) return false;
-  const z = zoomLevel();
-  if (z >= 14) return true;
-  return MAJOR_ROADS.has(area.highway);
-}
 
 /** zoom level as shown in the status bar (slippy-map style) */
 function zoomLevel(): number {
@@ -373,36 +360,79 @@ function grassFill(kind: string): FillSpec {
 }
 
 // ---------------- scene graph ----------------
-// Geometry is tessellated into a quadtree scene graph (src/gl.ts) only when
-// the zoom band or a layer/LOD-affecting setting changes; the 2D renderer's
-// LOD logic (lodVisible/areaLodVisible on integer zoom levels) decides what
-// gets baked in. Pan/orbit at the same zoom reuses the graph and just
-// frustum-culls per frame — only visible cells are drawn.
+// Geometry is tessellated into a quadtree scene graph (src/gl.ts) ONCE per
+// dataset; zoom/LOD, class toggles and layer/level selection switch nodes at
+// render time (SceneGraph.visFilter). Pan/orbit/zoom never regenerate the
+// graph — each frame just frustum-culls and visibility-filters the nodes.
 let scene: SceneGraph | null = null;
 let sceneKey = "";
-
-/** zoom bands at which the LOD actually changes — the scene graph is only
- *  re-tessellated when crossing one of these, not on every zoom step */
-const LOD_BANDS = [14, 17, 20, 21, 22, 25];
-function lodBand(): number {
-  const z = zoomLevel();
-  let band = 0;
-  for (const t of LOD_BANDS) if (z >= t) band = t;
-  return band;
-}
+let building = false;
 
 /** wireframe mode: draw triangle edges as lines instead of filled surfaces */
 let wireframe = false;
 
+/** the scene graph is built ONCE per dataset (and per laneSmoothness, which
+ *  changes the geometry itself). Zoom/LOD, the class toggles and the
+ *  layer/level combo boxes only switch graph nodes at render time via
+ *  SceneGraph.visFilter — they never regenerate the graph */
 function sceneKeyOf(): string {
-  return [
-    dataset ? "ds" : "none",
-    lodBand(),
-    JSON.stringify(layers),
-    selectedLayer,
-    selectedLevel,
-    laneSmoothness,
-  ].join("|");
+  return [dataset ? "ds" : "none", laneSmoothness].join("|");
+}
+
+/** class LOD gate, used by the pick path (rendering uses visActive) */
+function lodVisible(key: keyof typeof layers): boolean {
+  if (!layers[key]) return false;
+  if (LOD[key] === 0) return true;
+  return zoomLevel() >= LOD[key];
+}
+
+/** below zoom 14 only major-road highway areas are pickable */
+function areaLodVisible(area: AreaFeature): boolean {
+  if (!lodVisible("areas")) return false;
+  const z = zoomLevel();
+  if (z >= 14) return true;
+  return MAJOR_ROADS.has(area.highway);
+}
+
+/** render-time visibility switch installed on the scene graph every frame */
+function visActive(v: Vis): boolean {
+  if (v.cls) {
+    if (!layers[v.cls as keyof typeof layers]) return false;
+    const z = zoomLevel();
+    if (v.cls === "areas") {
+      // below zoom 14 only major-road highway areas render
+      if (z < 14 && !v.major) return false;
+    } else if (z < v.minZoom) return false;
+  }
+  if (selectedLayer !== null && v.layer !== selectedLayer) return false;
+  if (selectedLevel !== null && v.level !== -1 && v.level !== selectedLevel)
+    return false;
+  return true;
+}
+
+/** visibility tag for a recorded feature, memoized so equal tags share one
+ *  object (lets renderScene merge adjacent ranges) */
+const visMemo = new Map<string, Vis>();
+function visFor(cls: string, f: { layer?: number; level?: number; highway?: string }): Vis {
+  const layer = f.layer ?? 0;
+  const level = f.level ?? -1;
+  const major = cls === "areas" && f.highway !== undefined && MAJOR_ROADS.has(f.highway);
+  const key = `${cls}|${layer}|${level}|${major}`;
+  let v = visMemo.get(key);
+  if (!v) {
+    v = { minZoom: cls ? (LOD[cls as keyof typeof LOD] ?? 0) : 0, cls, layer, level, major };
+    visMemo.set(key, v);
+  }
+  return v;
+}
+
+async function buildSceneAsync(key: string): Promise<void> {
+  g.beginRecord();
+  if (dataset) await buildGeometry();
+  scene = g.finishScene();
+  sceneKey = key;
+  building = false;
+  requestDraw();
 }
 
 function draw() {
@@ -413,18 +443,21 @@ function draw() {
   g.wireframe = wireframe;
   const key = sceneKeyOf();
   g.beginFrame();
-  if (!scene || key !== sceneKey) {
-    if (isTriangulationReady()) {
-      g.beginRecord();
-      if (dataset) buildGeometry();
-      scene = g.finishScene();
-      sceneKey = key;
-    }
+  // (re)build only when the dataset or a geometry-changing setting changed;
+  // the build is chunked with yields, so the old scene keeps rendering and
+  // input stays responsive while it runs
+  if ((!scene || key !== sceneKey) && isTriangulationReady() && !building) {
+    building = true;
+    void buildSceneAsync(key);
   }
-  if (scene) g.renderScene(scene);
-  // hide only once the first frame WITH the loaded dataset rendered — at boot
-  // an empty scene exists before any load starts and must not dismiss the UI
-  if (loading && scene && dataset) hideLoadUi();
+  if (scene) {
+    scene.visFilter = visActive;
+    g.renderScene(scene);
+  }
+  // hide only once the build for the CURRENT key finished and rendered — at
+  // boot an empty scene exists before any load starts and must not dismiss
+  // the UI, and an in-progress rebuild must not either
+  if (loading && scene && dataset && sceneKey === key) hideLoadUi();
 }
 
 /** tessellate everything LOD-visible in the whole dataset into the scene
@@ -502,24 +535,26 @@ function setupHeights(): void {
     for (const ring of f.outer) hf.registerArea(q2ll(ring), f.layer, isBridge(f));
 }
 
-function buildGeometry() {
+/** record the WHOLE dataset into the scene graph, once. Every command is
+ *  tagged with a Vis (class LOD, layer, level, major-road) so zoom, the
+ *  class toggles and the layer/level combo boxes can switch nodes at render
+ *  time without regenerating the graph. Yields between layers so the loading
+ *  spinner keeps painting and input stays responsive */
+async function buildGeometry(): Promise<void> {
+  const tick = () => new Promise((r) => setTimeout(r, 0));
   const bbox = datasetBounds ?? viewBboxQ();
   if (loading) uiPhase("tessellating geometry", 70);
 
-  // Bird's eye: draw ALL classes in ascending layer order, so a higher layer
-  // occludes everything below it regardless of feature class (previously
-  // each class sorted internally, letting e.g. a layer-0 footway paint over
-  // a layer-1 bridge's lane markings). Explicit layer selection draws only
-  // that layer.
+  // Bird's eye: record ALL classes in ascending layer order, so a higher
+  // layer occludes everything below it regardless of feature class
+  // (previously each class sorted internally, letting e.g. a layer-0 footway
+  // paint over a layer-1 bridge's lane markings). Layer/level SELECTION is a
+  // render-time filter now, not a build-time one.
   const px = pxPerMeter();
-  const layersToDraw: number[] =
-    selectedLayer !== null
-      ? [selectedLayer]
-      : [...osmLayers].sort((a, b) => a - b);
+  const layersToDraw: number[] = [...osmLayers].sort((a, b) => a - b);
 
-  const gs =
-    lodVisible("grass") && grassIndex ? queryIndex(grassIndex, bbox) : [];
-  const areas = lodVisible("areas") && areaIndex
+  const gs = grassIndex ? queryIndex(grassIndex, bbox) : [];
+  const areas = areaIndex
     ? // TRAFFIC ISLANDS LAST: an island inside another area:highway
       // must paint AFTER its surrounding area, or the surrounding
       // fill covers the island's surface
@@ -537,54 +572,44 @@ function buildGeometry() {
                 : 0,
       )
     : [];
-  const bl =
-    lodVisible("buildings") && buildingIndex
-      ? queryIndex(buildingIndex, bbox)
-      : [];
-  const cls =
-    lodVisible("centerlines") && lineIndexes
-      ? queryIndex(lineIndexes.centerlines, bbox)
-      : [];
-  const lms =
-    lodVisible("laneMarkings") && laneMarkingIndex
-      ? queryIndex(laneMarkingIndex, bbox)
-      : [];
-  const fws =
-    lodVisible("footways") && lineIndexes
-      ? queryIndex(lineIndexes.footways, bbox)
-      : [];
-  const crs =
-    lodVisible("crossings") && lineIndexes
-      ? // FOOTWAY crossings paint AFTER cycleway ones: where a
-        // footway crossing runs over a cycleway crossing (a combined
-        // pedestrian+cycle crossing), the footway's markings win
-        queryIndex(lineIndexes.crossings, bbox).sort((a, b) =>
-          a.highway === "footway" && b.highway !== "footway"
-            ? 1
-            : b.highway === "footway" && a.highway !== "footway"
-              ? -1
-              : 0,
-        )
-      : [];
-  const kws =
-    lodVisible("kerbs") && kerbWayIndex ? queryIndex(kerbWayIndex, bbox) : [];
-  const kns = lodVisible("kerbs") && kerbGrid ? kerbsInBbox(bbox) : [];
+  const bl = buildingIndex ? queryIndex(buildingIndex, bbox) : [];
+  const cls = lineIndexes ? queryIndex(lineIndexes.centerlines, bbox) : [];
+  const lms = laneMarkingIndex ? queryIndex(laneMarkingIndex, bbox) : [];
+  const fws = lineIndexes ? queryIndex(lineIndexes.footways, bbox) : [];
+  const crs = lineIndexes
+    ? // FOOTWAY crossings paint AFTER cycleway ones: where a
+      // footway crossing runs over a cycleway crossing (a combined
+      // pedestrian+cycle crossing), the footway's markings win
+      queryIndex(lineIndexes.crossings, bbox).sort((a, b) =>
+        a.highway === "footway" && b.highway !== "footway"
+          ? 1
+          : b.highway === "footway" && a.highway !== "footway"
+            ? -1
+            : 0,
+      )
+    : [];
+  const kws = kerbWayIndex ? queryIndex(kerbWayIndex, bbox) : [];
+  const kns = kerbGrid ? kerbsInBbox(bbox) : [];
 
-  layersToDraw.forEach((layer, li) => {
+  for (let li = 0; li < layersToDraw.length; li++) {
     if (loading)
       uiPhase("tessellating geometry", 70 + Math.round((25 * li) / Math.max(1, layersToDraw.length)));
-    const onLayer = (f: { layer?: number; level?: number }) =>
-      (f.layer ?? 0) === layer && layerVisible(f);
+    await tick();
+    // record each feature exactly once, in its own layer's pass, so the
+    // baked paint order stays ascending-by-layer (bird's eye); layer/level
+    // SELECTION remains a render-time visFilter switch
+    const layer = layersToDraw[li];
 
     // --- landuse fills: opaque average paving-stone grey — reads like
     //     paving stones when zoomed out, consistent with the pattern fill
-    if (lodVisible("landuse") && landuseIndex) {
+    if (landuseIndex) {
       const lus = queryIndex(landuseIndex, bbox);
       const fill = rgba(PATTERN_AVG.paving_stones);
       // same-color seam stroke keeps adjacent landuse polygons continuous
       const seamW = Math.max(pxToWorld(4), 0.3 * px);
       for (const lu of lus) {
-        if (!onLayer(lu)) continue;
+        if ((lu.layer ?? 0) !== layer) continue;
+        g.recordVis = visFor("landuse", lu);
         const outer = lu.outer.map(ringPts),
           holes = lu.holes.map(ringPts);
         // landuse is exempt from the connected-to-higher-layer rule: it
@@ -596,11 +621,12 @@ function buildGeometry() {
     }
 
     // --- parking areas: filled with their own surface directly
-    if (lodVisible("parking") && parkingIndex) {
+    if (parkingIndex) {
       const pks = queryIndex(parkingIndex, bbox);
       const seamW = Math.max(pxToWorld(4), 0.3 * px);
       for (const pk of pks) {
-        if (!onLayer(pk)) continue;
+        if ((pk.layer ?? 0) !== layer) continue;
+        g.recordVis = visFor("parking", pk);
         const pat = !pk.surfaceColour ? stonePatternFill(pk.surface) : null;
         const solid =
           pk.surface || pk.surfaceColour
@@ -619,7 +645,8 @@ function buildGeometry() {
     //     natural=scrub (darker) — mottled texture from zoom 25
     const seamW = Math.max(pxToWorld(4), 0.3 * px);
     for (const gr of gs) {
-      if (!onLayer(gr)) continue;
+      if ((gr.layer ?? 0) !== layer) continue;
+      g.recordVis = visFor("grass", gr);
       const fillSpec = grassFill(gr.kind);
       const solid = greenColor(gr.kind);
       const outer = gr.outer.map(ringPts),
@@ -631,7 +658,8 @@ function buildGeometry() {
 
     // --- highway areas (surface fill) ---
     for (const area of areas) {
-      if (!onLayer(area) || !areaLodVisible(area)) continue;
+      if ((area.layer ?? 0) !== layer) continue;
+      g.recordVis = visFor("areas", area);
       const pat = !area.surfaceColour ? stonePatternFill(area.surface) : null;
       const solid =
         area.surface || area.surfaceColour
@@ -658,7 +686,8 @@ function buildGeometry() {
     //     building:levels*3m, else 6m); top-down they look like the old
     //     translucent fill + outline, tilted they stand up
     for (const b of bl) {
-      if (!onLayer(b)) continue;
+      if ((b.layer ?? 0) !== layer) continue;
+      g.recordVis = visFor("buildings", b);
       const roof = rgba(b.usage === "residential" ? "#f0b98a" : "#f5e9d8", 0.45);
       const hM = b.heightM ?? (b.levels !== undefined ? b.levels * 3 : 6);
       const h = hM * px; // world units
@@ -685,7 +714,8 @@ function buildGeometry() {
 
     // --- centerlines (surface detail) ---
     for (const cl of cls) {
-      if (!onLayer(cl)) continue;
+      if ((cl.layer ?? 0) !== layer) continue;
+      g.recordVis = visFor("centerlines", cl);
       g.stroke(
         linePts(cl.coords),
         Math.max(pxToWorld(1), (cl.width ?? 1.5) * px * 0.5),
@@ -695,14 +725,16 @@ function buildGeometry() {
 
     // --- lane markings ---
     for (const lm of lms) {
-      if (!onLayer(lm)) continue;
+      if ((lm.layer ?? 0) !== layer) continue;
+      g.recordVis = visFor("laneMarkings", lm);
       const clipped = clipToAreas(lm.areaIds);
       drawLaneMarkings(lm);
       if (clipped) g.popClip();
     }
     // --- footways ---
     for (const fw of fws) {
-      if (!onLayer(fw)) continue;
+      if ((fw.layer ?? 0) !== layer) continue;
+      g.recordVis = visFor("footways", fw);
       g.stroke(
         linePts(fw.coords),
         Math.max(pxToWorld(0.8), (fw.width ?? 1.8) * px * 0.3),
@@ -718,7 +750,8 @@ function buildGeometry() {
 
     // --- crossings with markings ---
     for (const cr of crs) {
-      if (!onLayer(cr)) continue;
+      if ((cr.layer ?? 0) !== layer) continue;
+      g.recordVis = visFor("crossings", cr);
       const stripe = crossingStripeColor(cr.crossingMarkings);
       const m = (cr.crossingMarkings ?? "").toLowerCase();
       const widthM = cr.width ?? (m.includes("zebra") ? 3 : 1.5);
@@ -758,12 +791,10 @@ function buildGeometry() {
     }
 
     // --- standalone stop lines (car ways without drawn lane markings) ---
-    const sls2 =
-      lodVisible("laneMarkings") && stopLineIndex
-        ? queryIndex(stopLineIndex, bbox)
-        : [];
+    const sls2 = stopLineIndex ? queryIndex(stopLineIndex, bbox) : [];
     for (const sl of sls2) {
-      if (!onLayer(sl)) continue;
+      if ((sl.layer ?? 0) !== layer) continue;
+      g.recordVis = visFor("laneMarkings", sl);
       const px2 = pxPerMeter();
       // the shared boundary polyline between the entering road area and
       // the junction area
@@ -775,27 +806,29 @@ function buildGeometry() {
     }
 
     // --- fences: black lines ---
-    if (lodVisible("fences") && fenceIndex) {
+    if (fenceIndex) {
       const fs = queryIndex(fenceIndex, bbox);
       const fw2 = Math.max(pxToWorld(1), 0.08 * px);
       const fc = rgba("#1a1a1a");
       for (const f of fs) {
-        if (!onLayer(f)) continue;
+        if ((f.layer ?? 0) !== layer) continue;
+        g.recordVis = visFor("fences", f);
         g.stroke(linePts(f.coords), fw2, { color: fc, zAt: lineZAt(f) });
       }
     }
 
     // --- kerb ways: dark edge between sidewalk and road ---
-    drawKerbWays(kws, onLayer, px);
+    drawKerbWays(kws, layer, px);
 
     // standalone kerb nodes (not part of a kerb way) are no longer drawn
     void kns;
 
     // --- street lamps: yellow dot with a radial halo fading out ---
-    if (lodVisible("streetLamps") && streetLampGrid) {
+    if (streetLampGrid) {
       const halo = Math.max(pxToWorld(6), Math.min(pxToWorld(24), 2.5 * px));
       for (const sl of allGridValues(streetLampGrid)) {
-        if (!onLayer(sl)) continue;
+        if ((sl.layer ?? 0) !== layer) continue;
+        g.recordVis = visFor("streetLamps", sl);
         const x = lonToX(sl.lon / Q),
           y = latToY(sl.lat / Q);
         g.halo([x, y], halo, [
@@ -808,11 +841,12 @@ function buildGeometry() {
     }
 
     // --- manholes: dark anthracite circle with lighter stripes ---
-    if (lodVisible("manholes") && manholeGrid) {
+    if (manholeGrid) {
       const mr = Math.max(pxToWorld(2), Math.min(pxToWorld(10), 0.4 * px)); // ~80 cm cover
       const stripe = Math.max(pxToWorld(1), mr * 0.16);
       for (const mh of allGridValues(manholeGrid)) {
-        if (!onLayer(mh)) continue;
+        if ((mh.layer ?? 0) !== layer) continue;
+        g.recordVis = visFor("manholes", mh);
         const x = lonToX(mh.lon / Q),
           y = latToY(mh.lat / Q);
         g.circle([x, y], mr, rgba("#2f3134"), lineZAt(mh));
@@ -831,16 +865,17 @@ function buildGeometry() {
     }
 
     // --- bollards: black dots ---
-    if (lodVisible("bollards") && bollardGrid) {
+    if (bollardGrid) {
       const br = Math.max(pxToWorld(2.5), Math.min(pxToWorld(8), 0.25 * px));
       for (const b of allGridValues(bollardGrid)) {
-        if (!onLayer(b)) continue;
+        if ((b.layer ?? 0) !== layer) continue;
+        g.recordVis = visFor("bollards", b);
         const x = lonToX(b.lon / Q),
           y = latToY(b.lat / Q);
         g.circle([x, y], br, rgba("#2f3134"), lineZAt(b)); // dark anthracite
       }
     }
-  });
+  }
 }
 
 /** all values of a point grid (the scene graph covers the whole dataset) */
@@ -869,7 +904,7 @@ function kerbClass(kerb: string): "high" | "lowered" | "flush" {
  */
 function drawKerbWays(
   kws: KerbWayFeature[],
-  onLayer: (f: { layer?: number; level?: number }) => boolean,
+  layer: number,
   px: number,
 ): void {
   const kerbW = Math.max(pxToWorld(1.5), 0.18 * px); // ~18 cm kerb width
@@ -879,7 +914,8 @@ function drawKerbWays(
   const bright = rgba("#9a9a9e");
 
   for (const kw of kws) {
-    if (!onLayer(kw)) continue;
+    if ((kw.layer ?? 0) !== layer) continue;
+    g.recordVis = visFor("kerbs", kw);
     const base = kerbClass(kw.kerb);
     const kwZ = lineZAt(kw);
 
@@ -2773,6 +2809,9 @@ function hideLoadUi(): void {
   document.getElementById("layers")!.style.display = "block";
   document.getElementById("zoomhint")!.style.display = "block";
   document.getElementById("legend")!.style.display = "block";
+  // loading is done — don't leave a stale "tessellating…" status behind
+  (document.getElementById("pbrfill") as HTMLDivElement).style.width = "100%";
+  statusEl.textContent = "ready";
 }
 
 /** show the progress bar + spinner and hide the drop zone for a dataset load
@@ -2812,10 +2851,9 @@ async function finishLoadAsync(name: string): Promise<void> {
   g.zAtDefault = hf && hf.ready ? stickZAt : null;
   uiPhase("tessellating geometry", 80, name);
   await tick();
+  // the scene build runs async in draw(); hideLoadUi() fires there once the
+  // build for the current scene key finished and the first frame rendered
   requestDraw();
-  // hideLoadUi() runs at the end of draw() once the first frame rendered
-  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-  if (loading) hideLoadUi();
 }
 
 async function loadBundledExample(): Promise<boolean> {

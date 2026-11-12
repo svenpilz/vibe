@@ -55,7 +55,8 @@ status bar shows the current zoom level and the deployed git commit.
 > is the ground level for same-layer features inside it (2D) — lane markings, kerbs, lamps on
 > the deck ride at deck height — while lower-layer features inside it (the road passing under
 > the bridge) stay on the ground. Tessellation results are
-> memoized per ring and DEM samples per vertex, so zoom/LOD rebuilds reuse them.
+> memoized per ring and DEM samples per vertex, so the one-time scene build and any
+> rebuilds reuse them.
 
 ## Specification
 
@@ -410,12 +411,14 @@ your .osm.pbf (drag & drop)
   zlib-compressed PBF blobs are inflated with the web-standard `DecompressionStream`.
 - Feature geometry is quantized to 1e-7 degree integers end-to-end; typed-array stores
   hold node coordinates for large extracts.
-- Rendering uses a **scene graph** (`src/gl.ts`): the full LOD-visible dataset is
-  tessellated once per zoom band into a loose quadtree of GPU buffers (the 2D renderer's
-  zoom-level LOD thresholds decide what is baked in). Every frame only frustum-visible
-  leaves are drawn — pan and orbit at the same zoom re-cull without re-tessellating;
-  paint order is preserved via per-command depth values. (Spatial indexes still serve
-  click-picking and the layer panel, which stay viewport-based.)
+- Rendering uses a **scene graph** (`src/gl.ts`): the whole dataset is tessellated
+  **once** per dataset into a loose quadtree of GPU buffers. Every recorded command
+  carries a visibility tag (class LOD threshold, layer, level, major-road flag), so
+  zooming, the class toggles and the layer/level combo boxes just **switch graph nodes
+  at render time** — the graph is never regenerated for them. Every frame only
+  frustum-visible, visibility-active leaves are drawn; paint order is preserved via
+  per-command depth values. (Spatial indexes still serve click-picking and the layer
+  panel, which stay viewport-based.)
 
 ## Deployment
 
