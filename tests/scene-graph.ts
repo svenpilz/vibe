@@ -1,6 +1,6 @@
 // Tests for the quadtree scene graph + frustum culling in src/gl.ts.
 // Run with: tsx tests/scene-graph.ts
-import { GlMap } from "../src/gl";
+import { GlMap, SceneGraph } from "../src/gl";
 
 let failures = 0;
 function ok(cond: boolean, msg: string): void {
@@ -16,7 +16,7 @@ function makeStubGL(calls: string[]): any {
     get(_t, prop: string) {
       if (prop === "getShaderParameter" || prop === "getProgramParameter") return () => true;
       if (prop === "getUniformLocation") return () => ({});
-      if (prop === "getAttribLocation") return (_p: any, n: string) => ({ a_pos: 0, a_color: 1, a_uv: 2 })[n] ?? 0;
+      if (prop === "getAttribLocation") return (_p: any, n: string) => ({ a_pos: 0, a_color: 1, a_uv: 2, a_z: 3 })[n] ?? 0;
       if (prop === "createShader" || prop === "createProgram" || prop === "createBuffer" || prop === "createTexture" || prop === "createVertexArray") return () => ({});
       if (/^[A-Z0-9_]+$/.test(prop)) return 1;
       return (...args: any[]) => {
@@ -64,15 +64,16 @@ g.setCamera(0, 0, 2560, 0, 0);
 g.beginFrame();
 g.renderScene(scene);
 const onlyA = countDraws();
-ok(onlyA > 0 && onlyA < 60, `frustum culls: ${onlyA}/60 ranges drawn when centered on cluster A`);
+// ranges are merged per node: cluster A sits in one leaf -> 1 merged draw
+ok(onlyA === 1, `frustum culls + merges: ${onlyA} draw for cluster A only (60 raw ranges)`);
 
-// wide view covering both clusters
+// wide view covering both clusters: one merged draw per visible leaf
 calls.length = 0;
 g.setCamera(0, -50000, 10, 0, 0);
 g.beginFrame();
 g.renderScene(scene);
 const both = countDraws();
-ok(both === 60, `wide view draws all 60 ranges (got ${both})`);
+ok(both === 2, `wide view draws both leaves as ${both} merged draws (60 raw ranges)`);
 
 // tilted camera (pitch 60 deg, looking north): cluster B is behind the near
 // plane and must be culled; cluster A at the target stays visible
@@ -81,7 +82,37 @@ g.setCamera(0, 0, 2560, 0, Math.PI / 3);
 g.beginFrame();
 g.renderScene(scene);
 const tilted = countDraws();
-ok(tilted > 0 && tilted < 60, `tilted view culls the behind-camera cluster: ${tilted}/60 ranges drawn`);
+ok(tilted === 1, `tilted view culls the behind-camera cluster: ${tilted} draw`);
+
+// paint order: later commands must get SMALLER z (win under LEQUAL)
+SceneGraph.keepData = true;
+calls.length = 0;
+g.beginFrame();
+g.beginRecord();
+g.fillPolygon([[[0, 0], [100, 0], [100, 100], [0, 100]]], [], { color: [1, 0, 0, 1] }); // bottom
+g.fillPolygon([[[50, 50], [150, 50], [150, 150], [50, 150]]], [], { color: [0, 0, 1, 1] }); // top
+const scene2 = g.finishScene();
+const rootData = scene2.root.data!;
+ok(rootData !== null && rootData.length > 0, "scene data retained for z-order check");
+const zFirst = rootData[8]; // first vertex of first command
+const zSecond = rootData[6 * 9 + 8]; // first vertex of second command
+ok(
+  zSecond < zFirst,
+  `paint order via depth: later command z ${zSecond.toFixed(4)} < earlier ${zFirst.toFixed(4)}`,
+);
+SceneGraph.keepData = false;
+
+// wireframe mode draws LINES from the line buffer
+calls.length = 0;
+g.wireframe = true;
+g.setCamera(0, 50, 2000, 0, 0);
+g.beginFrame();
+g.renderScene(scene2);
+ok(
+  calls.some((c) => c.startsWith("drawArrays")),
+  `wireframe mode issues line draws (${calls.filter((c) => c.startsWith("drawArrays")).length} drawArrays)`,
+);
+g.wireframe = false;
 
 if (failures > 0) {
   console.error(`${failures} scene graph test(s) FAILED`);

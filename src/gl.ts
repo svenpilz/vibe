@@ -377,7 +377,6 @@ interface DrawRange {
   start: number;
   count: number;
   pattern: string | null;
-  z: number;
   clip: number | null;
   mask: MaskRange | null;
 }
@@ -393,11 +392,17 @@ const MIN_LEAF_HALF = 256; // world units
 class SceneNode {
   children: SceneNode[] | null = null;
   items: Cmd[] = [];
-  // leaf GPU data
+  // GPU data (every node with items gets buffers, internal nodes included)
   vao: WebGLVertexArrayObject | null = null;
   buf: WebGLBuffer | null = null;
+  lineVao: WebGLVertexArrayObject | null = null;
+  lineBuf: WebGLBuffer | null = null;
+  lineVerts = 0;
   ranges: DrawRange[] = [];
   clipMasks = new Map<number, MaskRange>();
+  /** CPU copy of the vertex data, only retained when SceneGraph.keepData
+   *  (test hook) — otherwise the GPU buffer is the only copy */
+  data: Float32Array | null = null;
   // loose bounds (cell expanded by its half size on each side)
   constructor(
     public cx: number,
@@ -453,6 +458,8 @@ class SceneNode {
 export class SceneGraph {
   root: SceneNode;
   totalCmds = 0;
+  /** test hook: retain CPU-side vertex copies on nodes */
+  static keepData = false;
   constructor(
     public gl: WebGL2RenderingContext,
     cmds: Cmd[],
@@ -480,16 +487,16 @@ export class SceneGraph {
     data: number[],
   ): MaskRange {
     const pushRingTris = (rings: Pt[][]): { start: number; count: number } => {
-      const start = data.length / 8;
+      const start = data.length / 9;
       for (const ring of rings) {
         const tris = earclip(ring);
         for (let i = 0; i < tris.length; i += 3)
           for (const idx of [tris[i], tris[i + 1], tris[i + 2]]) {
             const p = ring[idx];
-            data.push(p[0], p[1], 1, 1, 1, 1, 0, 0);
+            data.push(p[0], p[1], 1, 1, 1, 1, 0, 0, 0);
           }
       }
-      return { start, count: data.length / 8 - start };
+      return { start, count: data.length / 9 - start };
     };
     return { outer: pushRingTris(outer), holes: pushRingTris(holes) };
   }
@@ -503,36 +510,56 @@ export class SceneGraph {
     const cmdOrder = new Map<Cmd, number>();
     cmds.forEach((c, i) => cmdOrder.set(c, i));
     const walk = (node: SceneNode): void => {
-      if (node.children) {
-        for (const c of node.children) walk(c);
-        return;
-      }
-      if (node.items.length === 0) return;
-      const data: number[] = [];
-      for (const cmd of node.items) {
-        const start = data.length / 8;
-        for (let i = cmd.start * 8; i < (cmd.start + cmd.count) * 8; i++)
-          data.push(verts[i]);
-        const range: DrawRange = {
-          start,
-          count: cmd.count,
-          pattern: cmd.pattern ? cmd.pattern.key : null,
-          z: (cmdOrder.get(cmd)! + 0.5) / Math.max(1, this.totalCmds),
-          clip: cmd.clip,
-          mask: null,
-        };
-        if (cmd.mask) range.mask = this.triangulateMask(cmd.mask.outer, cmd.mask.holes, data);
-        if (cmd.clip !== null && !node.clipMasks.has(cmd.clip)) {
-          const clip = clipRefs.get(cmd.clip);
-          if (clip)
-            node.clipMasks.set(cmd.clip, this.triangulateMask(clip.outer, clip.holes, data));
+      if (node.items.length > 0) {
+        // 9 floats per vertex: x,y,r,g,b,a,u,v,z. z encodes paint order:
+        // LATER commands get SMALLER depth so they win under LEQUAL
+        // (cleared depth is 1, first command has z ~ 1).
+        const data: number[] = [];
+        const n = Math.max(1, this.totalCmds);
+        for (const cmd of node.items) {
+          const start = data.length / 9;
+          const z = (this.totalCmds - cmdOrder.get(cmd)! - 0.5) / n;
+          for (let i = cmd.start * 8; i < (cmd.start + cmd.count) * 8; i += 8) {
+            data.push(verts[i], verts[i + 1], verts[i + 2], verts[i + 3],
+              verts[i + 4], verts[i + 5], verts[i + 6], verts[i + 7], z);
+          }
+          const range: DrawRange = {
+            start,
+            count: cmd.count,
+            pattern: cmd.pattern ? cmd.pattern.key : null,
+            clip: cmd.clip,
+            mask: null,
+          };
+          if (cmd.mask) range.mask = this.triangulateMask(cmd.mask.outer, cmd.mask.holes, data);
+          if (cmd.clip !== null && !node.clipMasks.has(cmd.clip)) {
+            const clip = clipRefs.get(cmd.clip);
+            if (clip)
+              node.clipMasks.set(cmd.clip, this.triangulateMask(clip.outer, clip.holes, data));
+          }
+          node.ranges.push(range);
         }
-        node.ranges.push(range);
+        const fdata = new Float32Array(data);
+        if (SceneGraph.keepData) node.data = fdata;
+        node.buf = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, node.buf);
+        gl.bufferData(gl.ARRAY_BUFFER, fdata, gl.STATIC_DRAW);
+        node.vao = gl.createVertexArray();
+        // wireframe line buffer: 6 line-verts per triangle vertex triple
+        const lineData = new Float32Array(fdata.length * 2);
+        for (let i = 0; i < fdata.length; i += 27) {
+          for (let e = 0; e < 3; e++) {
+            const a = i + e * 9, b = i + ((e + 1) % 3) * 9;
+            lineData.set(fdata.subarray(a, a + 9), (i / 27) * 6 * 9 + e * 18);
+            lineData.set(fdata.subarray(b, b + 9), (i / 27) * 6 * 9 + e * 18 + 9);
+          }
+        }
+        node.lineVerts = fdata.length / 9 * 2;
+        node.lineBuf = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, node.lineBuf);
+        gl.bufferData(gl.ARRAY_BUFFER, lineData, gl.STATIC_DRAW);
+        node.lineVao = gl.createVertexArray();
       }
-      node.buf = gl.createBuffer();
-      gl.bindBuffer(gl.ARRAY_BUFFER, node.buf);
-      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
-      node.vao = gl.createVertexArray();
+      if (node.children) for (const c of node.children) walk(c);
     };
     walk(this.root);
   }
@@ -579,12 +606,14 @@ export class GlMap {
   private gl: WebGL2RenderingContext;
   private prog: WebGLProgram;
   private uMvp: WebGLUniformLocation;
-  private uZ: WebGLUniformLocation;
   private uUseTex: WebGLUniformLocation;
   private uTex: WebGLUniformLocation;
   private aPos: number;
   private aColor: number;
   private aUv: number;
+  private aZ: number;
+  /** wireframe mode: draw triangle edges as lines instead of filled */
+  wireframe = false;
   private verts = new Float32Array(1 << 16);
   private vertCount = 0;
   private cmds: Cmd[] = [];
@@ -617,12 +646,12 @@ export class GlMap {
     this.gl = gl;
 
     const vs = `#version 300 es
-in vec2 a_pos; in vec4 a_color; in vec2 a_uv;
-uniform mat4 u_mvp; uniform float u_z;
+in vec2 a_pos; in vec4 a_color; in vec2 a_uv; in float a_z;
+uniform mat4 u_mvp;
 out vec4 v_color; out vec2 v_uv;
 void main() {
   vec4 p = u_mvp * vec4(a_pos, 0.0, 1.0);
-  p.z = (u_z * 2.0 - 1.0) * p.w;
+  p.z = (a_z * 2.0 - 1.0) * p.w;
   gl_Position = p;
   v_color = a_color; v_uv = a_uv;
 }`;
@@ -652,12 +681,12 @@ void main() {
       throw new Error("link: " + gl.getProgramInfoLog(prog));
     this.prog = prog;
     this.uMvp = gl.getUniformLocation(prog, "u_mvp")!;
-    this.uZ = gl.getUniformLocation(prog, "u_z")!;
     this.uUseTex = gl.getUniformLocation(prog, "u_useTex")!;
     this.uTex = gl.getUniformLocation(prog, "u_tex")!;
     this.aPos = gl.getAttribLocation(prog, "a_pos");
     this.aColor = gl.getAttribLocation(prog, "a_color");
     this.aUv = gl.getAttribLocation(prog, "a_uv");
+    this.aZ = gl.getAttribLocation(prog, "a_z");
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.enable(gl.DEPTH_TEST);
@@ -807,6 +836,8 @@ void main() {
   }
 
   private pushVert(x: number, y: number, c: RGBA, u: number, v: number): void {
+    // recording buffer is 8 floats/vertex; the z (paint order) is baked per
+    // command as a 9th float when the scene graph uploads node buffers
     if ((this.vertCount + 1) * 8 > this.verts.length) {
       const nv = new Float32Array(this.verts.length * 2);
       nv.set(this.verts);
@@ -1095,24 +1126,67 @@ void main() {
     gl.useProgram(this.prog);
     gl.uniformMatrix4fv(this.uMvp, false, this.mvp);
     const planes = frustumPlanes(this.mvp);
-    const walk = (node: SceneNode): void => {
-      const [x0, y0, x1, y1] = node.loose();
-      if (!aabbVisible(planes, x0, y0, x1, y1)) return;
-      if (node.children) {
-        for (const c of node.children) walk(c);
-        return;
-      }
-      if (!node.buf || !node.vao || node.ranges.length === 0) return;
-      gl.bindVertexArray(node.vao);
-      gl.bindBuffer(gl.ARRAY_BUFFER, node.buf);
+    const wire = this.wireframe;
+    const setAttribs = (vao: WebGLVertexArrayObject, buf: WebGLBuffer) => {
+      gl.bindVertexArray(vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
       gl.enableVertexAttribArray(this.aPos);
       gl.enableVertexAttribArray(this.aColor);
       gl.enableVertexAttribArray(this.aUv);
-      gl.vertexAttribPointer(this.aPos, 2, gl.FLOAT, false, 32, 0);
-      gl.vertexAttribPointer(this.aColor, 4, gl.FLOAT, false, 32, 8);
-      gl.vertexAttribPointer(this.aUv, 2, gl.FLOAT, false, 32, 24);
+      gl.enableVertexAttribArray(this.aZ);
+      gl.vertexAttribPointer(this.aPos, 2, gl.FLOAT, false, 36, 0);
+      gl.vertexAttribPointer(this.aColor, 4, gl.FLOAT, false, 36, 8);
+      gl.vertexAttribPointer(this.aUv, 2, gl.FLOAT, false, 36, 24);
+      gl.vertexAttribPointer(this.aZ, 1, gl.FLOAT, false, 36, 32);
+    };
+    const drawNode = (node: SceneNode): void => {
+      if (node.ranges.length === 0 || !node.vao || !node.buf) return;
+      if (wire) {
+        // wireframe: all triangle edges of the node as one LINES draw
+        if (!node.lineVao || !node.lineBuf || node.lineVerts === 0) return;
+        setAttribs(node.lineVao, node.lineBuf);
+        gl.uniform1f(this.uUseTex, 0);
+        gl.drawArrays(gl.LINES, 0, node.lineVerts);
+        gl.bindVertexArray(null);
+        return;
+      }
+      setAttribs(node.vao, node.buf);
       const drawnClips = new Set<number>();
-      for (const range of node.ranges) {
+      const ranges = node.ranges;
+      let i = 0;
+      while (i < ranges.length) {
+        const range = ranges[i];
+        if (range.clip === null && range.mask === null) {
+          // merge adjacent plain ranges with the same pattern into one draw
+          let end = range.start + range.count;
+          let j = i + 1;
+          while (
+            j < ranges.length &&
+            ranges[j].clip === null &&
+            ranges[j].mask === null &&
+            ranges[j].pattern === range.pattern &&
+            ranges[j].start === end
+          ) {
+            end += ranges[j].count;
+            j++;
+          }
+          if (range.pattern) {
+            const tex = this.patternTex(range.pattern);
+            if (tex) {
+              gl.activeTexture(gl.TEXTURE0);
+              gl.bindTexture(gl.TEXTURE_2D, tex);
+              gl.uniform1i(this.uTex, 0);
+              gl.uniform1f(this.uUseTex, 1);
+            } else {
+              gl.uniform1f(this.uUseTex, 0);
+            }
+          } else {
+            gl.uniform1f(this.uUseTex, 0);
+          }
+          gl.drawArrays(gl.TRIANGLES, range.start, end - range.start);
+          i = j;
+          continue;
+        }
         let stenciled = false;
         if (range.clip !== null) {
           const mask = node.clipMasks.get(range.clip);
@@ -1152,11 +1226,17 @@ void main() {
         } else {
           gl.uniform1f(this.uUseTex, 0);
         }
-        gl.uniform1f(this.uZ, range.z);
         gl.drawArrays(gl.TRIANGLES, range.start, range.count);
         if (stenciled) gl.disable(gl.STENCIL_TEST);
+        i++;
       }
       gl.bindVertexArray(null);
+    };
+    const walk = (node: SceneNode): void => {
+      const [x0, y0, x1, y1] = node.loose();
+      if (!aabbVisible(planes, x0, y0, x1, y1)) return;
+      drawNode(node);
+      if (node.children) for (const c of node.children) walk(c);
     };
     walk(scene.root);
     gl.disable(gl.STENCIL_TEST);

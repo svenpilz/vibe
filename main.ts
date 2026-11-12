@@ -368,10 +368,23 @@ function grassFill(kind: string): FillSpec {
 let scene: SceneGraph | null = null;
 let sceneKey = "";
 
+/** zoom bands at which the LOD actually changes — the scene graph is only
+ *  re-tessellated when crossing one of these, not on every zoom step */
+const LOD_BANDS = [14, 17, 20, 21, 22, 25];
+function lodBand(): number {
+  const z = zoomLevel();
+  let band = 0;
+  for (const t of LOD_BANDS) if (z >= t) band = t;
+  return band;
+}
+
+/** wireframe mode: draw triangle edges as lines instead of filled surfaces */
+let wireframe = false;
+
 function sceneKeyOf(): string {
   return [
     dataset ? "ds" : "none",
-    Math.floor(zoomLevel()),
+    lodBand(),
     JSON.stringify(layers),
     selectedLayer,
     selectedLevel,
@@ -384,6 +397,7 @@ function draw() {
   g.dpr = dpr;
   g.setViewState(canvas.clientWidth, canvas.clientHeight, dpr);
   g.setCamera(lonToX(view.cx), latToY(view.cy), view.scale, cam.heading, cam.pitch);
+  g.wireframe = wireframe;
   const key = sceneKeyOf();
   g.beginFrame();
   if (!scene || key !== sceneKey) {
@@ -2381,6 +2395,29 @@ function buildLayerPanel() {
     requestDraw();
   });
   wrap.appendChild(smoothSelect);
+
+  // wireframe mode toggle (also on the "w" key)
+  const wireRow = document.createElement("div");
+  wireRow.className = "layer";
+  wireRow.innerHTML =
+    `<div class="swatch" style="background:transparent;border:1px solid #7ec8ff"></div>` +
+    `<label><input type="checkbox" id="wireframeToggle"/> wireframe (w)</label>`;
+  (wireRow.querySelector("input") as HTMLInputElement).addEventListener(
+    "change",
+    (e) => {
+      wireframe = (e.target as HTMLInputElement).checked;
+      requestDraw();
+    },
+  );
+  wrap.appendChild(wireRow);
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "w" && !(e.target instanceof HTMLInputElement)) {
+      wireframe = !wireframe;
+      const cb = document.getElementById("wireframeToggle") as HTMLInputElement | null;
+      if (cb) cb.checked = wireframe;
+      requestDraw();
+    }
+  });
 
   const defs: { key: keyof typeof layers; label: string; swatch: string }[] = [
     { key: "areas", label: "highway areas (surface fill)", swatch: "#6d6055" },
