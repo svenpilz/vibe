@@ -7,8 +7,9 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type { BakedData } from "./schema";
-import { sampleTerrainM } from "./schema";
-import { buildTerrainMesh, buildRoads, buildBuildings, buildGround, RoadIndex, BuildingIndex, buildingPolygons, type MeshData } from "./mesh";
+import { sampleTerrainM, wayTags } from "./schema";
+import { lonLatToMeters } from "./geo";
+import { buildTerrainMesh, buildRoads, buildBuildings, buildGround, buildLaneMarkings, buildKerbs, buildFurniture, buildRails, buildRoutes, RouteTrack, RoadIndex, BuildingIndex, buildingPolygons, type MeshData } from "./mesh";
 
 const container = document.getElementById("scene") as HTMLElement;
 const hud = {
@@ -25,9 +26,11 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 container.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-const SKY = new THREE.Color(0x9fc4e8);
+const SKY = new THREE.Color(0xbcd8ec);
 scene.background = SKY;
-scene.fog = new THREE.Fog(SKY, 3000, 8000);
+scene.fog = new THREE.Fog(SKY, 3500, 9000);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
 
 const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.5, 20000);
 camera.position.set(1600, 1100, 1600);
@@ -39,8 +42,8 @@ controls.maxPolarAngle = Math.PI * 0.495;
 controls.maxDistance = 9000;
 controls.minDistance = 5;
 
-scene.add(new THREE.HemisphereLight(0xffffff, 0x8a9a7a, 1.0));
-const sun = new THREE.DirectionalLight(0xfff2dd, 1.6);
+scene.add(new THREE.HemisphereLight(0xffffff, 0xa8b898, 1.25));
+const sun = new THREE.DirectionalLight(0xfff3e0, 1.5);
 sun.position.set(2500, 3500, 1200);
 sun.castShadow = true;
 sun.shadow.mapSize.set(4096, 4096);
@@ -58,13 +61,38 @@ function toGeometry(m: MeshData): THREE.BufferGeometry {
   g.setAttribute("position", new THREE.Float32BufferAttribute(m.positions, 3));
   g.setAttribute("normal", new THREE.Float32BufferAttribute(m.normals, 3));
   g.setAttribute("color", new THREE.Float32BufferAttribute(m.colors, 3));
+  g.setAttribute("uv", new THREE.Float32BufferAttribute(m.uvs, 2));
   g.setIndex(m.indices);
   return g;
 }
 
-function addMesh(m: MeshData, shadow: boolean): void {
-  const mat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
-  const mesh = new THREE.Mesh(toGeometry(m), mat);
+/** Procedural facade texture: window grid, a few lit windows. Tinted per
+ *  building by the vertex colors (map * color). */
+function makeFacadeTexture(): THREE.Texture {
+  const c = document.createElement("canvas");
+  c.width = 128;
+  c.height = 256;
+  const ctx = c.getContext("2d")!;
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, 128, 256);
+  const cols = 4, rows = 8, wx = 128 / cols, wy = 256 / rows;
+  for (let r = 0; r < rows; r++) {
+    for (let col = 0; col < cols; col++) {
+      const lit = Math.random() < 0.12;
+      ctx.fillStyle = lit ? "#ffd97a" : "#2c3844";
+      ctx.fillRect(col * wx + wx * 0.22, r * wy + wy * 0.25, wx * 0.56, wy * 0.5);
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function addMesh(m: MeshData, shadow: boolean, mat?: THREE.Material): void {
+  const material = mat ?? new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+  const mesh = new THREE.Mesh(toGeometry(m), material);
   mesh.castShadow = shadow;
   mesh.receiveShadow = true;
   scene.add(mesh);
@@ -118,12 +146,18 @@ async function boot(): Promise<void> {
   addMesh(buildGround(data), false);
   const roads = buildRoads(data);
   addMesh(roads.mesh, false);
-  addMesh(buildBuildings(data), true);
+  addMesh(buildLaneMarkings(data, roads.segments), false);
+  addMesh(buildKerbs(data), false);
+  addMesh(buildFurniture(data), false);
+  addMesh(buildRails(data), false);
+  addMesh(buildRoutes(data), false);
+  const facadeMat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, map: makeFacadeTexture() });
+  addMesh(buildBuildings(data), true, facadeMat);
   const index = new RoadIndex(roads.segments);
   const buildings = new BuildingIndex(buildingPolygons(data));
   hud.loading.textContent = "";
   hud.stats.textContent =
-    `${data.ways.length.toLocaleString("en-US")} ways · ` +
+    `${data.ways.length.toLocaleString("en-US")} ways · ${data.points.length.toLocaleString("en-US")} street objects · ` +
     `${roads.segments.length.toLocaleString("en-US")} road segments · ` +
     `2 km around S Friedenau · built in ${(performance.now() - t0).toFixed(0)} ms`;
 
@@ -169,6 +203,61 @@ async function boot(): Promise<void> {
     if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(e.code)) e.preventDefault();
   });
   window.addEventListener("keyup", (e) => keys.delete(e.code));
+
+  // buses and S-Bahn trains driving their OSM route relations
+  interface Vehicle {
+    track: RouteTrack;
+    dist: number;
+    speed: number;
+    mesh: THREE.Group;
+  }
+  const vehicles: Vehicle[] = [];
+  const routeTracks = data.routes
+    .map((route) => {
+      const pts = route.r.map((r) => {
+        const lon = (data.nodes[r * 2] as number) / 1e7;
+        const lat = (data.nodes[r * 2 + 1] as number) / 1e7;
+        return [lon, lat] as [number, number];
+      });
+      const xy = pts.map(([lon, lat]) => lonLatToMeters(lon, lat));
+      const elevs = xy.map(([x, y]) => sampleTerrainM(data.terrain, x, y) + 0.18);
+      return { tags: wayTags(data, route), track: new RouteTrack(xy, elevs) };
+    })
+    .filter((r) => r.track.length > 800)
+    .sort((a, b) => b.track.length - a.track.length);
+  const makeBus = (): THREE.Group => {
+    const g = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.BoxGeometry(2.5, 2.6, 10), new THREE.MeshLambertMaterial({ color: 0xf5b81d }));
+    body.position.y = 1.5;
+    body.castShadow = true;
+    const windows = new THREE.Mesh(new THREE.BoxGeometry(2.52, 0.9, 9), new THREE.MeshLambertMaterial({ color: 0x1d2733 }));
+    windows.position.y = 2.0;
+    g.add(body, windows);
+    return g;
+  };
+  const makeTrain = (): THREE.Group => {
+    const g = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.BoxGeometry(2.9, 3.2, 38), new THREE.MeshLambertMaterial({ color: 0xf5b81d }));
+    body.position.y = 1.9;
+    body.castShadow = true;
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(2.92, 0.5, 37), new THREE.MeshLambertMaterial({ color: 0xffffff }));
+    stripe.position.y = 2.6;
+    const windows = new THREE.Mesh(new THREE.BoxGeometry(2.92, 0.8, 36), new THREE.MeshLambertMaterial({ color: 0x1d2733 }));
+    windows.position.y = 3.1;
+    g.add(body, stripe, windows);
+    return g;
+  };
+  let buses = 0, trains = 0;
+  for (const r of routeTracks) {
+    const isTrain = r.tags["route"] === "train" || r.tags["route"] === "light_rail";
+    if (isTrain && trains >= 2) continue;
+    if (!isTrain && buses >= 5) continue;
+    const mesh = isTrain ? makeTrain() : makeBus();
+    scene.add(mesh);
+    vehicles.push({ track: r.track, dist: Math.random() * r.track.length, speed: isTrain ? 22 : 11, mesh });
+    if (isTrain) trains++;
+    else buses++;
+  }
 
   const clock = new THREE.Clock();
   let hudTimer = 0;
@@ -237,6 +326,12 @@ async function boot(): Promise<void> {
     requestAnimationFrame(animate);
     const dt = Math.min(0.05, clock.getDelta());
     updateCar(dt);
+    for (const v of vehicles) {
+      v.dist += v.speed * dt;
+      const p = v.track.pointAt(v.dist);
+      v.mesh.position.set(p.x, p.elev, p.z);
+      v.mesh.rotation.y = -p.heading + Math.PI / 2;
+    }
     if (follow) {
       controls.target.lerp(new THREE.Vector3(carState.x, carState.y + 1.5, carState.z), Math.min(1, dt * 5));
     }

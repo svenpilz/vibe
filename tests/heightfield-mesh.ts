@@ -1,5 +1,5 @@
 import type { BakedData, BakedWay } from "../src3d/schema";
-import { triangulatePolygon, buildTerrainMesh, buildRoads, buildBuildings, buildGround, RoadIndex, BuildingIndex, buildingPolygons, wayNodeLayers, RAMP_M } from "../src3d/mesh";
+import { triangulatePolygon, buildTerrainMesh, buildRoads, buildBuildings, buildGround, buildLaneMarkings, buildKerbs, buildFurniture, buildRails, buildRoutes, RouteTrack, RoadIndex, BuildingIndex, buildingPolygons, wayNodeLayers, RAMP_M } from "../src3d/mesh";
 import { metersToLonLat, quantizeDeg } from "../src3d/geo";
 
 let failures = 0;
@@ -42,7 +42,7 @@ check("concave polygon area preserved", Math.abs(triAreaSum(concave, ccTris) - p
 check("degenerate -> empty", triangulatePolygon([[0, 0], [1, 1]]).length === 0);
 
 /** synthetic flat dataset: terrain 50 m everywhere, nodes placed via meters */
-function mkData(ways: { ptsM: Array<[number, number]>; tags: Record<string, string> }[]): BakedData {
+function mkData(ways: { ptsM: Array<[number, number]>; tags: Record<string, string> }[], points: { x: number; y: number; tags: Record<string, string> }[] = [], routes: { ptsM: Array<[number, number]>; tags: Record<string, string> }[] = []): BakedData {
   const keys: string[] = [];
   const values: string[] = [];
   const keyIdx = new Map<string, number>();
@@ -69,6 +69,16 @@ function mkData(ways: { ptsM: Array<[number, number]>; tags: Record<string, stri
     }
     return i;
   };
+  const bakedPoints: BakedWay[] = points.map((pt) => {
+    const t: number[] = [];
+    for (const [k, v] of Object.entries(pt.tags)) t.push(intern(keys, keyIdx, k), intern(values, valIdx, v));
+    return { r: [refOf(pt.x, pt.y)], t };
+  });
+  const bakedRoutes: BakedWay[] = (routes ?? []).map((w) => {
+    const t: number[] = [];
+    for (const [k, v] of Object.entries(w.tags)) t.push(intern(keys, keyIdx, k), intern(values, valIdx, v));
+    return { r: w.ptsM.map(([x, y]) => refOf(x, y)), t };
+  });
   const bakedWays: BakedWay[] = ways.map((w) => {
     const t: number[] = [];
     for (const [k, v] of Object.entries(w.tags)) t.push(intern(keys, keyIdx, k), intern(values, valIdx, v));
@@ -79,7 +89,7 @@ function mkData(ways: { ptsM: Array<[number, number]>; tags: Record<string, stri
   return {
     centerLon: 13.341, centerLat: 52.4784, radiusM: 2000, layerH: 5,
     terrain: { n, sizeM: 400, originX: -200, originY: -200, heightsDm },
-    keys, values, nodes, ways: bakedWays,
+    keys, values, nodes, ways: bakedWays, points: bakedPoints, routes: bakedRoutes,
   };
 }
 
@@ -169,6 +179,55 @@ const ground = buildGround(mkData([
   { ptsM: [[-50, 100], [50, 100], [50, 150], [-50, 150], [-50, 100]], tags: { landuse: "grass" } },
 ]));
 check("ground polygon mesh", ground.indices.length >= 6, `${ground.indices.length}`);
+
+// lane markings: 2-lane primary gets white center dashes + edge lines
+const markData = mkData([{ ptsM: [[0, 0], [60, 0]], tags: { highway: "primary", lanes: "2" } }]);
+const markRoads = buildRoads(markData);
+const marks = buildLaneMarkings(markData, markRoads.segments);
+check("lane markings mesh non-empty", marks.indices.length > 0, `${marks.indices.length}`);
+let whiteVerts = 0;
+for (let i = 0; i < marks.colors.length; i += 3) if (marks.colors[i] > 0.8 && marks.colors[i + 1] > 0.8) whiteVerts++;
+check("lane markings are white", whiteVerts > 0, `${whiteVerts}`);
+const noMarkData = mkData([{ ptsM: [[0, 0], [60, 0]], tags: { highway: "footway" } }]);
+check("footway gets no lane markings", buildLaneMarkings(noMarkData, buildRoads(noMarkData).segments).indices.length === 0);
+
+// kerbs: barrier=kerb way becomes a raised strip above terrain
+const kerbData = mkData([{ ptsM: [[0, 20], [50, 20]], tags: { barrier: "kerb", kerb: "raised" } }]);
+const kerbs = buildKerbs(kerbData);
+let kerbTop = -Infinity;
+for (let i = 1; i < kerbs.positions.length; i += 3) kerbTop = Math.max(kerbTop, kerbs.positions[i]);
+check("kerb strip rises to terrain+0.15", Math.abs(kerbTop - 50.15) < 1e-6, `${kerbTop}`);
+
+// furniture: street lamp pole rises above terrain
+const furnData = mkData([], [{ x: 10, y: 10, tags: { highway: "street_lamp" } }]);
+const furn = buildFurniture(furnData);
+let furnTop = -Infinity;
+for (let i = 1; i < furn.positions.length; i += 3) furnTop = Math.max(furnTop, furn.positions[i]);
+check("street lamp top at ~terrain+6", Math.abs(furnTop - 56) < 0.01, `${furnTop}`);
+
+// gabled/pyramidal roof: apex above the flat roof height
+const roofData = mkData([{ ptsM: [[0, -50], [20, -50], [20, -30], [0, -30], [0, -50]], tags: { building: "yes", height: "10", "roof:shape": "gabled", "roof:height": "3" } }]);
+const roofMesh = buildBuildings(roofData);
+let gableTop = -Infinity;
+for (let i = 1; i < roofMesh.positions.length; i += 3) gableTop = Math.max(gableTop, roofMesh.positions[i]);
+check("gabled roof apex at 50+10+3=63", Math.abs(gableTop - 63) < 1e-6, `${gableTop}`);
+
+// RouteTrack: 3-4-5 path
+const track = new RouteTrack([[0, 0], [30, 0], [30, 40]], [50, 50, 50]);
+check("RouteTrack length 70", Math.abs(track.length - 70) < 1e-9, `${track.length}`);
+const mid = track.pointAt(50);
+check("RouteTrack pointAt(50) = (30, 20)", Math.abs(mid.x - 30) < 1e-9 && Math.abs(mid.z - 20) < 1e-9, JSON.stringify(mid));
+check("RouteTrack wraps around", Math.abs(track.pointAt(70).x - 0) < 1e-9 && Math.abs(track.pointAt(70).z - 0) < 1e-9);
+check("RouteTrack elevation interp", Math.abs(track.pointAt(35).elev - 50) < 1e-9);
+
+// rails + routes rendering
+const railData = mkData([{ ptsM: [[0, 100], [80, 100]], tags: { railway: "rail" } }], [], [{ ptsM: [[0, 0], [60, 0]], tags: { route: "bus", ref: "M10" } }]);
+check("rails mesh non-empty", buildRails(railData).indices.length > 0);
+check("bus route line non-empty", buildRoutes(railData).indices.length > 0);
+
+// building facade uvs
+const uvMesh = buildBuildings(mkData([{ ptsM: [[0, -50], [12, -50], [12, -38], [0, -38], [0, -50]], tags: { building: "yes", height: "9" } }]));
+check("building mesh has uvs matching verts", uvMesh.uvs.length === (uvMesh.positions.length / 3) * 2);
 
 if (failures > 0) {
   console.error(`${failures} test(s) failed`);

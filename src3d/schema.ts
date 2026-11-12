@@ -35,6 +35,10 @@ export interface BakedData {
   /** flat node coords: [lonQ, latQ, lonQ, latQ, ...] in 1e-7 degrees */
   nodes: number[];
   ways: BakedWay[];
+  /** standalone tagged nodes (street lamps, traffic signals, trees, ...) */
+  points: BakedWay[];
+  /** assembled bus/trolleybus route relations (type=route route=bus) */
+  routes: BakedWay[];
 }
 
 export interface BakedWay {
@@ -142,15 +146,15 @@ export function roadWidthM(tags: Record<string, string>): number {
 }
 
 const SURFACE_COLORS: Record<string, [number, number, number]> = {
-  asphalt: [0.32, 0.32, 0.34],
-  concrete: [0.62, 0.62, 0.6],
-  paving_stones: [0.55, 0.53, 0.5],
-  sett: [0.5, 0.48, 0.44],
-  cobblestone: [0.45, 0.43, 0.4],
-  grass: [0.35, 0.55, 0.3],
-  gravel: [0.6, 0.56, 0.48],
-  dirt: [0.55, 0.48, 0.38],
-  sand: [0.76, 0.7, 0.5],
+  asphalt: [0.42, 0.42, 0.45],
+  concrete: [0.7, 0.7, 0.68],
+  paving_stones: [0.64, 0.62, 0.58],
+  sett: [0.58, 0.56, 0.52],
+  cobblestone: [0.54, 0.52, 0.48],
+  grass: [0.5, 0.66, 0.4],
+  gravel: [0.68, 0.64, 0.55],
+  dirt: [0.62, 0.55, 0.44],
+  sand: [0.82, 0.76, 0.56],
 };
 
 export function surfaceColor(tags: Record<string, string>): [number, number, number] {
@@ -158,15 +162,34 @@ export function surfaceColor(tags: Record<string, string>): [number, number, num
   if (s && SURFACE_COLORS[s]) return SURFACE_COLORS[s];
   const hw = tags["highway"] ?? "";
   if (hw === "footway" || hw === "path" || hw === "steps" || hw === "pedestrian" || hw === "cycleway") {
-    return s === "asphalt" ? SURFACE_COLORS.asphalt : [0.6, 0.58, 0.55];
+    return s === "asphalt" ? SURFACE_COLORS.asphalt : [0.68, 0.66, 0.62];
   }
-  if (hw === "motorway" || hw === "motorway_link") return [0.28, 0.29, 0.33];
+  if (hw === "motorway" || hw === "motorway_link") return [0.38, 0.39, 0.44];
   return SURFACE_COLORS.asphalt;
 }
 
 export function buildingColor(h: number): [number, number, number] {
   const t = Math.min(1, h / 60);
   return [0.72 - 0.25 * t, 0.62 - 0.2 * t, 0.55 - 0.15 * t];
+}
+
+/** Transport-Fever-style pastel facade palette, chosen by a stable hash of
+ *  the building position so neighboring blocks vary in color. */
+const BUILDING_PALETTE: Array<[number, number, number]> = [
+  [0.93, 0.88, 0.78],
+  [0.87, 0.82, 0.72],
+  [0.82, 0.79, 0.75],
+  [0.95, 0.93, 0.88],
+  [0.78, 0.84, 0.88],
+  [0.9, 0.78, 0.72],
+  [0.85, 0.88, 0.78],
+  [0.8, 0.72, 0.66],
+];
+
+export function buildingPaletteColor(x: number, y: number): [number, number, number] {
+  let h = Math.round(x * 73856093) ^ Math.round(y * 19349663);
+  h = Math.abs((h * 83492791) | 0);
+  return BUILDING_PALETTE[h % BUILDING_PALETTE.length];
 }
 
 /** Bilinear sample of the terrain grid at local-frame (x, y), meters a.s.l.

@@ -4,7 +4,7 @@
  * local frame: positions are [east, up, north] meters (three.js x/y/z).
  */
 import type { BakedData, BakedWay, TerrainGrid } from "./schema";
-import { getTag, wayTags, sampleTerrainM, buildingHeightM, minHeightM, osmLayer, layerElevationM, roadWidthM, surfaceColor, buildingColor } from "./schema";
+import { getTag, wayTags, sampleTerrainM, buildingHeightM, minHeightM, osmLayer, layerElevationM, roadWidthM, surfaceColor, buildingPaletteColor, parseHeightM, parseLevels } from "./schema";
 import { dequantizeDeg, lonLatToMeters, LAYER_H } from "./geo";
 
 export interface MeshData {
@@ -12,17 +12,27 @@ export interface MeshData {
   normals: number[];
   colors: number[];
   indices: number[];
+  /** uv per vertex (0,0 default); used for the building facade texture */
+  uvs: number[];
 }
 
 export function emptyMesh(): MeshData {
-  return { positions: [], normals: [], colors: [], indices: [] };
+  return { positions: [], normals: [], colors: [], indices: [], uvs: [] };
 }
 
 function pushVert(m: MeshData, x: number, y: number, z: number, nx: number, ny: number, nz: number, c: [number, number, number]): number {
   m.positions.push(x, y, z);
   m.normals.push(nx, ny, nz);
   m.colors.push(c[0], c[1], c[2]);
+  m.uvs.push(0, 0);
   return m.positions.length / 3 - 1;
+}
+
+function pushVertUV(m: MeshData, x: number, y: number, z: number, nx: number, ny: number, nz: number, c: [number, number, number], u: number, v: number): number {
+  const i = pushVert(m, x, y, z, nx, ny, nz, c);
+  m.uvs[i * 2] = u;
+  m.uvs[i * 2 + 1] = v;
+  return i;
 }
 
 function pushTri(m: MeshData, a: number, b: number, c: number): void {
@@ -97,7 +107,7 @@ export function buildTerrainMesh(g: TerrainGrid): MeshData {
     const x = g.originX + i * cell;
     const z = g.originY + j * cell;
     const h = g.heightsDm[j * (n + 1) + i] * 0.1;
-    return pushVert(m, x, h, z, 0, 1, 0, [0.42, 0.5, 0.34]);
+    return pushVert(m, x, h, z, 0, 1, 0, [0.56, 0.7, 0.44]);
   };
   const grid: number[][] = [];
   for (let j = 0; j <= n; j++) {
@@ -197,8 +207,11 @@ export function buildRoads(data: BakedData): RoadBuild {
     const col = surfaceColor(tags);
     const pts = way.r.map((r) => nodeXY(data, r));
     const factors = wayNodeLayers(way, layer, maxLayer, pts);
-    // +0.12 m so road decks render above the landuse ground polygons (+0.06)
-    const elevs = pts.map(([x, y], i) => sampleTerrainM(data.terrain, x, y) + factors[i] * LAYER_H + 0.12);
+    // +0.12 m so road decks render above the landuse ground polygons (+0.06);
+    // footways/paths/sidewalks get another +0.12 m kerb lift
+    const isFootway = hw === "footway" || hw === "path" || hw === "steps" || hw === "pedestrian" || hw === "cycleway";
+    const lift = 0.12 + (isFootway ? 0.12 : 0);
+    const elevs = pts.map(([x, y], i) => sampleTerrainM(data.terrain, x, y) + factors[i] * LAYER_H + lift);
 
     for (let i = 0; i + 1 < pts.length; i++) {
       const [ax, ay] = pts[i];
@@ -295,54 +308,83 @@ export function buildBuildings(data: BakedData): MeshData {
     if (pts.length < 3) continue;
     const h = buildingHeightM(tags);
     const base = minHeightM(tags);
-    const col = buildingColor(h);
+    const cxy = pts.reduce((a, p) => [a[0] + p[0] / pts.length, a[1] + p[1] / pts.length], [0, 0] as [number, number]);
+    const col = buildingPaletteColor(cxy[0], cxy[1]);
     const wallCol: [number, number, number] = [col[0] * 0.92, col[1] * 0.92, col[2] * 0.92];
     const roofCol: [number, number, number] = [col[0] * 0.55, col[1] * 0.55, col[2] * 0.55];
     const baseElev = pts.map(([x, y]) => sampleTerrainM(data.terrain, x, y));
     const top = baseElev.map((e) => e + base + h);
     const bottom = baseElev.map((e) => e + base);
     const n = pts.length;
+    let cumLen = 0;
+    const edgeLen: number[] = [];
     for (let i = 0; i < n; i++) {
       const j = (i + 1) % n;
-      const dx = pts[j][0] - pts[i][0];
-      const dy = pts[j][1] - pts[i][1];
-      const len = Math.hypot(dx, dy) || 1;
-      const nx = dy / len;
-      const nz = -dx / len;
-      const a = pushVert(mesh, pts[i][0], bottom[i], pts[i][1], nx, 0, nz, wallCol);
-      const b = pushVert(mesh, pts[j][0], bottom[j], pts[j][1], nx, 0, nz, wallCol);
-      const c = pushVert(mesh, pts[j][0], top[j], pts[j][1], nx, 0, nz, wallCol);
-      const d = pushVert(mesh, pts[i][0], top[i], pts[i][1], nx, 0, nz, wallCol);
+      edgeLen.push(Math.hypot(pts[j][0] - pts[i][0], pts[j][1] - pts[i][1]));
+      cumLen += edgeLen[i];
+    }
+    let acc = 0;
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      const len = edgeLen[i] || 1;
+      const nx = (pts[j][1] - pts[i][1]) / len;
+      const nz = -(pts[j][0] - pts[i][0]) / len;
+      // facade uv: u along the wall every 3 m, v one texture tile per 3 m of height
+      const u0 = acc / 3, u1 = (acc + len) / 3;
+      const v0 = (bottom[i] - baseElev[0]) / 3, v1 = (top[i] - baseElev[0]) / 3;
+      const a = pushVertUV(mesh, pts[i][0], bottom[i], pts[i][1], nx, 0, nz, wallCol, u0, v0);
+      const b = pushVertUV(mesh, pts[j][0], bottom[j], pts[j][1], nx, 0, nz, wallCol, u1, v0);
+      const c = pushVertUV(mesh, pts[j][0], top[j], pts[j][1], nx, 0, nz, wallCol, u1, v1);
+      const d = pushVertUV(mesh, pts[i][0], top[i], pts[i][1], nx, 0, nz, wallCol, u0, v1);
       pushTri(mesh, a, c, b);
       pushTri(mesh, a, d, c);
+      acc += len;
     }
-    const roofBase = pts.map(([x, y], i) => pushVert(mesh, x, top[i], y, 0, 1, 0, roofCol));
-    const tris = triangulatePolygon(pts);
-    for (let k = 0; k + 2 < tris.length; k += 3) {
-      pushTri(mesh, roofBase[tris[k]], roofBase[tris[k + 2]], roofBase[tris[k + 1]]);
+    const roofH = ["gabled", "hipped", "pyramidal", "gambrel", "round"].includes(tags["roof:shape"] ?? "")
+      ? (parseHeightM(tags["roof:height"]) ?? 2.5)
+      : 0;
+    if (roofH > 0 && pts.length >= 3) {
+      // pyramidal approximation: apex above the centroid, one triangle per edge
+      let cx = 0, cy = 0;
+      for (const [px, py] of pts) { cx += px; cy += py; }
+      cx /= pts.length; cy /= pts.length;
+      const apexH = top.reduce((a, b) => a + b, 0) / top.length + roofH;
+      const apex = pushVert(mesh, cx, apexH, cy, 0, 1, 0, roofCol);
+      for (let i = 0; i < pts.length; i++) {
+        const j = (i + 1) % pts.length;
+        const a = pushVert(mesh, pts[i][0], top[i], pts[i][1], 0, 1, 0, roofCol);
+        const b = pushVert(mesh, pts[j][0], top[j], pts[j][1], 0, 1, 0, roofCol);
+        pushTri(mesh, a, b, apex);
+      }
+    } else {
+      const roofBase = pts.map(([x, y], i) => pushVert(mesh, x, top[i], y, 0, 1, 0, roofCol));
+      const tris = triangulatePolygon(pts);
+      for (let k = 0; k + 2 < tris.length; k += 3) {
+        pushTri(mesh, roofBase[tris[k]], roofBase[tris[k + 2]], roofBase[tris[k + 1]]);
+      }
     }
   }
   return mesh;
 }
 
 const GROUND_COLORS: Record<string, [number, number, number]> = {
-  grass: [0.4, 0.58, 0.32],
-  forest: [0.3, 0.48, 0.26],
-  park: [0.42, 0.6, 0.34],
-  residential: [0.52, 0.5, 0.46],
-  commercial: [0.55, 0.52, 0.47],
-  retail: [0.55, 0.52, 0.47],
-  industrial: [0.55, 0.53, 0.48],
-  water: [0.25, 0.45, 0.65],
-  cemetery: [0.45, 0.56, 0.36],
-  meadow: [0.46, 0.6, 0.36],
- scrub: [0.4, 0.52, 0.32],
+  grass: [0.52, 0.68, 0.4],
+  forest: [0.44, 0.62, 0.38],
+  park: [0.5, 0.68, 0.42],
+  residential: [0.68, 0.66, 0.6],
+  commercial: [0.66, 0.64, 0.58],
+  retail: [0.66, 0.64, 0.58],
+  industrial: [0.64, 0.62, 0.56],
+  water: [0.36, 0.6, 0.82],
+  cemetery: [0.52, 0.66, 0.42],
+  meadow: [0.55, 0.69, 0.42],
+  scrub: [0.48, 0.63, 0.4],
 };
 
 function groundColor(tags: Record<string, string>): [number, number, number] {
   if (tags["natural"] === "water" || tags["waterway"]) return GROUND_COLORS.water;
   const lu = tags["landuse"] ?? tags["leisure"] ?? tags["natural"] ?? "";
-  return GROUND_COLORS[lu] ?? [0.5, 0.52, 0.44];
+  return GROUND_COLORS[lu] ?? [0.62, 0.63, 0.58];
 }
 
 /** Flat ground polygons (landuse / water / area:highway) draped on the DEM. */
@@ -522,4 +564,356 @@ export function buildingPolygons(data: BakedData): Array<Array<[number, number]>
     out.push(way.r.slice(0, -1).map((r) => nodeXY(data, r)));
   }
   return out;
+}
+
+
+/* ---------- lane markings ---------- */
+
+const MARKED_CLASSES = new Set(["motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential", "motorway_link", "trunk_link", "primary_link", "secondary_link", "tertiary_link"]);
+
+/**
+ * Dashed white center line (roads with >= 2 lanes) and solid edge lines on
+ * major roads, laid 1 cm above the deck. Segments must come from buildRoads.
+ */
+export function buildLaneMarkings(data: BakedData, segments: RoadSegment[]): MeshData {
+  const mesh = emptyMesh();
+  const byWay = new Map<number, RoadSegment[]>();
+  for (const s of segments) {
+    let arr = byWay.get(s.wayIdx);
+    if (!arr) {
+      arr = [];
+      byWay.set(s.wayIdx, arr);
+    }
+    arr.push(s);
+  }
+  const white: [number, number, number] = [0.85, 0.85, 0.85];
+  for (const way of data.ways) {
+    const segs = byWay.get(data.ways.indexOf(way));
+    if (!segs || segs.length === 0) continue;
+    const tags = wayTags(data, way);
+    const hw = tags["highway"] ?? "";
+    if (!MARKED_CLASSES.has(hw)) continue;
+    const lanes = parseLevels(tags["lanes"]) ?? (hw.includes("motorway") ? 2 : hw.includes("link") ? 1 : 2);
+    const halfW = segs[0].halfW;
+    let dist = 0;
+    for (const s of segs) {
+      const len = Math.hypot(s.bx - s.ax, s.by - s.ay);
+      if (len < 1e-6) continue;
+      const nx = -(s.by - s.ay) / len;
+      const ny = (s.bx - s.ax) / len;
+      const elev = (t: number) => s.elevA + (s.elevB - s.elevA) * t + 0.01;
+      if (lanes >= 2) {
+        // dashed center line: 3 m dash, 3 m gap
+        let t = 0;
+        let dashOn = (Math.floor(dist / 3) % 2) === 0;
+        let dashStart = dist % 3;
+        while (t < 1) {
+          const segLen = len * (1 - t);
+          const remaining = dashOn ? 3 - dashStart : dashStart;
+          const d = Math.min(remaining, segLen);
+          if (dashOn && d > 0.3) {
+            const t0 = t;
+            const t1 = t + d / len;
+            const w2 = 0.075;
+            const v0 = pushVert(mesh, s.ax + (s.bx - s.ax) * t0 + nx * w2, elev(t0), s.ay + (s.by - s.ay) * t0 + ny * w2, 0, 1, 0, white);
+            const v1 = pushVert(mesh, s.ax + (s.bx - s.ax) * t0 - nx * w2, elev(t0), s.ay + (s.by - s.ay) * t0 - ny * w2, 0, 1, 0, white);
+            const v2 = pushVert(mesh, s.ax + (s.bx - s.ax) * t1 - nx * w2, elev(t1), s.ay + (s.by - s.ay) * t1 - ny * w2, 0, 1, 0, white);
+            const v3 = pushVert(mesh, s.ax + (s.bx - s.ax) * t1 + nx * w2, elev(t1), s.ay + (s.by - s.ay) * t1 + ny * w2, 0, 1, 0, white);
+            pushTri(mesh, v0, v1, v2);
+            pushTri(mesh, v0, v2, v3);
+          }
+          t += d / len;
+          dist += d;
+          dashOn = !dashOn;
+          dashStart = 0;
+        }
+      }
+      if (lanes >= 2 || hw === "motorway" || hw === "trunk" || hw === "primary" || hw === "secondary") {
+        // solid edge lines
+        for (const side of [1, -1]) {
+          const o = side * (halfW - 0.4);
+          const w2 = 0.06;
+          const v0 = pushVert(mesh, s.ax + nx * (o + w2), elev(0), s.ay + ny * (o + w2), 0, 1, 0, white);
+          const v1 = pushVert(mesh, s.ax + nx * (o - w2), elev(0), s.ay + ny * (o - w2), 0, 1, 0, white);
+          const v2 = pushVert(mesh, s.bx + nx * (o - w2), elev(1), s.by + ny * (o - w2), 0, 1, 0, white);
+          const v3 = pushVert(mesh, s.bx + nx * (o + w2), elev(1), s.by + ny * (o + w2), 0, 1, 0, white);
+          pushTri(mesh, v0, v1, v2);
+          pushTri(mesh, v0, v2, v3);
+        }
+      }
+    }
+  }
+  return mesh;
+}
+
+/* ---------- kerbs ---------- */
+
+/** barrier=kerb ways as low raised strips (0.3 m wide, 0.15 m high). */
+export function buildKerbs(data: BakedData): MeshData {
+  const mesh = emptyMesh();
+  const col: [number, number, number] = [0.62, 0.62, 0.6];
+  for (const way of data.ways) {
+    if (getTag(data, way, "barrier") !== "kerb") continue;
+    const pts = way.r.map((r) => nodeXY(data, r));
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const [ax, ay] = pts[i];
+      const [bx, by] = pts[i + 1];
+      const dx = bx - ax;
+      const dy = by - ay;
+      const len = Math.hypot(dx, dy);
+      if (len < 1e-6) continue;
+      const nx = -dy / len;
+      const ny = dx / len;
+      const hW = 0.15;
+      const g0 = sampleTerrainM(data.terrain, ax, ay);
+      const g1 = sampleTerrainM(data.terrain, bx, by);
+      const top0 = g0 + 0.15;
+      const top1 = g1 + 0.15;
+      const p0 = pushVert(mesh, ax + nx * hW, g0, ay + ny * hW, nx, 0, ny, col);
+      const p1 = pushVert(mesh, ax - nx * hW, g0, ay - ny * hW, -nx, 0, -ny, col);
+      const p2 = pushVert(mesh, bx - nx * hW, g1, by - ny * hW, -nx, 0, -ny, col);
+      const p3 = pushVert(mesh, bx + nx * hW, g1, by + ny * hW, nx, 0, ny, col);
+      const q0 = pushVert(mesh, ax + nx * hW, top0, ay + ny * hW, nx, 0, ny, col);
+      const q1 = pushVert(mesh, ax - nx * hW, top0, ay - ny * hW, -nx, 0, -ny, col);
+      const q2 = pushVert(mesh, bx - nx * hW, top1, by - ny * hW, -nx, 0, -ny, col);
+      const q3 = pushVert(mesh, bx + nx * hW, top1, by + ny * hW, nx, 0, ny, col);
+      pushTri(mesh, p0, q0, q3);
+      pushTri(mesh, p0, q3, p3);
+      pushTri(mesh, p1, p2, q2);
+      pushTri(mesh, p1, q2, q1);
+      const t0 = pushVert(mesh, ax + nx * hW, top0, ay + ny * hW, 0, 1, 0, col);
+      const t1 = pushVert(mesh, ax - nx * hW, top0, ay - ny * hW, 0, 1, 0, col);
+      const t2 = pushVert(mesh, bx - nx * hW, top1, by - ny * hW, 0, 1, 0, col);
+      const t3 = pushVert(mesh, bx + nx * hW, top1, by + ny * hW, 0, 1, 0, col);
+      pushTri(mesh, t0, t1, t2);
+      pushTri(mesh, t0, t2, t3);
+    }
+  }
+  return mesh;
+}
+
+/* ---------- street furniture: lamps, signals, trees, bollards ---------- */
+
+function prism(mesh: MeshData, x: number, y0: number, z: number, r: number, h: number, sides: number, c: [number, number, number]): void {
+  const ring: number[] = [];
+  for (let k = 0; k < sides; k++) {
+    const a = (k / sides) * Math.PI * 2;
+    ring.push(pushVert(mesh, x + Math.cos(a) * r, y0, z + Math.sin(a) * r, Math.cos(a), 0, Math.sin(a), c));
+  }
+  const top: number[] = [];
+  for (let k = 0; k < sides; k++) {
+    const a = (k / sides) * Math.PI * 2;
+    top.push(pushVert(mesh, x + Math.cos(a) * r, y0 + h, z + Math.sin(a) * r, 0, 1, 0, c));
+  }
+  const center = pushVert(mesh, x, y0 + h, z, 0, 1, 0, c);
+  for (let k = 0; k < sides; k++) {
+    const k2 = (k + 1) % sides;
+    pushTri(mesh, ring[k], ring[k2], top[k2]);
+    pushTri(mesh, ring[k], top[k2], top[k]);
+    pushTri(mesh, center, top[k], top[k2]);
+  }
+}
+
+function cone(mesh: MeshData, x: number, y0: number, z: number, r: number, h: number, sides: number, c: [number, number, number]): void {
+  const apex = pushVert(mesh, x, y0 + h, z, 0, 1, 0, c);
+  const ring: number[] = [];
+  for (let k = 0; k < sides; k++) {
+    const a = (k / sides) * Math.PI * 2;
+    ring.push(pushVert(mesh, x + Math.cos(a) * r, y0, z + Math.sin(a) * r, 0, 0, 1, c));
+  }
+  for (let k = 0; k < sides; k++) pushTri(mesh, ring[k], ring[(k + 1) % sides], apex);
+}
+
+/** Street lamps, traffic signals, trees, bollards, benches from baked points. */
+export function buildFurniture(data: BakedData): MeshData {
+  const mesh = emptyMesh();
+  const pole: [number, number, number] = [0.25, 0.26, 0.28];
+  const lampHead: [number, number, number] = [0.95, 0.9, 0.7];
+  const trunk: [number, number, number] = [0.35, 0.25, 0.15];
+  const leaf: [number, number, number] = [0.2, 0.45, 0.2];
+  const leaf2: [number, number, number] = [0.28, 0.52, 0.24];
+  for (const pt of data.points) {
+    if (pt.r.length < 1) continue;
+    const tags = wayTags(data, pt);
+    const [x, y] = nodeXY(data, pt.r[0]);
+    const g = sampleTerrainM(data.terrain, x, y);
+    const hw = tags["highway"];
+    if (hw === "street_lamp") {
+      prism(mesh, x, g, y, 0.07, 6, 6, pole);
+      prism(mesh, x + 0.8, g + 5.4, y, 0.05, 0.6, 6, pole);
+      prism(mesh, x + 1.1, g + 5.2, y, 0.22, 0.18, 6, lampHead);
+    } else if (hw === "traffic_signals") {
+      prism(mesh, x, g, y, 0.06, 3.2, 6, pole);
+      prism(mesh, x, g + 3.2, y, 0.16, 0.75, 4, [0.12, 0.12, 0.12]);
+      const red: [number, number, number] = [0.8, 0.1, 0.1];
+      const amber: [number, number, number] = [0.95, 0.7, 0.1];
+      const green: [number, number, number] = [0.1, 0.7, 0.2];
+      prism(mesh, x + 0.17, g + 3.75, y, 0.05, 0.14, 6, red);
+      prism(mesh, x + 0.17, g + 3.5, y, 0.05, 0.14, 6, amber);
+      prism(mesh, x + 0.17, g + 3.25, y, 0.05, 0.14, 6, green);
+    } else if (tags["natural"] === "tree") {
+      prism(mesh, x, g, y, 0.12, 1.6, 5, trunk);
+      cone(mesh, x, g + 1.2, y, 1.3, 3.2, 7, leaf);
+      cone(mesh, x, g + 2.8, y, 0.9, 2.4, 7, leaf2);
+    } else if (tags["barrier"] === "bollard") {
+      prism(mesh, x, g, y, 0.09, 0.8, 6, [0.5, 0.2, 0.15]);
+    } else if (tags["amenity"] === "bench") {
+      prism(mesh, x, g, y, 0.5, 0.45, 4, [0.45, 0.33, 0.2]);
+    } else if (hw === "bus_stop" || tags["public_transport"] === "stop_position") {
+      prism(mesh, x, g, y, 0.05, 2.4, 6, pole);
+      prism(mesh, x, g + 2.1, y, 0.22, 0.22, 6, [0.95, 0.75, 0.1]);
+    } else if (tags["amenity"] === "bus_station" || tags["public_transport"] === "platform") {
+      for (const [ox, oz] of [[-1.4, -0.6], [1.4, -0.6], [-1.4, 0.6], [1.4, 0.6]] as const) {
+        prism(mesh, x + ox, g, y + oz, 0.05, 2.2, 4, pole);
+      }
+      prism(mesh, x, g + 2.2, y, 1.6, 0.08, 4, [0.7, 0.72, 0.75]);
+      prism(mesh, x, g, y, 0.9, 0.45, 4, [0.45, 0.33, 0.2]);
+    }
+  }
+  return mesh;
+}
+
+
+/* ---------- railways ---------- */
+
+/** Ballast bed + two steel rails for railway ways, respecting layer stacking. */
+export function buildRails(data: BakedData): MeshData {
+  const mesh = emptyMesh();
+  const ballast: [number, number, number] = [0.38, 0.37, 0.36];
+  const steel: [number, number, number] = [0.75, 0.76, 0.78];
+  for (const way of data.ways) {
+    const rw = getTag(data, way, "railway");
+    if (!rw || !["rail", "light_rail", "subway", "tram"].includes(rw)) continue;
+    const tags = wayTags(data, way);
+    const layer = osmLayer(tags);
+    const pts = way.r.map((r) => nodeXY(data, r));
+    const factors = wayNodeLayers(way, layer, nodeMaxLayerOf(data), pts);
+    const elevs = pts.map(([x, y], i) => sampleTerrainM(data.terrain, x, y) + factors[i] * LAYER_H);
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const [ax, ay] = pts[i];
+      const [bx, by] = pts[i + 1];
+      const dx = bx - ax;
+      const dy = by - ay;
+      const len = Math.hypot(dx, dy);
+      if (len < 1e-6) continue;
+      const nx = -dy / len;
+      const ny = dx / len;
+      const e0 = elevs[i] + 0.1;
+      const e1 = elevs[i + 1] + 0.1;
+      const strip = (halfW: number, lift: number, c: [number, number, number]) => {
+        const v0 = pushVert(mesh, ax + nx * halfW, e0 + lift, ay + ny * halfW, 0, 1, 0, c);
+        const v1 = pushVert(mesh, ax - nx * halfW, e0 + lift, ay - ny * halfW, 0, 1, 0, c);
+        const v2 = pushVert(mesh, bx - nx * halfW, e1 + lift, by - ny * halfW, 0, 1, 0, c);
+        const v3 = pushVert(mesh, bx + nx * halfW, e1 + lift, by + ny * halfW, 0, 1, 0, c);
+        pushTri(mesh, v0, v1, v2);
+        pushTri(mesh, v0, v2, v3);
+      };
+      strip(1.9, 0, ballast);
+      strip(0.08, 0.08, steel);
+      // second rail offset to the other side
+      const o = 0.75;
+      const r0 = pushVert(mesh, ax + nx * o + nx * 0.08, e0 + 0.08, ay + ny * o + ny * 0.08, 0, 1, 0, steel);
+      const r1 = pushVert(mesh, ax + nx * o - nx * 0.08, e0 + 0.08, ay + ny * o - ny * 0.08, 0, 1, 0, steel);
+      const r2 = pushVert(mesh, bx + nx * o - nx * 0.08, e1 + 0.08, by + ny * o - ny * 0.08, 0, 1, 0, steel);
+      const r3 = pushVert(mesh, bx + nx * o + nx * 0.08, e1 + 0.08, by + ny * o + ny * 0.08, 0, 1, 0, steel);
+      pushTri(mesh, r0, r1, r2);
+      pushTri(mesh, r0, r2, r3);
+      const s0 = pushVert(mesh, ax - nx * o + nx * 0.08, e0 + 0.08, ay - ny * o + ny * 0.08, 0, 1, 0, steel);
+      const s1 = pushVert(mesh, ax - nx * o - nx * 0.08, e0 + 0.08, ay - ny * o - ny * 0.08, 0, 1, 0, steel);
+      const s2 = pushVert(mesh, bx - nx * o - nx * 0.08, e1 + 0.08, by - ny * o - ny * 0.08, 0, 1, 0, steel);
+      const s3 = pushVert(mesh, bx - nx * o + nx * 0.08, e1 + 0.08, by - ny * o + ny * 0.08, 0, 1, 0, steel);
+      pushTri(mesh, s0, s1, s2);
+      pushTri(mesh, s0, s2, s3);
+    }
+  }
+  return mesh;
+}
+
+function nodeMaxLayerOf(data: BakedData): Map<number, number> {
+  const map = new Map<number, number>();
+  for (const way of data.ways) {
+    if (!getTag(data, way, "highway") && !getTag(data, way, "railway")) continue;
+    const l = osmLayer(wayTags(data, way));
+    for (const r of way.r) {
+      const cur = map.get(r);
+      if (cur === undefined || l > cur) map.set(r, l);
+    }
+  }
+  return map;
+}
+
+/** Drivable path along an assembled route polyline (buses, trains). */
+export class RouteTrack {
+  readonly pts: Array<[number, number]>;
+  readonly elevs: number[];
+  private cum: number[];
+  readonly length: number;
+  constructor(pts: Array<[number, number]>, elevs: number[]) {
+    this.pts = pts;
+    this.elevs = elevs;
+    this.cum = [0];
+    for (let i = 1; i < pts.length; i++) {
+      this.cum.push(this.cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+    }
+    this.length = this.cum[this.cum.length - 1];
+  }
+  pointAt(dist: number): { x: number; z: number; heading: number; elev: number } {
+    const d = ((dist % this.length) + this.length) % this.length;
+    let lo = 0, hi = this.cum.length - 1;
+    while (lo + 1 < hi) {
+      const mid = (lo + hi) >> 1;
+      if (this.cum[mid] <= d) lo = mid;
+      else hi = mid;
+    }
+    const segLen = this.cum[lo + 1] - this.cum[lo] || 1;
+    const t = (d - this.cum[lo]) / segLen;
+    const [ax, ay] = this.pts[lo];
+    const [bx, by] = this.pts[lo + 1];
+    return {
+      x: ax + (bx - ax) * t,
+      z: ay + (by - ay) * t,
+      heading: Math.atan2(by - ay, bx - ax),
+      elev: this.elevs[lo] + (this.elevs[lo + 1] - this.elevs[lo]) * t,
+    };
+  }
+}
+
+/* ---------- bus routes ---------- */
+
+function hexColor(hex: string | undefined, fallback: [number, number, number]): [number, number, number] {
+  if (!hex) return fallback;
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(hex.trim());
+  if (!m) return fallback;
+  const v = parseInt(m[1], 16);
+  return [((v >> 16) & 255) / 255, ((v >> 8) & 255) / 255, (v & 255) / 255];
+}
+
+/** Colored line ribbons along assembled bus route relations, just above the deck. */
+export function buildRoutes(data: BakedData): MeshData {
+  const mesh = emptyMesh();
+  for (const route of data.routes) {
+    const tags = wayTags(data, route);
+    const col = hexColor(tags["colour"], tags["route"] === "trolleybus" ? [0.2, 0.55, 0.85] : [0.85, 0.45, 0.1]);
+    const pts = route.r.map((r) => nodeXY(data, r));
+    const halfW = 0.3;
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const [ax, ay] = pts[i];
+      const [bx, by] = pts[i + 1];
+      const dx = bx - ax;
+      const dy = by - ay;
+      const len = Math.hypot(dx, dy);
+      if (len < 1e-6) continue;
+      const nx = -dy / len;
+      const ny = dx / len;
+      const e0 = sampleTerrainM(data.terrain, ax, ay) + 0.18;
+      const e1 = sampleTerrainM(data.terrain, bx, by) + 0.18;
+      const v0 = pushVert(mesh, ax + nx * halfW, e0, ay + ny * halfW, 0, 1, 0, col);
+      const v1 = pushVert(mesh, ax - nx * halfW, e0, ay - ny * halfW, 0, 1, 0, col);
+      const v2 = pushVert(mesh, bx - nx * halfW, e1, by - ny * halfW, 0, 1, 0, col);
+      const v3 = pushVert(mesh, bx + nx * halfW, e1, by + ny * halfW, 0, 1, 0, col);
+      pushTri(mesh, v0, v1, v2);
+      pushTri(mesh, v0, v2, v3);
+    }
+  }
+  return mesh;
 }

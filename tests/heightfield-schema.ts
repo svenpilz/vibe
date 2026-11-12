@@ -34,7 +34,8 @@ check("residential default 7.5", roadWidthM({ highway: "residential" }) === 7.5)
 check("footway default 2", roadWidthM({ highway: "footway" }) === 2);
 
 const sc = surfaceColor({ highway: "motorway" });
-check("motorway darker than asphalt", sc[0] < 0.3);
+const res = surfaceColor({ highway: "residential" });
+check("motorway darker than residential asphalt", sc[0] < res[0], `${sc[0]} vs ${res[0]}`);
 check("footway lighter", surfaceColor({ highway: "footway" })[0] > 0.5);
 
 function grid(heightsDm: number[]): TerrainGrid {

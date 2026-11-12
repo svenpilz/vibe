@@ -44,7 +44,7 @@ check("highways present", highways > 15000, `${highways}`);
 check("bridges present (multi-level above)", bridges > 100 && layered > 100, `bridges=${bridges} layered=${layered}`);
 check("tunnels present (multi-level below)", tunnels > 100 && negLayer > 100, `tunnels=${tunnels} negLayer=${negLayer}`);
 
-check("terrain grid 220 (20 m cells)", data.terrain.n === 220);
+check("terrain grid 440 (10 m cells)", data.terrain.n === 440);
 let mn = Infinity, mx = -Infinity;
 for (const h of data.terrain.heightsDm) {
   mn = Math.min(mn, h);
@@ -53,6 +53,34 @@ for (const h of data.terrain.heightsDm) {
 check("terrain heights in Berlin DGM1/DHHN2016 range (30..80 m)", mn >= 300 && mx <= 800, `${mn / 10}..${mx / 10} m`);
 
 check("tag tables non-empty", data.keys.includes("highway") && data.keys.includes("building") && data.keys.includes("layer"));
+
+let lamps = 0, signals = 0, trees = 0, kerbWays = 0, shapedRoofs = 0;
+for (const pt of data.points) {
+  const hw = getTag(data, pt, "highway");
+  if (hw === "street_lamp") lamps++;
+  if (hw === "traffic_signals") signals++;
+  if (getTag(data, pt, "natural") === "tree") trees++;
+}
+for (const w of data.ways) {
+  if (getTag(data, w, "barrier") === "kerb") kerbWays++;
+  if (getTag(data, w, "roof:shape")) shapedRoofs++;
+}
+check("street furniture points present", lamps > 1000 && signals > 100 && trees > 5000, `lamps=${lamps} signals=${signals} trees=${trees}`);
+check("kerb ways present", kerbWays > 500, `${kerbWays}`);
+check("shaped roofs present", shapedRoofs > 500, `${shapedRoofs}`);
+
+let routeCount = 0, trainRoutes = 0, railWays = 0, busStops = 0;
+for (const r of data.routes) {
+  routeCount++;
+  if (getTag(data, r, "route") === "train" || getTag(data, r, "route") === "light_rail") trainRoutes++;
+}
+for (const w of data.ways) if (getTag(data, w, "railway")) railWays++;
+for (const pt of data.points) {
+  if (getTag(data, pt, "highway") === "bus_stop" || getTag(data, pt, "amenity") === "bus_station") busStops++;
+}
+check("bus/train route relations present", routeCount > 5 && trainRoutes > 0, `routes=${routeCount} trains=${trainRoutes}`);
+check("railway ways present (S-Bahn)", railWays > 30, `${railWays}`);
+check("bus stops present", busStops > 30, `${busStops}`);
 
 if (failures > 0) {
   console.error(`${failures} test(s) failed`);
