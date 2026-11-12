@@ -101,12 +101,16 @@ function makeFacadeTexture(): THREE.Texture {
   return tex;
 }
 
+/** OSM-derived overlay meshes (hidden in terrain-only mode) */
+const overlayMeshes: THREE.Mesh[] = [];
+
 function addMesh(m: MeshData, shadow: boolean, mat?: THREE.Material): void {
   const material = mat ?? new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
   const mesh = new THREE.Mesh(toGeometry(m), material);
   mesh.castShadow = shadow;
   mesh.receiveShadow = true;
   scene.add(mesh);
+  overlayMeshes.push(mesh);
 }
 
 interface CarState {
@@ -225,11 +229,19 @@ async function boot(): Promise<void> {
   const keys = new Set<string>();
   let follow = true;
   let driverView = false;
+  let terrainOnly = false;
   window.addEventListener("keydown", (e) => {
     keys.add(e.code);
     if (e.code === "KeyC") { follow = !follow; driverView = false; }
     if (e.code === "KeyV") { driverView = !driverView; follow = false; }
     if (e.code === "KeyH") setTerrainMode((terrainMode + 1) % terrainModes.length);
+    if (e.code === "KeyT") {
+      // terrain-only mode: show just the (cleaned DOM) terrain surface
+      terrainOnly = !terrainOnly;
+      for (const m of overlayMeshes) m.visible = !terrainOnly;
+      car.visible = !terrainOnly;
+      for (const v of vehicles) v.mesh.visible = !terrainOnly;
+    }
     if (e.code === "KeyR" && spawn) {
       carState.x = spawn.x;
       carState.y = spawn.y;
@@ -464,7 +476,7 @@ async function boot(): Promise<void> {
       hud.status.textContent =
         `${kmh} km/h · ${carState.y.toFixed(1)} m a.s.l.` +
         (q ? ` · layer ${q.layer} road` : " · off road") +
-        ` · ${driverView ? "driver view (V)" : follow ? "chase cam (C)" : "free cam (C)"} · terrain: ${terrainModes[terrainMode]} (H) · R reset · commit ${__COMMIT__}`;
+        ` · ${driverView ? "driver view (V)" : follow ? "chase cam (C)" : "free cam (C)"} · terrain: ${terrainModes[terrainMode]} (H) · ${terrainOnly ? "terrain only (T) · " : ""}R reset · commit ${__COMMIT__}`;
     }
   }
   animate();

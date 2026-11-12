@@ -381,7 +381,12 @@ async function buildTerrainFromFeed(feed: string, prefix: string, dirName: strin
   const heightsDm: number[] = [];
   for (let j = 0; j <= GRID_N; j++) {
     for (let i = 0; i <= GRID_N; i++) {
-      heightsDm.push(Math.round(sample(E0 + originX + i * cell, N0 + originY + j * cell) * 10));
+      // sample at the true UTM33N position of this local-frame vertex — the
+      // equirectangular local frame differs from UTM by ~0.2% (up to ~4 m at
+      // 2 km), which would misalign the DEM with the OSM data
+      const [lon, lat] = metersToLonLat(originX + i * cell, originY + j * cell);
+      const [E, N] = lonLatToUtm33(lon, lat);
+      heightsDm.push(Math.round(sample(E, N) * 10));
     }
     if (j % 40 === 0) console.log(`terrain row ${j}/${GRID_N}`);
   }

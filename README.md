@@ -20,6 +20,7 @@ The 2D micromapping visualizer lives on `main` (https://svenpilz.github.io/vibe/
 | `C` | toggle chase cam (camera follows the car) |
 | `V` | first-person driver view (camera aligned with the car's driving direction) |
 | `H` | cycle terrain source (DGM1-cleaned DOM1 / raw DGM1 / raw DOM1) |
+| `T` | terrain-only mode: show just the terrain surface (e.g. only the cleaned DOM values), OSM overlays hidden |
 | `R` | reset the car to its spawn point |
 
 A north-up minimap (bottom-right) shows a 500 m radius around the car with roads, buildings,
