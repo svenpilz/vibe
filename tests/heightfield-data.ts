@@ -121,6 +121,24 @@ check("bus stops present", busStops > 30, `${busStops}`);
     if (Math.abs(sampleTerrainM(cleaned, tx, ty) - sampleTerrainM(data.terrain, tx, ty)) < 0.3) allFiltered++;
   }
   check("mapped trees masked in cleaned DOM everywhere", allTrees.length > 50 && allFiltered >= allTrees.length * 0.9, `trees=${allTrees.length} filtered=${allFiltered}`);
+  // the blob filter is learned/validated against the mapped trees: at a mapped
+  // tree, the DOM must show both-direction curvature (min(|dxx|,|dyy|) high)
+  {
+    const dom = data.terrainDom ?? data.terrain;
+    const n = dom.n;
+    const H = dom.heightsDm;
+    const at = (i: number, j: number): number => H[Math.max(0, Math.min(n, j)) * (n + 1) + Math.max(0, Math.min(n, i))];
+    let detected = 0;
+    for (const [tx, ty] of allTrees) {
+      const i = Math.round((tx - dom.originX) / (dom.sizeM / n));
+      const j = Math.round((ty - dom.originY) / (dom.sizeM / n));
+      const d = at(i, j);
+      const dxx = Math.abs(at(i - 1, j) + at(i + 1, j) - 2 * d);
+      const dyy = Math.abs(at(i, j - 1) + at(i, j + 1) - 2 * d);
+      if (Math.min(dxx, dyy) > 3) detected++; // 0.3 m blob threshold, learned from the mapped trees
+    }
+    check("blob curvature filter detects mapped trees (learned threshold)", detected >= allTrees.length * 0.8, `detected=${detected}/${allTrees.length}`);
+  }
 }
 
 if (failures > 0) {

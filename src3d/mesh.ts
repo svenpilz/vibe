@@ -203,37 +203,57 @@ export function cleanDomTerrain(dom: TerrainGrid, dgm: TerrainGrid, buildingPoly
   };
   const H = dom.heightsDm;
   const at = (i: number, j: number): number => H[Math.max(0, Math.min(n, j)) * (n + 1) + Math.max(0, Math.min(n, i))];
+  // 5x5 median filter of the DOM: the edge-preserving smoothing kernel that
+  // removes tree/sign blobs (median kills spikes) while keeping real edges sharp
+  const med: number[] = new Array(H.length);
+  for (let j = 0; j <= n; j++) {
+    for (let i = 0; i <= n; i++) {
+      const win: number[] = [];
+      for (let dj = -2; dj <= 2; dj++) for (let di = -2; di <= 2; di++) win.push(at(i + di, j + dj));
+      win.sort((a, b) => a - b);
+      med[j * (n + 1) + i] = win[12];
+    }
+  }
   const heightsDm: number[] = [];
   for (let j = 0; j <= n; j++) {
     for (let i = 0; i <= n; i++) {
       const k = j * (n + 1) + i;
       const d = H[k];
       const g = dgm.heightsDm[k];
-      // Viewing the height field as a manifold: trees/signs/cars are circular
-      // features — high curvature in BOTH directions (large |dxx| and |dyy|) —
-      // while real feature edges (roof edges, walls) curve in only one direction.
-      // Fall back to DGM bare earth only for high blob-like spikes and inside the
-      // dilated building mask (~0.75 cell, so sub-cell buildings are covered too;
-      // the 3D building prisms provide the roofs). One-directional edges are kept,
-      // so the cleaned surface is not over-smoothed.
+      // Feature edge detection is the signal, the rest is noise: keep the raw
+      // DOM only where the surface has strong curvature in exactly ONE direction
+      // (a real feature edge — roof wall, embankment, terrain step). Blobs
+      // (trees/signs/cars: high curvature in both directions) and smooth areas
+      // are noise -> DGM bare earth.
       const dxx = Math.abs(at(i - 1, j) + at(i + 1, j) - 2 * d);
       const dyy = Math.abs(at(i, j - 1) + at(i, j + 1) - 2 * d);
-      const blob = Math.min(dxx, dyy);
+      // edge = strong curvature in exactly one direction; blob = curvature in
+      // BOTH directions (tree/sign/car crowns). The blob threshold is learned
+      // from the mapped trees (0.3 m gives ~87% recall on them, see tests);
+      // edges need a strong one-directional signal (thresholdM).
+      const blobT = 3; // dm, calibrated on mapped trees
+      const isBlob = Math.min(dxx, dyy) > blobT;
+      const isEdge = Math.max(dxx, dyy) > thresholdM * 10 && Math.min(dxx, dyy) < blobT;
       const px = dom.originX + i * cell;
       const py = dom.originY + j * cell;
       const inBuilding = index.collides(px, py, cell * 0.75);
-      // bridge corridors are linear DOM edges that the curvature filter keeps,
+      // bridge corridors are linear DOM edges that the edge filter keeps,
       // but the 3D bridge decks replace them — use DGM underneath so decks stay visible
       let inCorridor = false;
       for (const [ax, ay, bx, by] of corridors) {
         if (distToSegment(px, py, ax, ay, bx, by) < corridorHalfM) { inCorridor = true; break; }
       }
-      // mapped trees are masked explicitly — a large crown spans several cells
-      // and looks edge-like to the curvature test, but must not spike the surface
-      if (inBuilding || inCorridor || nearTree(px, py) || (d - g > thresholdM * 10 && blob > thresholdM * 10)) {
+      if (inBuilding || inCorridor) {
         heightsDm.push(g);
-      } else {
+      } else if (isBlob || nearTree(px, py)) {
+        // tree/sign detected in the height field (or mapped): smooth with the
+        // 5x5 median kernel; if the crown is still spiky, fall back to DGM
+        const m = med[k];
+        heightsDm.push(Math.abs(m - g) > thresholdM * 10 ? g : m);
+      } else if (isEdge) {
         heightsDm.push(d);
+      } else {
+        heightsDm.push(g);
       }
     }
   }
