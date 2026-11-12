@@ -410,15 +410,25 @@ function buildJson(data: OSMData, kept: KeptWay[], keptNodes: KeptNode[], routes
   }
   for (const rt of routes) {
     const assembled = assembleRoute(data, rt.wayRefs);
-    const r: number[] = [];
+    // split at nodes missing from the extract so no phantom jumps across the map
+    let r: number[] = [];
+    const flush = () => {
+      if (r.length < 2) { r = []; return; }
+      const t: number[] = [];
+      for (const [k, v] of Object.entries(rt.tags)) t.push(intern(keys, keyIdx, k), intern(values, valIdx, v));
+      routeWays.push({ r, t });
+      r = [];
+    };
     for (const nodeId of assembled) {
+      const c = data.nodeCoords.get(nodeId);
+      if (!c) { flush(); continue; }
+      const [nx, ny] = lonLatToMeters(c.lon, c.lat);
+      if (nx * nx + ny * ny > (RADIUS_M + 300) * (RADIUS_M + 300)) { flush(); continue; }
       const li = localRef(nodeId);
       if (li >= 0) r.push(li);
+      else flush();
     }
-    if (r.length < 2) continue;
-    const t: number[] = [];
-    for (const [k, v] of Object.entries(rt.tags)) t.push(intern(keys, keyIdx, k), intern(values, valIdx, v));
-    routeWays.push({ r, t });
+    flush();
   }
   for (const w of kept) {
     const r: number[] = [];
