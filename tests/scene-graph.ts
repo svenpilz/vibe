@@ -1,5 +1,6 @@
 // Tests for the quadtree scene graph + frustum culling in src/gl.ts.
 // Run with: tsx tests/scene-graph.ts
+import "./tri-init";
 import { GlMap, SceneGraph } from "../src/gl";
 
 let failures = 0;
@@ -95,7 +96,8 @@ const scene2 = g.finishScene();
 const rootData = scene2.root.data!;
 ok(rootData !== null && rootData.length > 0, "scene data retained for z-order check");
 const zFirst = rootData[9]; // zord of first vertex of first command (stride 10)
-const zSecond = rootData[6 * 10 + 9]; // first vertex of second command
+const firstCmdVerts = scene2.root.ranges[0].count; // vertices of the first command
+const zSecond = rootData[firstCmdVerts * 10 + 9]; // first vertex of second command
 ok(
   zSecond < zFirst,
   `paint order via depth: later command z ${zSecond.toFixed(4)} < earlier ${zFirst.toFixed(4)}`,

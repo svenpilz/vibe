@@ -10,6 +10,8 @@
  * pitch 0 = straight down, which reproduces the classic flat map exactly.
  */
 
+import * as Triangle from "triangle-wasm";
+
 export type Pt = [number, number];
 export type RGBA = [number, number, number, number];
 
@@ -158,68 +160,102 @@ function ringArea(ring: Pt[]): number {
   return a / 2;
 }
 
-function pointInTri(p: Pt, a: Pt, b: Pt, c: Pt): boolean {
-  const d1 = (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
-  const d2 = (c[0] - b[0]) * (p[1] - b[1]) - (c[1] - b[1]) * (p[0] - b[0]);
-  const d3 = (a[0] - c[0]) * (p[1] - c[1]) - (a[1] - c[1]) * (p[0] - c[0]);
-  const eps = -1e-9;
-  return d1 >= eps && d2 >= eps && d3 >= eps;
+// ---------------- constrained quality triangulation ----------------
+//
+// FEM-ready quality mesh via Shewchuk's Triangle (WASM): the ring is passed as
+// a PSLG whose edges are constraint segments, so no mesh edge can leave the
+// polygon; -q (Delaunay refinement) bounds the minimum angle and -a bounds the
+// triangle area, hence the edge length. Await initTriangulation() once before
+// the first triangulatePolygon() call.
+
+export interface PolygonMesh {
+  /** ring vertices first, then Steiner refinement points */
+  verts: Pt[];
+  /** flat CCW triangle indices into `verts` */
+  tris: number[];
 }
 
-/** ear-clipping triangulation of a simple (hole-free) ring; returns flat
- *  triangle indices into `ring` */
-export function earclip(ring: Pt[]): number[] {
+let triangleReady = false;
+let triangleInit: Promise<void> | null = null;
+
+/** load the Triangle WASM module; in the browser pass the bundler-emitted URL
+ *  of triangle-wasm/triangle.out.wasm, under Node an absolute file path */
+export function initTriangulation(wasmUrl?: string): Promise<void> {
+  if (!triangleInit)
+    triangleInit = Triangle.init(wasmUrl).then(() => {
+      triangleReady = true;
+    });
+  return triangleInit;
+}
+
+/** whether the Triangle WASM module has finished loading */
+export function isTriangulationReady(): boolean {
+  return triangleReady;
+}
+
+/** minimum interior angle (degrees) enforced via Triangle's -q switch */
+const MIN_ANGLE = 22;
+
+/** quality triangulation of a simple (hole-free) ring; returns vertices (ring
+ *  vertices first, then Steiner points) and flat CCW triangle indices */
+export function triangulatePolygon(ring: Pt[]): PolygonMesh {
+  if (!triangleReady)
+    throw new Error("triangulatePolygon called before initTriangulation() resolved");
   const pts: Pt[] = [];
   for (const p of ring) {
     const l = pts[pts.length - 1];
-    if (!l || Math.hypot(p[0] - l[0], p[1] - l[1]) > 1e-9) pts.push(p);
+    if (!l || Math.hypot(p[0] - l[0], p[1] - l[1]) > 1e-9) pts.push([p[0], p[1]]);
   }
   if (pts.length > 1) {
     const f = pts[0],
       l = pts[pts.length - 1];
     if (Math.hypot(f[0] - l[0], f[1] - l[1]) <= 1e-9) pts.pop();
   }
-  const n = pts.length;
-  if (n < 3) return [];
-  let idx = pts.map((_, i) => i);
-  if (ringArea(pts) < 0) idx = idx.reverse();
-  const tris: number[] = [];
-  let guard = 0;
-  const maxGuard = n * n + 64;
-  while (idx.length > 3 && guard++ < maxGuard) {
-    let clipped = false;
-    for (let k = 0; k < idx.length; k++) {
-      const i0 = idx[(k - 1 + idx.length) % idx.length],
-        i1 = idx[k],
-        i2 = idx[(k + 1) % idx.length];
-      const a = pts[i0],
-        b = pts[i1],
-        c = pts[i2];
-      const cross =
-        (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
-      if (cross <= 1e-9) continue;
-      let blocked = false;
-      for (const j of idx) {
-        if (j === i0 || j === i1 || j === i2) continue;
-        if (pointInTri(pts[j], a, b, c)) {
-          blocked = true;
-          break;
-        }
-      }
-      if (blocked) continue;
-      tris.push(i0, i1, i2);
-      idx.splice(k, 1);
-      clipped = true;
-      break;
-    }
-    if (!clipped) {
-      for (let k = 1; k < idx.length - 1; k++)
-        tris.push(idx[0], idx[k], idx[k + 1]);
-      return tris;
-    }
+  const clean: Pt[] = [];
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[(i - 1 + pts.length) % pts.length],
+      b = pts[i],
+      c = pts[(i + 1) % pts.length];
+    if (Math.abs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])) > 1e-12)
+      clean.push(b);
   }
-  if (idx.length === 3) tris.push(idx[0], idx[1], idx[2]);
-  return tris;
+  const n = clean.length;
+  if (n < 3 || Math.abs(ringArea(clean)) < 1e-12) return { verts: clean, tris: [] };
+  let minX = Infinity,
+    minY = Infinity,
+    maxX = -Infinity,
+    maxY = -Infinity;
+  const pointlist: number[] = [];
+  for (const p of clean) {
+    pointlist.push(p[0], p[1]);
+    minX = Math.min(minX, p[0]);
+    maxX = Math.max(maxX, p[0]);
+    minY = Math.min(minY, p[1]);
+    maxY = Math.max(maxY, p[1]);
+  }
+  const segmentlist: number[] = [];
+  for (let i = 0; i < n; i++) segmentlist.push(i, (i + 1) % n);
+  // one hole point outside the ring makes Triangle eat all exterior triangles
+  const holelist = [minX - 1, minY - 1];
+  const maxEdge = Math.hypot(maxX - minX, maxY - minY) / 8;
+  const maxArea = (Math.sqrt(3) / 4) * maxEdge * maxEdge;
+  const steinerCap = 512 + 64 * n;
+  const switches = `pzQq${MIN_ANGLE}a${maxArea}S${steinerCap}`;
+  const input = Triangle.makeIO({ pointlist, segmentlist, holelist });
+  const output = Triangle.makeIO();
+  try {
+    Triangle.triangulate(switches, input, output);
+    const pl = output.pointlist,
+      tl = output.trianglelist;
+    const verts: Pt[] = [];
+    for (let i = 0; i < pl.length; i += 2) verts.push([pl[i], pl[i + 1]]);
+    const tris: number[] = [];
+    for (let i = 0; i < tl.length; i++) tris.push(tl[i]);
+    return { verts, tris };
+  } finally {
+    Triangle.freeIO(output);
+    Triangle.freeIO(input, true);
+  }
 }
 
 // ---------------- procedural pattern tiles ----------------
@@ -489,10 +525,10 @@ export class SceneGraph {
     const pushRingTris = (rings: Pt[][]): { start: number; count: number } => {
       const start = data.length / 10;
       for (const ring of rings) {
-        const tris = earclip(ring);
+        const { verts, tris } = triangulatePolygon(ring);
         for (let i = 0; i < tris.length; i += 3)
           for (const idx of [tris[i], tris[i + 1], tris[i + 2]]) {
-            const p = ring[idx];
+            const p = verts[idx];
             data.push(p[0], p[1], 1, 1, 1, 1, 0, 0, 0, 0);
           }
       }
@@ -949,11 +985,11 @@ void main() {
     if (holes.length > 0) cmd.mask = { outer, holes };
     const col = (fill as { color?: RGBA }).color ?? [1, 1, 1, 1];
     for (const ring of outer) {
-      const tris = earclip(ring);
+      const { verts, tris } = triangulatePolygon(ring);
       for (let i = 0; i < tris.length; i += 3)
         this.tri(
           cmd,
-          ring[tris[i]], ring[tris[i + 1]], ring[tris[i + 2]],
+          verts[tris[i]], verts[tris[i + 1]], verts[tris[i + 2]],
           col, col, col,
           fill,
           z,
@@ -982,11 +1018,11 @@ void main() {
         this.triZ(cmd, a, 0, b, height, a, height, wall, wall, wall, wallFill);
       }
       // roof at full height
-      const tris = earclip(ring);
+      const { verts, tris } = triangulatePolygon(ring);
       for (let i = 0; i < tris.length; i += 3)
         this.tri(
           cmd,
-          ring[tris[i]], ring[tris[i + 1]], ring[tris[i + 2]],
+          verts[tris[i]], verts[tris[i + 1]], verts[tris[i + 2]],
           roof, roof, roof,
           roofFill,
           height,

@@ -39,7 +39,10 @@ status bar shows the current zoom level and the deployed git commit.
 - Positions are stored as integers quantized to 1e-7 degrees (~1 cm); all geometry
   (containment, intersections, ray casts) operates on these integers.
 - Rendering uses a Web Mercator projection piped to **WebGL** (`src/gl.ts`): polygons are
-  ear-clipping tessellated, strokes become miter-joined triangle strips, patterns are
+  quality-triangulated by Shewchuk's **Triangle** (WASM, `triangle-wasm`) — the ring edges
+  are constraint segments, so no mesh edge leaves the polygon, and Delaunay refinement
+  (`-q22 -a…`) keeps triangles regular (no sharp angles, no long edges). Strokes become
+  miter-joined triangle strips, patterns are
   procedural RGBA textures — no map library, no tiles, no Canvas2D. World units are
   Mercator pixels at reference scale 2000 px/degree; a perspective camera maps world to
   screen (at pitch 0 this is exactly the flat `screen = (world - center) · scale/2000`).

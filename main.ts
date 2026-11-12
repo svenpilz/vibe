@@ -29,10 +29,16 @@ import {
   rgba,
   grassTileData,
   stoneTileData,
+  initTriangulation,
+  isTriangulationReady,
   type Pt,
   type RGBA,
   type FillSpec,
 } from "./src/gl";
+import triangleWasmUrl from "triangle-wasm/triangle.out.wasm?url";
+
+// load the Triangle WASM module once; scene building waits for it (see draw())
+const triReady = initTriangulation(triangleWasmUrl);
 
 const canvas = document.getElementById("map") as HTMLCanvasElement;
 let g: GlMap;
@@ -405,10 +411,12 @@ function draw() {
   const key = sceneKeyOf();
   g.beginFrame();
   if (!scene || key !== sceneKey) {
-    g.beginRecord();
-    if (dataset) buildGeometry();
-    scene = g.finishScene();
-    sceneKey = key;
+    if (isTriangulationReady()) {
+      g.beginRecord();
+      if (dataset) buildGeometry();
+      scene = g.finishScene();
+      sceneKey = key;
+    }
   }
   if (scene) g.renderScene(scene);
 }
@@ -2554,7 +2562,7 @@ window.addEventListener("resize", requestDraw);
  *  restored view is kept on load; otherwise the first load centers on the
  *  data bounds (a hash written by our own boot draw must not count) */
 let urlHashAtBoot = viewFromUrl();
-requestDraw();
+void triReady.then(() => requestDraw());
 // when deployed with the bundled example (public/data), open straight into
 // it — the camera centers on the data bounds via fitToBounds()
 void loadBundledExample();
