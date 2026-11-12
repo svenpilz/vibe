@@ -101,6 +101,14 @@ check("residential half width 3.75", Math.abs(roads.segments[0].halfW - 3.75) < 
 check("road mesh has geometry", roads.mesh.indices.length > 0);
 const bridgeVerts = roads.mesh.positions.length / 3;
 check("bridge adds parapet verts", bridgeVerts > 8, `${bridgeVerts}`);
+let pierFound = false;
+for (let i = 0; i < roads.mesh.positions.length; i += 3) {
+  const px = roads.mesh.positions[i];
+  const py = roads.mesh.positions[i + 1];
+  const pz = roads.mesh.positions[i + 2];
+  if (Math.abs(py - 50) < 0.01 && Math.abs(pz - 50) < 1.0 && Math.abs(px) < 1.0) pierFound = true;
+}
+check("bridge has support pier down to terrain", pierFound);
 
 const idx = new RoadIndex(roads.segments);
 const q = idx.nearest(50, 2, 60);

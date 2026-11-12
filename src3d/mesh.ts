@@ -225,6 +225,36 @@ export function buildRoads(data: BakedData): RoadBuild {
       const c = pushVert(mesh, cx, e, cy, 0, 1, 0, col);
       for (let k = 0; k < 8; k++) pushTri(mesh, c, ring[k], ring[(k + 1) % 8]);
     }
+    // support piers under bridge decks, down to the terrain, so the
+    // vertical stacking is visible from the map view
+    if (isBridge) {
+      const pierCol: [number, number, number] = [0.6, 0.6, 0.62];
+      const pierHalf = 0.9;
+      for (let i = 0; i < pts.length; i++) {
+        const [cx, cy] = pts[i];
+        const deck = elevs[i];
+        const ground = sampleTerrainM(data.terrain, cx, cy);
+        if (deck - ground < 1) continue;
+        const corners: Array<[number, number]> = [
+          [-pierHalf, -pierHalf], [pierHalf, -pierHalf], [pierHalf, pierHalf], [-pierHalf, pierHalf],
+        ];
+        for (let k = 0; k < 4; k++) {
+          const [ox1, oy1] = corners[k];
+          const [ox2, oy2] = corners[(k + 1) % 4];
+          const dx = ox2 - ox1;
+          const dy = oy2 - oy1;
+          const len = Math.hypot(dx, dy) || 1;
+          const nx = dy / len;
+          const nz = -dx / len;
+          const a = pushVert(mesh, cx + ox1, ground, cy + oy1, nx, 0, nz, pierCol);
+          const b = pushVert(mesh, cx + ox2, ground, cy + oy2, nx, 0, nz, pierCol);
+          const c = pushVert(mesh, cx + ox2, deck, cy + oy2, nx, 0, nz, pierCol);
+          const d = pushVert(mesh, cx + ox1, deck, cy + oy1, nx, 0, nz, pierCol);
+          pushTri(mesh, a, c, b);
+          pushTri(mesh, a, d, c);
+        }
+      }
+    }
   }
   return { mesh, segments };
 }

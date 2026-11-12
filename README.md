@@ -28,7 +28,7 @@ it drives 5 m above the road passing underneath.
 |---|---|---|
 | Terrain (absolute elevation) | SRTM via AWS `elevation-tiles-prod` terrarium tiles | baked into a 160×160 height grid (27.5 m cells) over the 4.4 km area; Berlin here is 33.7–66 m a.s.l. |
 | Building heights | OSM `height=*` (216 buildings), else `building:levels`/`roof:levels` × 3 m + roof allowance (8 272 buildings), else 10 m default | `buildingHeightM` in `src3d/schema.ts` |
-| Road vertical stacking | OSM `layer=*` (+ `bridge=yes`/`tunnel=yes` implying ±1) | deck = terrain height at the node + max incident layer × 5 m; bridges get parapet walls |
+| Road vertical stacking | OSM `layer=*` (+ `bridge=yes`/`tunnel=yes` implying ±1) | deck = terrain height at the node + max incident layer × 5 m; bridges get parapet walls and support piers down to the terrain, so the stacking is visible from above |
 
 Data is extracted from the **Geofabrik Berlin `.osm.pbf`** (100 MB, parsed with the repo's own
 PBF parser `src/osm-pbf.ts`) and baked into `public/data/friedenau-2km.json` (~9 MB, plus a
