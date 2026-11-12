@@ -176,6 +176,15 @@ export class HeightField {
   private vertexLayer = new Map<string, number>();
   /** quantized vertex -> highest layer of any feature touching it */
   private vertexMaxLayer = new Map<string, number>();
+  /** ring keys of areas "connected" to a higher-layer structure: directly
+   *  (shared vertex with a high line or a layer>0/bridge area) or ONE hop
+   *  further (shared vertex with such an area) — not transitive beyond that */
+  private connectedRings = new Set<string>();
+
+  private ringKey(ring: [number, number][]): string {
+    const f = ring[0], l = ring[ring.length - 1];
+    return `${vkey(f[0], f[1])}|${vkey(l[0], l[1])}|${ring.length}`;
+  }
 
   /** mark the vertices of a higher-layer line (e.g. a bridge way): polygons
    *  connected to them take the DOM surface height to stay continuous */
@@ -185,6 +194,65 @@ export class HeightField {
       const key = vkey(lon, lat);
       const prevMax = this.vertexMaxLayer.get(key) ?? 0;
       if (eff > prevMax) this.vertexMaxLayer.set(key, eff);
+    }
+  }
+
+  /** after all areas and high lines are registered: compute which areas are
+   *  "connected" to a higher-layer structure — directly (shared vertex with a
+   *  high line or a layer>0/bridge area) or, FOR ROAD AREAS ONLY (ramps), one
+   *  hop further via a shared vertex with such an area; NOT transitive beyond
+   *  that. Connected areas take the DOM surface, and their stored height fn +
+   *  vertex heights are recomputed on the DOM so lane markings/kerbs stick to
+   *  the same surface the fill renders on */
+  finalizeConnections(): void {
+    const n = this.areas.length;
+    const direct = new Array<boolean>(n).fill(false);
+    for (let i = 0; i < n; i++) {
+      const a = this.areas[i];
+      if (effLayer(a.layer, a.bridge) > 0) { direct[i] = true; continue; }
+      for (const [lon, lat] of a.outer)
+        if ((this.vertexMaxLayer.get(vkey(lon, lat)) ?? 0) > 0) { direct[i] = true; break; }
+    }
+    // one hop: ROAD areas ADJACENT to a direct area (e.g. a ramp touching a
+    // bridge deck) — other polygon classes are not propagated. "Adjacent"
+    // means the rings share a vertex exactly OR their boundaries come within
+    // ADJ_TOL_M meters (connected roads share adjacent vertices even when the
+    // mapped nodes do not coincide exactly)
+    const adjacent = new Array<boolean>(n).fill(false);
+    for (let i = 0; i < n; i++) {
+      if (!direct[i]) continue;
+      const a = this.areas[i];
+      for (let j = 0; j < n; j++) {
+        if (direct[j] || adjacent[j] || !this.areas[j].road) continue;
+        const b = this.areas[j];
+        // bbox prefilter (expanded by the tolerance)
+        const tolDeg = ADJ_TOL_M / 110540;
+        if (
+          b.bbox[0] > a.bbox[2] + tolDeg || a.bbox[0] > b.bbox[2] + tolDeg ||
+          b.bbox[1] > a.bbox[3] + tolDeg || a.bbox[1] > b.bbox[3] + tolDeg
+        )
+          continue;
+        if (ringsAdjacentM(a.outer, b.outer, ADJ_TOL_M)) adjacent[j] = true;
+      }
+    }
+    for (let i = 0; i < n; i++) {
+      const a = this.areas[i];
+      const eff = effLayer(a.layer, a.bridge);
+      if (eff > 0) continue; // structures already render on the DOM
+      if (!direct[i] && !adjacent[i]) continue;
+      this.connectedRings.add(this.ringKey(a.outer));
+      // recompute the stored fn on the DOM surface so sticking features ride
+      // the same (plane-fitted) surface as the rendered fill
+      const f = a.road ? planeFitM([a.outer], this.surfaceFn()) : this.surfaceFn();
+      a.fn = f;
+      for (const [lon, lat] of a.outer) {
+        const key = vkey(lon, lat);
+        const prev = this.vertexM.get(key);
+        if (prev === undefined || eff > this.vertexLayer.get(key)!) {
+          this.vertexM.set(key, f(lon, lat));
+          this.vertexLayer.set(key, eff);
+        }
+      }
     }
   }
 
@@ -201,10 +269,15 @@ export class HeightField {
     if (effLayer(layer, bridge) > 0) base = this.surfaceFn();
     else {
       let hit = false;
-      if (connected)
-        for (const ring of rings)
-          for (const [lon, lat] of ring)
-            if ((this.vertexMaxLayer.get(vkey(lon, lat)) ?? 0) > 0) { hit = true; break; }
+      if (connected) {
+        // one-hop adjacency (computed by finalizeConnections) + direct
+        // shared-vertex rule (fallback for unregistered rings / high lines)
+        if (rings.length > 0 && this.connectedRings.has(this.ringKey(rings[0]))) hit = true;
+        if (!hit)
+          for (const ring of rings)
+            for (const [lon, lat] of ring)
+              if ((this.vertexMaxLayer.get(vkey(lon, lat)) ?? 0) > 0) { hit = true; break; }
+      }
       base = hit ? this.surfaceFn() : this.groundFn();
     }
     // roads/bridges: plane-fit the surface — locally flat, keeps the slope
@@ -246,6 +319,57 @@ export class HeightField {
     if (best) return best.fn(lon, lat);
     return layer > 0 ? this.surfaceM(lon, lat) ?? 0 : this.groundM(lon, lat) ?? 0;
   }
+}
+
+/** tolerance for "connected roads share adjacent vertices": boundaries closer
+ *  than this (in meters) count as touching even without identical nodes */
+const ADJ_TOL_M = 2;
+
+/** do two rings share a vertex exactly or come within tolM meters of each
+ *  other (vertex-to-segment distance, symmetric)? */
+function ringsAdjacentM(
+  a: [number, number][],
+  b: [number, number][],
+  tolM: number,
+): boolean {
+  const aKeys = new Set(a.map(([x, y]) => vkey(x, y)));
+  for (const [x, y] of b) if (aKeys.has(vkey(x, y))) return true;
+  // geometric fallback: meters-per-degree at the rings' mean latitude
+  let latSum = 0;
+  for (const [, y] of a) latSum += y;
+  for (const [, y] of b) latSum += y;
+  const lat0 = latSum / (a.length + b.length);
+  const mx = 111320 * Math.cos((lat0 * Math.PI) / 180), my = 110540;
+  const near = (ring: [number, number][], pt: [number, number]): boolean => {
+    const px = (pt[0] - ring[0][0]) * mx, py = (pt[1] - ring[0][1]) * my;
+    // cheap reject: point far outside the ring bbox (in meters)
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const [x, y] of ring) {
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+    }
+    const tolDegX = tolM / mx, tolDegY = tolM / my;
+    if (
+      pt[0] < minX - tolDegX || pt[0] > maxX + tolDegX ||
+      pt[1] < minY - tolDegY || pt[1] > maxY + tolDegY
+    )
+      return false;
+    for (let i = 0; i < ring.length; i++) {
+      const [ax, ay] = ring[i], [bx, by] = ring[(i + 1) % ring.length];
+      const axm = (ax - ring[0][0]) * mx, aym = (ay - ring[0][1]) * my;
+      const bxm = (bx - ring[0][0]) * mx, bym = (by - ring[0][1]) * my;
+      const dx = bxm - axm, dy = bym - aym;
+      const len2 = dx * dx + dy * dy;
+      let t = len2 > 0 ? ((px - axm) * dx + (py - aym) * dy) / len2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      const cx = axm + t * dx, cy = aym + t * dy;
+      if (Math.hypot(px - cx, py - cy) <= tolM) return true;
+    }
+    return false;
+  };
+  for (const p of b) if (near(a, p)) return true;
+  for (const p of a) if (near(b, p)) return true;
+  return false;
 }
 
 function vkey(lon: number, lat: number): string {

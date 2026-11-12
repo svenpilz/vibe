@@ -197,6 +197,69 @@ ok((hf5 as unknown as { vertexMaxLayer: Map<string, number> }).vertexMaxLayer.ge
     "non-road area (landuse) still sticks to the raw DEM height");
 }
 
+// --- one-hop adjacency for connected ROADS (ramps), via shared/adjacent vertices ---
+{
+  const hf7 = new HeightField();
+  hf7.dem = hf.dem;
+  hf7.dom = hf.dom;
+  // bridge line through the structure spot: marks its vertices high
+  hf7.markHighLine([[sLon, sLat], [sLon + 0.001, sLat]], 1);
+  // ramp road area sharing a vertex with the bridge line -> direct
+  const rampRing: [number, number][] = [
+    [sLon, sLat], [sLon + 0.0004, sLat],
+    [sLon + 0.0004, sLat + 0.0004], [sLon, sLat + 0.0004],
+  ];
+  // adjacent road: shares only ramp's corner vertex -> one hop (ramp case)
+  const adjRing: [number, number][] = [
+    [sLon + 0.0004, sLat + 0.0004], [sLon + 0.0008, sLat + 0.0004],
+    [sLon + 0.0008, sLat + 0.0008], [sLon + 0.0004, sLat + 0.0008],
+  ];
+  // near-adjacent road: NO exact shared vertex with the direct ramp, but its
+  // corner sits ~0.5 m from the ramp's corner (mapped with non-coincident
+  // nodes) -> still one hop ("connected roads share adjacent vertices")
+  const nearRing: [number, number][] = [
+    [sLon + 0.0004 + 0.000008, sLat + 0.0004], [sLon + 0.0008 + 0.000008, sLat + 0.0004],
+    [sLon + 0.0008 + 0.000008, sLat + 0.0008], [sLon + 0.0004 + 0.000008, sLat + 0.0008],
+  ];
+  // two hops away: shares a vertex with nearRing only (not with any direct
+  // area) -> NOT transitive
+  const farRing2: [number, number][] = [
+    [sLon + 0.0008 + 0.000008, sLat + 0.0008], [sLon + 0.0012, sLat + 0.0008],
+    [sLon + 0.0012, sLat + 0.0012], [sLon + 0.0008 + 0.000008, sLat + 0.0012],
+  ];
+  // non-road polygon adjacent to the ramp -> roads only, stays on ground
+  const landRing: [number, number][] = [
+    [sLon, sLat + 0.0004], [sLon + 0.0004, sLat + 0.0004],
+    [sLon + 0.0004, sLat + 0.0008], [sLon, sLat + 0.0008],
+  ];
+  hf7.registerArea(rampRing, 0, false, true);
+  hf7.registerArea(adjRing, 0, false, true);
+  hf7.registerArea(nearRing, 0, false, true);
+  hf7.registerArea(farRing2, 0, false, true);
+  hf7.registerArea(landRing, 0, false, false);
+  hf7.finalizeConnections();
+
+  const pRamp = [sLon + 0.0002, sLat + 0.0002] as [number, number];
+  const pAdj = [sLon + 0.0006, sLat + 0.0006] as [number, number];
+  const pNear = [sLon + 0.0006, sLat + 0.0006] as [number, number];
+  const pFar = [sLon + 0.0010, sLat + 0.0010] as [number, number];
+  const pLand = [sLon + 0.0002, sLat + 0.0006] as [number, number];
+  ok(Math.abs(hf7.fillMFor([rampRing], 0)(pRamp[0], pRamp[1]) - (hf7.surfaceM(pRamp[0], pRamp[1]) ?? 0)) < 0.5,
+    "ramp sharing a bridge-line vertex takes DOM (direct)");
+  ok(Math.abs(hf7.fillMFor([adjRing], 0)(pAdj[0], pAdj[1]) - (hf7.surfaceM(pAdj[0], pAdj[1]) ?? 0)) < 0.5,
+    "adjacent road (shared vertex with the ramp) takes DOM — one hop");
+  ok(Math.abs(hf7.fillMFor([nearRing], 0)(pNear[0], pNear[1]) - (hf7.surfaceM(pNear[0], pNear[1]) ?? 0)) < 0.5,
+    "road with only near-coincident (~1 m) boundary vertices counts as adjacent (enforced shared adjacent vertices)");
+  ok(Math.abs(hf7.fillMFor([farRing2], 0)(pFar[0], pFar[1]) - (hf7.groundM(pFar[0], pFar[1]) ?? 0)) < 0.5,
+    "two hops away stays on the ground — NOT transitive");
+  ok(Math.abs(hf7.fillMFor([landRing], 0)(pLand[0], pLand[1]) - (hf7.groundM(pLand[0], pLand[1]) ?? 0)) < 0.5,
+    "adjacent NON-road polygon (landuse) stays on ground — propagation is for roads only");
+  // lane markings stick to the road's rendered (flattened DOM) surface
+  const flatAdj = hf7.fillMFor([adjRing], 0, false, true, true)(pAdj[0], pAdj[1]);
+  ok(Math.abs(hf7.stickM(pAdj[0], pAdj[1]) - flatAdj) < 0.05,
+    `lane marking inside the connected ramp sticks to the road surface (${hf7.stickM(pAdj[0], pAdj[1]).toFixed(2)} m = flattened fill ${flatAdj.toFixed(2)} m)`);
+}
+
 if (failures > 0) {
   console.error(`${failures} height policy test(s) FAILED`);
   process.exit(1);

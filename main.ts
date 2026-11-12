@@ -535,6 +535,10 @@ function setupHeights(): void {
     // area:highway polygons (and man_made=bridge decks) are road areas:
     // plane-fitted, so kerbs/lane markings on them ride the flat surface
     for (const ring of f.outer) hf.registerArea(q2ll(ring), f.layer, isBridge(f), "highway" in f);
+  // after all areas are registered: propagate the connected-to-higher-layer
+  // rule one hop to ADJACENT ROAD areas (ramps) and recompute their height
+  // fns on the DOM so markings/kerbs stick to the rendered surface
+  hf.finalizeConnections();
 }
 
 /** record the WHOLE dataset into the scene graph, once. Every command is
