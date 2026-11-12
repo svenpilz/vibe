@@ -340,12 +340,16 @@ const PATTERN_AVG: Record<string, string> = {
   cobblestone: "#676767",
 };
 
-/** stone pattern fill for a surface at the current zoom; null below PATTERN_ZOOM */
+/** stone pattern fill for a surface at the current zoom; null below
+ *  PATTERN_ZOOM or for surfaces without a stone tile (those render solid) */
 function stonePatternFill(surface: string | undefined): FillSpec | null {
   if (!surface) return null;
   if (zoomLevel() < PATTERN_ZOOM) return null;
-  const key = "stone:" + normalizeSurfaceKey(surface);
-  const isSett = normalizeSurfaceKey(surface) !== "paving_stones";
+  const key0 = normalizeSurfaceKey(surface);
+  if (key0 !== "paving_stones" && key0 !== "sett" && key0 !== "cobblestone")
+    return null;
+  const key = "stone:" + key0;
+  const isSett = key0 !== "paving_stones";
   const cell = (isSett ? 5 : 8) + 1;
   g.registerPattern(key, () => stoneTileData(surface));
   return { pattern: { key, w: cell * 2, h: cell * 2 } };
@@ -2843,6 +2847,7 @@ window.addEventListener("drop", (e) => {
     viewBboxQ(),
   );
 };
+(window as any).__scene = () => scene;
 (window as any).__state = () => ({
   hasDataset: dataset !== null,
   sceneCmds: scene?.totalCmds ?? -1,
