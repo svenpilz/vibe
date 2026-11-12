@@ -142,13 +142,14 @@ async function boot(): Promise<void> {
   const data: BakedData = await res.json();
 
   const t0 = performance.now();
-  // terrain source switch: 0 = DGM1 bare earth, 1 = DOM1 raw surface, 2 = DOM1 cleaned with DGM1
+  // terrain source switch (H): 0 = DOM1 cleaned with DGM1 (default, replaces SRTM),
+  // 1 = DGM1 bare earth, 2 = DOM1 raw surface
+  const terrainModes = ["DOM1 cleaned (DGM1 filters trees/signs)", "DGM1 bare earth", "DOM1 raw surface"];
   let terrainMode = 0;
-  const terrainModes = ["DGM1 bare earth", "DOM1 raw surface", "DOM1 cleaned (DGM1 filters trees/signs)"];
   let terrainMesh: THREE.Mesh | undefined;
   const setTerrainMode = (mode: number) => {
     terrainMode = mode;
-    const grid = mode === 0 || !data.terrainDom ? data.terrain : mode === 1 ? data.terrainDom : cleanDomTerrain(data.terrainDom, data.terrain, buildingPolygons(data));
+    const grid = !data.terrainDom || mode === 1 ? data.terrain : mode === 2 ? data.terrainDom : cleanDomTerrain(data.terrainDom, data.terrain, buildingPolygons(data));
     const g = buildTerrainMesh(grid);
     if (!terrainMesh) {
       terrainMesh = new THREE.Mesh(toGeometry(g), new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
