@@ -129,9 +129,9 @@ for (let i = 0; i < roads.mesh.positions.length; i += 3) {
   const px = roads.mesh.positions[i];
   const py = roads.mesh.positions[i + 1];
   const pz = roads.mesh.positions[i + 2];
-  if (Math.abs(py - 50) < 0.01 && Math.abs(pz - 50) < 1.0 && Math.abs(px) < 1.0) pierFound = true;
+  if (Math.abs(py - 50) < 0.01 && Math.abs(pz - 50) < 1.0 && Math.abs(px - 50) < 1.0) pierFound = true;
 }
-check("bridge has support pier down to terrain", pierFound);
+check("bridges just span: no pier down to terrain", !pierFound);
 
 const idx = new RoadIndex(roads.segments);
 const q = idx.nearest(50, 2, 60);
@@ -180,6 +180,9 @@ const wl = wayNodeLayers(
 check("wayNodeLayers end node at layer 1", wl[3] === 1);
 check("wayNodeLayers mid at layer 0 beyond ramp", wl[0] === 0 && wl[1] === 0, JSON.stringify(wl));
 check("RAMP_M is 60 m", RAMP_M === 60);
+// a bridge way must NOT be raised to a higher layer at a shared node (no cliff vs same-layer segments)
+const wlB = wayNodeLayers({ r: [0, 1], t: [] }, 1, new Map([[1, 2]]), [[0, 0], [50, 0]]);
+check("bridge way keeps own layer at higher-layer junction", wlB[0] === 1 && wlB[1] === 1, JSON.stringify(wlB));
 
 // building collision index
 const bIdx = new BuildingIndex([[[0, 0], [10, 0], [10, 10], [0, 10]]]);
@@ -241,6 +244,14 @@ check("bus route line non-empty", buildRoutes(railData).indices.length > 0);
 // building facade uvs
 const uvMesh = buildBuildings(mkData([{ ptsM: [[0, -50], [12, -50], [12, -38], [0, -38], [0, -50]], tags: { building: "yes", height: "9" } }]));
 check("building mesh has uvs matching verts", uvMesh.uvs.length === (uvMesh.positions.length / 3) * 2);
+// facade v spans one tile per level (falls back to height/3 without levels tag)
+const lvMesh = buildBuildings(mkData([{ ptsM: [[0, -50], [12, -50], [12, -38], [0, -38], [0, -50]], tags: { building: "yes", height: "15", "building:levels": "5" } }]));
+let maxV = -Infinity;
+for (let i = 1; i < lvMesh.uvs.length; i += 2) maxV = Math.max(maxV, lvMesh.uvs[i]);
+check("facade v spans building:levels (5)", Math.abs(maxV - 5) < 1e-9, `${maxV}`);
+let maxV2 = -Infinity;
+for (let i = 1; i < uvMesh.uvs.length; i += 2) maxV2 = Math.max(maxV2, uvMesh.uvs[i]);
+check("facade v falls back to height/3 (9 m -> 3)", Math.abs(maxV2 - 3) < 1e-9, `${maxV2}`);
 
 // grade limiting: a 10 m spike over a 100 m segment must be flattened to 8%
 const pts: Array<[number, number]> = [[0, 0], [100, 0], [200, 0]];

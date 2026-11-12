@@ -214,6 +214,10 @@ export function smoothElevations(elevs: number[], pts: Array<[number, number]>, 
 export function wayNodeLayers(way: BakedWay, ownLayer: number, maxLayer: Map<number, number>, pts: Array<[number, number]>): number[] {
   const n = way.r.length;
   const factor = new Array<number>(n).fill(ownLayer);
+  // bridge ways keep their own deck height even where a higher-layer way shares
+  // the node — raising them would put a cliff against their same-layer segments
+  // (e.g. the Friedenauer Brücke deck jumping to motorway height at a junction)
+  if (ownLayer > 0) return factor;
   const cum = new Array<number>(n).fill(0);
   for (let i = 1; i < n; i++) cum[i] = cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
   for (let i = 0; i < n; i++) {
@@ -387,38 +391,37 @@ export function buildRoads(data: BakedData): RoadBuild {
       const c = pushVert(mesh, cx, e, cy, 0, 1, 0, col);
       for (let k = 0; k < 8; k++) pushTri(mesh, c, ring[k], ring[(k + 1) % 8]);
     }
-    // support piers under bridge decks, down to the terrain, so the
-    // vertical stacking is visible from the map view
-    if (isBridge) {
-      const pierCol: [number, number, number] = [0.6, 0.6, 0.62];
-      const pierHalf = 0.9;
-      for (let i = 0; i < pts.length; i++) {
-        const [cx, cy] = pts[i];
-        const deck = elevs[i];
-        const ground = sampleTerrainM(data.terrain, cx, cy);
-        if (deck - ground < 1) continue;
-        const corners: Array<[number, number]> = [
-          [-pierHalf, -pierHalf], [pierHalf, -pierHalf], [pierHalf, pierHalf], [-pierHalf, pierHalf],
-        ];
-        for (let k = 0; k < 4; k++) {
-          const [ox1, oy1] = corners[k];
-          const [ox2, oy2] = corners[(k + 1) % 4];
-          const dx = ox2 - ox1;
-          const dy = oy2 - oy1;
-          const len = Math.hypot(dx, dy) || 1;
-          const nx = dy / len;
-          const nz = -dx / len;
-          const a = pushVert(mesh, cx + ox1, ground, cy + oy1, nx, 0, nz, pierCol);
-          const b = pushVert(mesh, cx + ox2, ground, cy + oy2, nx, 0, nz, pierCol);
-          const c = pushVert(mesh, cx + ox2, deck, cy + oy2, nx, 0, nz, pierCol);
-          const d = pushVert(mesh, cx + ox1, deck, cy + oy1, nx, 0, nz, pierCol);
-          pushTri(mesh, a, c, b);
-          pushTri(mesh, a, d, c);
-        }
-      }
-    }
+    // bridges just span: no support piers are rendered under the decks
   }
   return { mesh, segments };
+}
+
+/** Building height from the DOM1 surface model: median of (DOM − DGM) over
+ *  sample points inside the footprint — the roof height above bare earth for the
+ *  area that projects onto this building. Undefined when no DOM is available or
+ *  the median is implausibly small (then OSM tags are used instead). */
+export function buildingHeightFromDom(data: BakedData, poly: Array<[number, number]>): number | undefined {
+  const dom = data.terrainDom;
+  if (!dom) return undefined;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const [x, y] of poly) {
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  const step = Math.max(2, Math.min(maxX - minX, maxY - minY) / 12);
+  const diffs: number[] = [];
+  for (let x = minX; x <= maxX + 1e-9; x += step) {
+    for (let y = minY; y <= maxY + 1e-9; y += step) {
+      if (!pointInPolygon(x, y, poly)) continue;
+      diffs.push(sampleTerrainM(dom, x, y) - sampleTerrainM(data.terrain, x, y));
+    }
+  }
+  if (diffs.length < 3) return undefined;
+  diffs.sort((a, b) => a - b);
+  const med = diffs[Math.floor(diffs.length / 2)];
+  return med > 1 ? med : undefined;
 }
 
 /** Extruded building blocks: walls + triangulated flat roof, one merged mesh. */
@@ -431,8 +434,10 @@ export function buildBuildings(data: BakedData): MeshData {
     const ring = way.r.slice(0, -1);
     const pts = ring.map((r) => nodeXY(data, r));
     if (pts.length < 3) continue;
-    const h = buildingHeightM(tags);
+    const h = buildingHeightFromDom(data, pts) ?? buildingHeightM(tags);
     const base = minHeightM(tags);
+    // facade v spans one texture tile per floor, so the window rows reflect the levels
+    const floors = parseLevels(tags["building:levels"]) ?? Math.max(1, h / 3);
     const cxy = pts.reduce((a, p) => [a[0] + p[0] / pts.length, a[1] + p[1] / pts.length], [0, 0] as [number, number]);
     const col = buildingPaletteColor(cxy[0], cxy[1]);
     const wallCol: [number, number, number] = [col[0] * 0.92, col[1] * 0.92, col[2] * 0.92];
@@ -456,7 +461,7 @@ export function buildBuildings(data: BakedData): MeshData {
       const nz = -(pts[j][0] - pts[i][0]) / len;
       // facade uv: u along the wall every 3 m, v one texture tile per 3 m of height
       const u0 = acc / 3, u1 = (acc + len) / 3;
-      const v0 = (bottom[i] - baseElev[0]) / 3, v1 = (top[i] - baseElev[0]) / 3;
+      const v0 = 0, v1 = floors;
       const a = pushVertUV(mesh, pts[i][0], bottom[i], pts[i][1], nx, 0, nz, wallCol, u0, v0);
       const b = pushVertUV(mesh, pts[j][0], bottom[j], pts[j][1], nx, 0, nz, wallCol, u1, v0);
       const c = pushVertUV(mesh, pts[j][0], top[j], pts[j][1], nx, 0, nz, wallCol, u1, v1);

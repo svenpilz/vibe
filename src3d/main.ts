@@ -80,19 +80,19 @@ function toGeometry(m: MeshData): THREE.BufferGeometry {
 /** Procedural facade texture: window grid, a few lit windows. Tinted per
  *  building by the vertex colors (map * color). */
 function makeFacadeTexture(): THREE.Texture {
+  // one window row per texture tile; building uvs span one tile per floor,
+  // so the facade shows as many window rows as the building has levels
   const c = document.createElement("canvas");
   c.width = 128;
-  c.height = 256;
+  c.height = 64;
   const ctx = c.getContext("2d")!;
   ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, 128, 256);
-  const cols = 4, rows = 8, wx = 128 / cols, wy = 256 / rows;
-  for (let r = 0; r < rows; r++) {
-    for (let col = 0; col < cols; col++) {
-      const lit = Math.random() < 0.12;
-      ctx.fillStyle = lit ? "#ffd97a" : "#2c3844";
-      ctx.fillRect(col * wx + wx * 0.22, r * wy + wy * 0.25, wx * 0.56, wy * 0.5);
-    }
+  ctx.fillRect(0, 0, 128, 64);
+  const cols = 4, wx = 128 / cols, wy = 64;
+  for (let col = 0; col < cols; col++) {
+    const lit = Math.random() < 0.12;
+    ctx.fillStyle = lit ? "#ffd97a" : "#2c3844";
+    ctx.fillRect(col * wx + wx * 0.22, wy * 0.25, wx * 0.56, wy * 0.5);
   }
   const tex = new THREE.CanvasTexture(c);
   tex.wrapS = THREE.RepeatWrapping;
