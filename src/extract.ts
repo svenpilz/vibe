@@ -539,6 +539,20 @@ function parseLayer(v: string | undefined): number {
   return Number.isFinite(n) ? Math.max(-16, Math.min(16, n)) : 0;
 }
 
+/** building:levels=* -> floor count (first value of a "2;3" list) */
+function parseLevels(v: string | undefined): number | undefined {
+  if (v === undefined) return undefined;
+  const n = parseFloat(v.split(";")[0]);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+/** height=* -> meters ("12", "12.5 m"); undefined when absent/unparseable */
+function parseHeightM(v: string | undefined): number | undefined {
+  if (v === undefined) return undefined;
+  const n = parseFloat(v);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
 /**
  * A centerline may only donate its surface to an area of the same highway
  * type. Exception: highway=footway centerlines also cover sidewalk areas,
@@ -704,6 +718,8 @@ export function extractFeatures(
           name: tags["name"],
           layer: parseLayer(tags["layer"]),
           level: parseLevel(tags["level"]),
+          levels: parseLevels(tags["building:levels"]),
+          heightM: parseHeightM(tags["height"]),
           outer: [qc],
           bbox: bboxOfQ(qc),
         });
@@ -1024,6 +1040,8 @@ export function extractFeatures(
         name: tags["name"],
         layer: parseLayer(tags["layer"]),
         level: parseLevel(tags["level"]),
+        levels: parseLevels(tags["building:levels"]),
+        heightM: parseHeightM(tags["height"]),
         outer: outerRings,
         bbox: bboxOfQ(all),
       });

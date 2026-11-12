@@ -487,16 +487,16 @@ export class SceneGraph {
     data: number[],
   ): MaskRange {
     const pushRingTris = (rings: Pt[][]): { start: number; count: number } => {
-      const start = data.length / 9;
+      const start = data.length / 10;
       for (const ring of rings) {
         const tris = earclip(ring);
         for (let i = 0; i < tris.length; i += 3)
           for (const idx of [tris[i], tris[i + 1], tris[i + 2]]) {
             const p = ring[idx];
-            data.push(p[0], p[1], 1, 1, 1, 1, 0, 0, 0);
+            data.push(p[0], p[1], 1, 1, 1, 1, 0, 0, 0, 0);
           }
       }
-      return { start, count: data.length / 9 - start };
+      return { start, count: data.length / 10 - start };
     };
     return { outer: pushRingTris(outer), holes: pushRingTris(holes) };
   }
@@ -511,17 +511,17 @@ export class SceneGraph {
     cmds.forEach((c, i) => cmdOrder.set(c, i));
     const walk = (node: SceneNode): void => {
       if (node.items.length > 0) {
-        // 9 floats per vertex: x,y,r,g,b,a,u,v,z. z encodes paint order:
-        // LATER commands get SMALLER depth so they win under LEQUAL
-        // (cleared depth is 1, first command has z ~ 1).
+        // 10 floats per vertex: x,y,r,g,b,a,u,v,zgeo,zord. zord encodes
+        // paint order: LATER commands get SMALLER depth so they win under
+        // LEQUAL (cleared depth is 1, first command has zord ~ 1).
         const data: number[] = [];
         const n = Math.max(1, this.totalCmds);
         for (const cmd of node.items) {
-          const start = data.length / 9;
-          const z = (this.totalCmds - cmdOrder.get(cmd)! - 0.5) / n;
-          for (let i = cmd.start * 8; i < (cmd.start + cmd.count) * 8; i += 8) {
+          const start = data.length / 10;
+          const zord = (this.totalCmds - cmdOrder.get(cmd)! - 0.5) / n;
+          for (let i = cmd.start * 9; i < (cmd.start + cmd.count) * 9; i += 9) {
             data.push(verts[i], verts[i + 1], verts[i + 2], verts[i + 3],
-              verts[i + 4], verts[i + 5], verts[i + 6], verts[i + 7], z);
+              verts[i + 4], verts[i + 5], verts[i + 6], verts[i + 7], verts[i + 8], zord);
           }
           const range: DrawRange = {
             start,
@@ -545,15 +545,15 @@ export class SceneGraph {
         gl.bufferData(gl.ARRAY_BUFFER, fdata, gl.STATIC_DRAW);
         node.vao = gl.createVertexArray();
         // wireframe line buffer: 6 line-verts per triangle vertex triple
-        const lineData = new Float32Array(fdata.length * 2);
-        for (let i = 0; i < fdata.length; i += 27) {
+        const lineData = new Float32Array(fdata.length / 10 * 2 * 10);
+        for (let i = 0; i < fdata.length; i += 30) {
           for (let e = 0; e < 3; e++) {
-            const a = i + e * 9, b = i + ((e + 1) % 3) * 9;
-            lineData.set(fdata.subarray(a, a + 9), (i / 27) * 6 * 9 + e * 18);
-            lineData.set(fdata.subarray(b, b + 9), (i / 27) * 6 * 9 + e * 18 + 9);
+            const a = i + e * 10, b = i + ((e + 1) % 3) * 10;
+            lineData.set(fdata.subarray(a, a + 10), (i / 30) * 60 + e * 20);
+            lineData.set(fdata.subarray(b, b + 10), (i / 30) * 60 + e * 20 + 10);
           }
         }
-        node.lineVerts = fdata.length / 9 * 2;
+        node.lineVerts = (fdata.length / 10) * 2;
         node.lineBuf = gl.createBuffer();
         gl.bindBuffer(gl.ARRAY_BUFFER, node.lineBuf);
         gl.bufferData(gl.ARRAY_BUFFER, lineData, gl.STATIC_DRAW);
@@ -611,7 +611,8 @@ export class GlMap {
   private aPos: number;
   private aColor: number;
   private aUv: number;
-  private aZ: number;
+  private aZgeo: number;
+  private aZord: number;
   /** wireframe mode: draw triangle edges as lines instead of filled */
   wireframe = false;
   private verts = new Float32Array(1 << 16);
@@ -646,12 +647,14 @@ export class GlMap {
     this.gl = gl;
 
     const vs = `#version 300 es
-in vec2 a_pos; in vec4 a_color; in vec2 a_uv; in float a_z;
+in vec2 a_pos; in vec4 a_color; in vec2 a_uv; in float a_zgeo; in float a_zord;
 uniform mat4 u_mvp;
 out vec4 v_color; out vec2 v_uv;
 void main() {
-  vec4 p = u_mvp * vec4(a_pos, 0.0, 1.0);
-  p.z = (a_z * 2.0 - 1.0) * p.w;
+  vec4 p = u_mvp * vec4(a_pos, a_zgeo, 1.0);
+  // tiny per-command bias keeps coplanar paint order under LEQUAL; real
+  // geometry z dominates when the camera is tilted
+  p.z += (a_zord * 2.0 - 1.0) * 1e-4 * p.w;
   gl_Position = p;
   v_color = a_color; v_uv = a_uv;
 }`;
@@ -686,7 +689,8 @@ void main() {
     this.aPos = gl.getAttribLocation(prog, "a_pos");
     this.aColor = gl.getAttribLocation(prog, "a_color");
     this.aUv = gl.getAttribLocation(prog, "a_uv");
-    this.aZ = gl.getAttribLocation(prog, "a_z");
+    this.aZgeo = gl.getAttribLocation(prog, "a_zgeo");
+    this.aZord = gl.getAttribLocation(prog, "a_zord");
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.enable(gl.DEPTH_TEST);
@@ -835,15 +839,15 @@ void main() {
     this.nextClip = 1;
   }
 
-  private pushVert(x: number, y: number, c: RGBA, u: number, v: number): void {
-    // recording buffer is 8 floats/vertex; the z (paint order) is baked per
-    // command as a 9th float when the scene graph uploads node buffers
-    if ((this.vertCount + 1) * 8 > this.verts.length) {
+  private pushVert(x: number, y: number, c: RGBA, u: number, v: number, z = 0): void {
+    // recording buffer is 9 floats/vertex (incl. geometric z); the paint
+    // order is baked per command as a 10th float at scene-graph upload
+    if ((this.vertCount + 1) * 9 > this.verts.length) {
       const nv = new Float32Array(this.verts.length * 2);
       nv.set(this.verts);
       this.verts = nv;
     }
-    const o = this.vertCount * 8;
+    const o = this.vertCount * 9;
     this.verts[o] = x;
     this.verts[o + 1] = y;
     this.verts[o + 2] = c[0];
@@ -852,6 +856,7 @@ void main() {
     this.verts[o + 5] = c[3];
     this.verts[o + 6] = u;
     this.verts[o + 7] = v;
+    this.verts[o + 8] = z;
     this.vertCount++;
     const cmd = this.cmds[this.cmds.length - 1];
     if (cmd) {
@@ -897,26 +902,40 @@ void main() {
     a: Pt, b: Pt, c: Pt,
     ca: RGBA, cb: RGBA, cc: RGBA,
     fill: FillSpec,
+    z = 0,
+  ): void {
+    this.triZ(cmd, a, z, b, z, c, z, ca, cb, cc, fill);
+  }
+
+  /** triangle with per-vertex heights (z) */
+  private triZ(
+    cmd: Cmd,
+    a: Pt, az: number,
+    b: Pt, bz: number,
+    c: Pt, cz: number,
+    ca: RGBA, cb: RGBA, cc: RGBA,
+    fill: FillSpec,
   ): void {
     const fillP = (fill as { pattern?: { key: string; w: number; h: number } }).pattern;
-    const push = (p: Pt, col: RGBA) => {
+    const push = (p: Pt, pz: number, col: RGBA) => {
       let u = 0, v = 0;
       if (fillP) [u, v] = this.uvFor(fillP, p[0], p[1]);
-      this.pushVert(p[0], p[1], col, u, v);
+      this.pushVert(p[0], p[1], col, u, v, pz);
     };
     if (fillP) {
-      push(a, [1, 1, 1, 1]);
-      push(b, [1, 1, 1, 1]);
-      push(c, [1, 1, 1, 1]);
+      push(a, az, [1, 1, 1, 1]);
+      push(b, bz, [1, 1, 1, 1]);
+      push(c, cz, [1, 1, 1, 1]);
     } else {
-      push(a, ca);
-      push(b, cb);
-      push(c, cc);
+      push(a, az, ca);
+      push(b, bz, cb);
+      push(c, cz, cc);
     }
   }
 
-  /** filled polygon(s) with optional holes (even-odd via stencil) */
-  fillPolygon(outer: Pt[][], holes: Pt[][], fill: FillSpec): void {
+  /** filled polygon(s) with optional holes (even-odd via stencil), at
+   *  height z (world units; 0 = ground plane) */
+  fillPolygon(outer: Pt[][], holes: Pt[][], fill: FillSpec, z = 0): void {
     const cmd = this.beginCmd();
     cmd.pattern = (fill as { pattern?: { key: string; w: number; h: number } }).pattern ?? null;
     if (holes.length > 0) cmd.mask = { outer, holes };
@@ -929,6 +948,40 @@ void main() {
           ring[tris[i]], ring[tris[i + 1]], ring[tris[i + 2]],
           col, col, col,
           fill,
+          z,
+        );
+    }
+    this.endCmd(cmd);
+  }
+
+  /** extruded prism: vertical walls along each outer ring edge plus a roof
+   *  fill at `height` (world units). One command, so one paint-order z. */
+  extrude(outer: Pt[][], height: number, wall: RGBA, roof: RGBA): void {
+    if (height <= 0) {
+      this.fillPolygon(outer, [], { color: roof });
+      return;
+    }
+    const cmd = this.beginCmd();
+    const wallFill: FillSpec = { color: wall };
+    const roofFill: FillSpec = { color: roof };
+    for (const ring of outer) {
+      const n = ring.length;
+      for (let i = 0; i < n; i++) {
+        const a = ring[i],
+          b = ring[(i + 1) % n];
+        // wall quad: (a,0) (b,0) (b,h) | (a,0) (b,h) (a,h)
+        this.triZ(cmd, a, 0, b, 0, b, height, wall, wall, wall, wallFill);
+        this.triZ(cmd, a, 0, b, height, a, height, wall, wall, wall, wallFill);
+      }
+      // roof at full height
+      const tris = earclip(ring);
+      for (let i = 0; i < tris.length; i += 3)
+        this.tri(
+          cmd,
+          ring[tris[i]], ring[tris[i + 1]], ring[tris[i + 2]],
+          roof, roof, roof,
+          roofFill,
+          height,
         );
     }
     this.endCmd(cmd);
@@ -1116,7 +1169,7 @@ void main() {
 
   /** build the persistent scene graph from the recorded frame */
   finishScene(): SceneGraph {
-    return new SceneGraph(this.gl, this.cmds, this.verts.subarray(0, this.vertCount * 8), this.clipRefs);
+    return new SceneGraph(this.gl, this.cmds, this.verts.subarray(0, this.vertCount * 9), this.clipRefs);
   }
 
   /** draw only the frustum-visible leaves of the scene graph */
@@ -1133,11 +1186,13 @@ void main() {
       gl.enableVertexAttribArray(this.aPos);
       gl.enableVertexAttribArray(this.aColor);
       gl.enableVertexAttribArray(this.aUv);
-      gl.enableVertexAttribArray(this.aZ);
-      gl.vertexAttribPointer(this.aPos, 2, gl.FLOAT, false, 36, 0);
-      gl.vertexAttribPointer(this.aColor, 4, gl.FLOAT, false, 36, 8);
-      gl.vertexAttribPointer(this.aUv, 2, gl.FLOAT, false, 36, 24);
-      gl.vertexAttribPointer(this.aZ, 1, gl.FLOAT, false, 36, 32);
+      gl.enableVertexAttribArray(this.aZgeo);
+      gl.enableVertexAttribArray(this.aZord);
+      gl.vertexAttribPointer(this.aPos, 2, gl.FLOAT, false, 40, 0);
+      gl.vertexAttribPointer(this.aColor, 4, gl.FLOAT, false, 40, 8);
+      gl.vertexAttribPointer(this.aUv, 2, gl.FLOAT, false, 40, 24);
+      gl.vertexAttribPointer(this.aZgeo, 1, gl.FLOAT, false, 40, 32);
+      gl.vertexAttribPointer(this.aZord, 1, gl.FLOAT, false, 40, 36);
     };
     const drawNode = (node: SceneNode): void => {
       if (node.ranges.length === 0 || !node.vao || !node.buf) return;

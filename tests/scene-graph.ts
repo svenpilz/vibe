@@ -16,7 +16,7 @@ function makeStubGL(calls: string[]): any {
     get(_t, prop: string) {
       if (prop === "getShaderParameter" || prop === "getProgramParameter") return () => true;
       if (prop === "getUniformLocation") return () => ({});
-      if (prop === "getAttribLocation") return (_p: any, n: string) => ({ a_pos: 0, a_color: 1, a_uv: 2, a_z: 3 })[n] ?? 0;
+      if (prop === "getAttribLocation") return (_p: any, n: string) => ({ a_pos: 0, a_color: 1, a_uv: 2, a_zgeo: 3, a_zord: 4 })[n] ?? 0;
       if (prop === "createShader" || prop === "createProgram" || prop === "createBuffer" || prop === "createTexture" || prop === "createVertexArray") return () => ({});
       if (/^[A-Z0-9_]+$/.test(prop)) return 1;
       return (...args: any[]) => {
@@ -94,8 +94,8 @@ g.fillPolygon([[[50, 50], [150, 50], [150, 150], [50, 150]]], [], { color: [0, 0
 const scene2 = g.finishScene();
 const rootData = scene2.root.data!;
 ok(rootData !== null && rootData.length > 0, "scene data retained for z-order check");
-const zFirst = rootData[8]; // first vertex of first command
-const zSecond = rootData[6 * 9 + 8]; // first vertex of second command
+const zFirst = rootData[9]; // zord of first vertex of first command (stride 10)
+const zSecond = rootData[6 * 10 + 9]; // first vertex of second command
 ok(
   zSecond < zFirst,
   `paint order via depth: later command z ${zSecond.toFixed(4)} < earlier ${zFirst.toFixed(4)}`,

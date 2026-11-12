@@ -150,6 +150,10 @@ export interface BuildingFeature {
   layer: number;
   /** OSM level=* tag (undefined when absent) */
   level?: number;
+  /** building:levels=* (floor count, used as the extrusion height heuristic) */
+  levels?: number;
+  /** height=* in meters when parseable */
+  heightM?: number;
   outer: Q[][][];
   bbox: [number, number, number, number];
 }
