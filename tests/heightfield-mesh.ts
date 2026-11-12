@@ -1,5 +1,5 @@
 import type { BakedData, BakedWay } from "../src3d/schema";
-import { triangulatePolygon, buildTerrainMesh, buildRoads, buildBuildings, buildGround, buildLaneMarkings, buildKerbs, buildFurniture, buildRails, buildRoutes, RouteTrack, RoadIndex, BuildingIndex, buildingPolygons, wayNodeLayers, RAMP_M } from "../src3d/mesh";
+import { triangulatePolygon, buildTerrainMesh, buildRoads, buildBuildings, buildGround, buildLaneMarkings, buildKerbs, buildFurniture, buildRails, buildRoutes, RouteTrack, RoadIndex, BuildingIndex, buildingPolygons, wayNodeLayers, smoothElevations, RAMP_M, MAX_GRADE } from "../src3d/mesh";
 import { metersToLonLat, quantizeDeg } from "../src3d/geo";
 
 let failures = 0;
@@ -228,6 +228,12 @@ check("bus route line non-empty", buildRoutes(railData).indices.length > 0);
 // building facade uvs
 const uvMesh = buildBuildings(mkData([{ ptsM: [[0, -50], [12, -50], [12, -38], [0, -38], [0, -50]], tags: { building: "yes", height: "9" } }]));
 check("building mesh has uvs matching verts", uvMesh.uvs.length === (uvMesh.positions.length / 3) * 2);
+
+// grade limiting: a 10 m spike over a 100 m segment must be flattened to 8%
+const pts: Array<[number, number]> = [[0, 0], [100, 0], [200, 0]];
+const sm = smoothElevations([50, 60, 50], pts);
+check("grade limit caps 10 m spike to 8 m", Math.abs(sm[1] - 58) < 1e-9, JSON.stringify(sm));
+check("MAX_GRADE is 8%", MAX_GRADE === 0.08);
 
 if (failures > 0) {
   console.error(`${failures} test(s) failed`);

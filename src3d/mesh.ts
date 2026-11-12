@@ -147,6 +147,32 @@ function nodeMaxLayer(data: BakedData, roadWays: { way: BakedWay; idx: number }[
 /** ramp length in meters over which a road climbs to a higher adjacent layer */
 export const RAMP_M = 60;
 
+/** max road grade (rise/run) — real roads are graded, not glued to the terrain */
+export const MAX_GRADE = 0.08;
+
+/**
+ * Grade-limit an elevation profile along a polyline: no segment may exceed
+ * MAX_GRADE, forward then backward pass. Makes roads look engineered/flat
+ * instead of following every terrain bump.
+ */
+export function smoothElevations(elevs: number[], pts: Array<[number, number]>, maxGrade = MAX_GRADE): number[] {
+  const n = elevs.length;
+  const out = [...elevs];
+  for (let i = 1; i < n; i++) {
+    const len = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+    const maxRise = maxGrade * Math.max(len, 1);
+    if (out[i] > out[i - 1] + maxRise) out[i] = out[i - 1] + maxRise;
+    if (out[i] < out[i - 1] - maxRise) out[i] = out[i - 1] - maxRise;
+  }
+  for (let i = n - 2; i >= 0; i--) {
+    const len = Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
+    const maxRise = maxGrade * Math.max(len, 1);
+    if (out[i] > out[i + 1] + maxRise) out[i] = out[i + 1] + maxRise;
+    if (out[i] < out[i + 1] - maxRise) out[i] = out[i + 1] - maxRise;
+  }
+  return out;
+}
+
 /**
  * Per-node elevation factor for one way: the way's own layer in the middle,
  * blending up to the max incident layer within RAMP_M of a layer transition,
@@ -211,7 +237,8 @@ export function buildRoads(data: BakedData): RoadBuild {
     // footways/paths/sidewalks get another +0.12 m kerb lift
     const isFootway = hw === "footway" || hw === "path" || hw === "steps" || hw === "pedestrian" || hw === "cycleway";
     const lift = 0.12 + (isFootway ? 0.12 : 0);
-    const elevs = pts.map(([x, y], i) => sampleTerrainM(data.terrain, x, y) + factors[i] * LAYER_H + lift);
+    const rawElevs = pts.map(([x, y], i) => sampleTerrainM(data.terrain, x, y) + factors[i] * LAYER_H + lift);
+    const elevs = smoothElevations(rawElevs, pts);
 
     for (let i = 0; i + 1 < pts.length; i++) {
       const [ax, ay] = pts[i];
