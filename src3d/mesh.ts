@@ -98,14 +98,11 @@ export function triangulatePolygon(pts: Array<[number, number]>): number[] {
   return out;
 }
 
-/** Recolor a mesh by elevation with a hypsometric ramp (used in terrain-only mode). */
-export function colorByHeight(m: MeshData): void {
-  let min = Infinity, max = -Infinity;
-  for (let i = 1; i < m.positions.length; i += 3) {
-    const y = m.positions[i];
-    if (y < min) min = y;
-    if (y > max) max = y;
-  }
+/** Recolor a mesh by elevation with a hypsometric ramp (used in terrain-only mode).
+ *  The color range is normalized to a fixed absolute elevation range (default
+ *  30..80 m, the Berlin DGM1/DHHN2016 range) so colors are comparable across
+ *  views and terrain modes, not stretched per mesh. */
+export function colorByHeight(m: MeshData, minM = 30, maxM = 80): void {
   const stops: Array<[number, [number, number, number]]> = [
     [0.0, [0.25, 0.45, 0.75]],
     [0.35, [0.35, 0.62, 0.35]],
@@ -113,9 +110,9 @@ export function colorByHeight(m: MeshData): void {
     [0.85, [0.65, 0.5, 0.35]],
     [1.0, [0.95, 0.95, 0.98]],
   ];
-  const span = Math.max(max - min, 1e-6);
+  const span = Math.max(maxM - minM, 1e-6);
   for (let i = 0; i < m.positions.length; i += 3) {
-    const t = (m.positions[i + 1] - min) / span;
+    const t = Math.max(0, Math.min(1, (m.positions[i + 1] - minM) / span));
     let s = 0;
     while (s < stops.length - 2 && t > stops[s + 1][0]) s++;
     const [t0, c0] = stops[s];
@@ -170,10 +167,40 @@ export function bridgeCorridors(data: BakedData): Array<[number, number, number,
   return out;
 }
 
-export function cleanDomTerrain(dom: TerrainGrid, dgm: TerrainGrid, buildingPolys: Array<Array<[number, number]>>, thresholdM = 1.5, corridors: Array<[number, number, number, number]> = [], corridorHalfM = 8): TerrainGrid {
+/** Local coords of mapped tree points (natural=tree). */
+export function treePoints(data: BakedData): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  for (const pt of data.points) {
+    if (getTag(data, pt, "natural") !== "tree") continue;
+    if (pt.r.length < 1) continue;
+    out.push(nodeXY(data, pt.r[0]));
+  }
+  return out;
+}
+
+export function cleanDomTerrain(dom: TerrainGrid, dgm: TerrainGrid, buildingPolys: Array<Array<[number, number]>>, thresholdM = 1.5, corridors: Array<[number, number, number, number]> = [], corridorHalfM = 8, trees: Array<[number, number]> = [], treeRadiusM = 4): TerrainGrid {
   const n = dom.n;
   const cell = dom.sizeM / n;
   const index = new BuildingIndex(buildingPolys);
+  // coarse grid over tree points for fast proximity lookup
+  const treeGrid = new Map<string, Array<[number, number]>>();
+  for (const [tx, ty] of trees) {
+    const k = `${Math.floor(tx / 25)},${Math.floor(ty / 25)}`;
+    const arr = treeGrid.get(k) ?? [];
+    arr.push([tx, ty]);
+    treeGrid.set(k, arr);
+  }
+  const nearTree = (px: number, py: number): boolean => {
+    const gx = Math.floor(px / 25), gy = Math.floor(py / 25);
+    for (let i = gx - 1; i <= gx + 1; i++) {
+      for (let j = gy - 1; j <= gy + 1; j++) {
+        for (const [tx, ty] of treeGrid.get(`${i},${j}`) ?? []) {
+          if (Math.hypot(px - tx, py - ty) < treeRadiusM + cell) return true;
+        }
+      }
+    }
+    return false;
+  };
   const H = dom.heightsDm;
   const at = (i: number, j: number): number => H[Math.max(0, Math.min(n, j)) * (n + 1) + Math.max(0, Math.min(n, i))];
   const heightsDm: number[] = [];
@@ -201,7 +228,9 @@ export function cleanDomTerrain(dom: TerrainGrid, dgm: TerrainGrid, buildingPoly
       for (const [ax, ay, bx, by] of corridors) {
         if (distToSegment(px, py, ax, ay, bx, by) < corridorHalfM) { inCorridor = true; break; }
       }
-      if (inBuilding || inCorridor || (d - g > thresholdM * 10 && blob > thresholdM * 10)) {
+      // mapped trees are masked explicitly — a large crown spans several cells
+      // and looks edge-like to the curvature test, but must not spike the surface
+      if (inBuilding || inCorridor || nearTree(px, py) || (d - g > thresholdM * 10 && blob > thresholdM * 10)) {
         heightsDm.push(g);
       } else {
         heightsDm.push(d);
@@ -389,7 +418,11 @@ export function buildRoads(data: BakedData): RoadBuild {
     const isBridge = layer > 0;
     const col = surfaceColor(tags);
     const basePts = way.r.map((r) => nodeXY(data, r));
-    const baseFactors = wayNodeLayers(way, layer, maxLayer, basePts);
+    // non-link motorways/trunk pass through cuttings under bridges — they must
+    // NOT ramp up to deck height, so both carriageways keep the same (ground)
+    // height near a bridge; only links and lower-class roads ramp to decks
+    const noRamp = hw === "motorway" || hw === "trunk";
+    const baseFactors = noRamp ? new Array<number>(basePts.length).fill(layer) : wayNodeLayers(way, layer, maxLayer, basePts);
     // per-node OSM ele=* (surveyed point heights) where present, else -1
     const baseEle = way.r.map((_, i) => way.ele?.[i] ?? -1);
     // subdivide at terrain grid lines/diagonals so the ribbon follows the
@@ -402,11 +435,18 @@ export function buildRoads(data: BakedData): RoadBuild {
     // footways/paths/sidewalks get another +0.12 m kerb lift
     const isFootway = hw === "footway" || hw === "path" || hw === "steps" || hw === "pedestrian" || hw === "cycleway";
     const lift = 0.12 + (isFootway ? 0.12 : 0);
-    // a node with an ele tag pins that point's height (ele is per-point, not per-road)
-    const rawElevs = pts.map(([x, y], i) => (eles[i] >= 0 ? eles[i] : sampleTerrainM(data.terrain, x, y)) + factors[i] * LAYER_H + lift);
+    // a node with an ele tag pins that point's height (ele is per-point, not
+    // per-road) — but only when it agrees with the terrain model; a stray ele far
+    // from the DGM (e.g. on an embankment the 10 m grid misses) is dropped so
+    // adjacent carriageways keep the same height near bridges
+    const rawElevs = pts.map(([x, y], i) => {
+      const terr = sampleTerrainM(data.terrain, x, y);
+      const e = eles[i] >= 0 && Math.abs(eles[i] - terr) <= 1.5 ? eles[i] : terr;
+      return e + factors[i] * LAYER_H + lift;
+    });
     // grade smoothing may cut a spike, but never let a road dip below the terrain
     // (or below a pinned ele=* point height)
-    const elevs = smoothElevations(rawElevs, pts).map((e, i) => Math.max(e, (eles[i] >= 0 ? eles[i] : sampleTerrainM(data.terrain, pts[i][0], pts[i][1])) + 0.05));
+    const elevs = smoothElevations(rawElevs, pts).map((e, i) => Math.max(e, (eles[i] >= 0 && Math.abs(eles[i] - sampleTerrainM(data.terrain, pts[i][0], pts[i][1])) <= 1.5 ? eles[i] : sampleTerrainM(data.terrain, pts[i][0], pts[i][1])) + 0.05));
 
     for (let i = 0; i + 1 < pts.length; i++) {
       const [ax, ay] = pts[i];

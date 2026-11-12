@@ -164,13 +164,20 @@ check("building mesh has geometry", buildings.indices.length > 0);
 // ramp: a layer-0 road whose end node is shared with a layer-1 bridge must
 // climb to deck height at that end, while staying at terrain mid-way
 const rampData = mkData([
-  { ptsM: [[0, 0], [100, 0], [200, 0]], tags: { highway: "motorway" } },
-  { ptsM: [[200, 0], [200, 80]], tags: { highway: "motorway", layer: "1", bridge: "yes" } },
+  { ptsM: [[0, 0], [100, 0], [200, 0]], tags: { highway: "primary" } },
+  { ptsM: [[200, 0], [200, 80]], tags: { highway: "primary", layer: "1", bridge: "yes" } },
 ]);
 const rampRoads = buildRoads(rampData);
 const motorwaySegs = rampRoads.segments.filter((s) => s.wayIdx === 0);
-check("ramp: motorway starts at terrain", Math.abs(motorwaySegs[0].elevA - 50) < 0.2, `${motorwaySegs[0].elevA}`);
-check("ramp: motorway end reaches deck 55 m", Math.abs(motorwaySegs[motorwaySegs.length - 1].elevB - 55) < 0.2, `${motorwaySegs[motorwaySegs.length - 1].elevB}`);
+check("ramp: connecting road starts at terrain", Math.abs(motorwaySegs[0].elevA - 50) < 0.2, `${motorwaySegs[0].elevA}`);
+check("ramp: connecting road end reaches deck 55 m", Math.abs(motorwaySegs[motorwaySegs.length - 1].elevB - 55) < 0.2, `${motorwaySegs[motorwaySegs.length - 1].elevB}`);
+// non-link motorways must NOT ramp to bridge decks (carriageways stay level under bridges)
+const mwData = mkData([
+  { ptsM: [[0, 0], [100, 0], [200, 0]], tags: { highway: "motorway" } },
+  { ptsM: [[200, 0], [200, 80]], tags: { highway: "motorway", layer: "1", bridge: "yes" } },
+]);
+const mwSegs = buildRoads(mwData).segments.filter((s) => s.wayIdx === 0);
+check("non-link motorway stays at terrain near bridge (no ramp)", mwSegs.every((s) => Math.abs(s.elevA - 50) < 0.2 && Math.abs(s.elevB - 50) < 0.2), JSON.stringify(mwSegs.map((s) => [s.elevA, s.elevB])));
 check("ramp: bridge deck flat at 55 m", rampRoads.segments.filter((s) => s.wayIdx === 1).every((s) => Math.abs(s.elevA - 55) < 0.2 && Math.abs(s.elevB - 55) < 0.2));
 
 // elevation-aware snapping: parallel ground road and bridge deck
@@ -192,10 +199,14 @@ const wl = wayNodeLayers(
   [[0, 0], [50, 0], [100, 0], [200, 0]],
 );
 // ele=* on a road node pins that point's elevation (per-point, not per-road)
-const eleData = mkData([{ ptsM: [[0, 0], [100, 0], [200, 0]], tags: { highway: "residential" }, eleM: [-1, 47.5, -1] }]);
+const eleData = mkData([{ ptsM: [[0, 0], [100, 0], [200, 0]], tags: { highway: "residential" }, eleM: [-1, 49.5, -1] }]);
 const eleSegs = buildRoads(eleData).segments;
 const midSeg = eleSegs.find((s) => Math.abs(s.ax - 100) < 1 || Math.abs(s.bx - 100) < 1);
-check("ele tag pins node elevation (47.5 + lift)", midSeg !== undefined && Math.abs(midSeg.elevA - 47.62) < 0.15 || (midSeg !== undefined && Math.abs(midSeg.elevB - 47.62) < 0.15), JSON.stringify(midSeg && { a: midSeg.elevA, b: midSeg.elevB }));
+check("ele tag pins node elevation when it agrees with terrain (49.5 + lift)", midSeg !== undefined && (Math.abs(midSeg.elevA - 49.62) < 0.15 || Math.abs(midSeg.elevB - 49.62) < 0.15), JSON.stringify(midSeg && { a: midSeg.elevA, b: midSeg.elevB }));
+const eleFar = mkData([{ ptsM: [[0, 0], [100, 0], [200, 0]], tags: { highway: "residential" }, eleM: [-1, 42, -1] }]); // 8 m below terrain: stray
+const farSegs = buildRoads(eleFar).segments;
+const farSeg = farSegs.find((s) => Math.abs(s.ax - 100) < 1 || Math.abs(s.bx - 100) < 1);
+check("stray ele far from terrain is ignored (stays at terrain+lift)", farSeg !== undefined && (Math.abs(farSeg.elevA - 50.12) < 0.05 || Math.abs(farSeg.elevB - 50.12) < 0.05), JSON.stringify(farSeg && { a: farSeg.elevA, b: farSeg.elevB }));
 check("wayNodeLayers end node at layer 1", wl[3] === 1);
 check("wayNodeLayers mid at layer 0 beyond ramp", wl[0] === 0 && wl[1] === 0, JSON.stringify(wl));
 check("RAMP_M is 60 m", RAMP_M === 60);

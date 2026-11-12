@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import type { BakedData } from "../src3d/schema";
-import { getTag } from "../src3d/schema";
+import { getTag, sampleTerrainM, wayTags } from "../src3d/schema";
+import { cleanDomTerrain, buildingPolygons, bridgeCorridors, treePoints } from "../src3d/mesh";
+import { dequantizeDeg, lonLatToMeters } from "../src3d/geo";
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -93,6 +95,32 @@ check("bus stops present", busStops > 30, `${busStops}`);
   let eleWays = 0, eleNodes = 0;
   for (const w of data.ways) if (w.ele) { eleWays++; eleNodes += w.ele.filter((e) => e >= 0).length; }
   check("road node ele=* tags baked (surveyed point heights)", eleWays > 100 && eleNodes > 200, `ways=${eleWays} nodes=${eleNodes}`);
+}
+{
+  // Wielandstraße has adjacent mapped trees (natural=tree): the curvature filter
+  // must remove those tree blobs from the cleaned DOM (fall back to DGM at the
+  // tree points) while keeping the road corridor
+  const cleaned = cleanDomTerrain(data.terrainDom ?? data.terrain, data.terrain, buildingPolygons(data), 1.5, bridgeCorridors(data), 8, treePoints(data));
+  const wieland = data.ways.find((w) => getTag(data, w, "name") === "Wielandstraße" && getTag(data, w, "highway"));
+  const wPts = wieland ? wieland.r.map((r) => lonLatToMeters(dequantizeDeg(data.nodes[r * 2]), dequantizeDeg(data.nodes[r * 2 + 1]))) : [];
+  let treesNear = 0, treesFiltered = 0;
+  for (const pt of data.points) {
+    if (getTag(data, pt, "natural") !== "tree") continue;
+    const [tx, ty] = lonLatToMeters(dequantizeDeg(data.nodes[pt.r[0] * 2]), dequantizeDeg(data.nodes[pt.r[0] * 2 + 1]));
+    if (!wPts.some(([x, y]) => Math.hypot(x - tx, y - ty) < 20)) continue;
+    treesNear++;
+    const c = sampleTerrainM(cleaned, tx, ty);
+    const g = sampleTerrainM(data.terrain, tx, ty);
+    if (Math.abs(c - g) < 0.3) treesFiltered++;
+  }
+  check("trees along Wielandstraße filtered out of cleaned DOM", treesNear > 5 && treesFiltered >= treesNear * 0.8, `trees=${treesNear} filtered=${treesFiltered}`);
+  // globally: mapped trees must not spike the cleaned height field
+  const allTrees = treePoints(data);
+  let allFiltered = 0;
+  for (const [tx, ty] of allTrees) {
+    if (Math.abs(sampleTerrainM(cleaned, tx, ty) - sampleTerrainM(data.terrain, tx, ty)) < 0.3) allFiltered++;
+  }
+  check("mapped trees masked in cleaned DOM everywhere", allTrees.length > 50 && allFiltered >= allTrees.length * 0.9, `trees=${allTrees.length} filtered=${allFiltered}`);
 }
 
 if (failures > 0) {
