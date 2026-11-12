@@ -2,7 +2,7 @@
 // layer>0 bridge decks, and kerb/lane-marking vertex sticking to road areas.
 // Run with: tsx tests/height.ts
 import { readFileSync } from "node:fs";
-import { DemField, type DemHeader } from "../src/dem";
+import { DemField, lonLatToUtm33, type DemHeader } from "../src/dem";
 import { HeightField } from "../src/height";
 
 let failures = 0;
@@ -141,6 +141,61 @@ ok(Math.abs(hf5.stickM(sLon, sLat) - surfS) < 0.5,
   "kerb on a man_made=bridge boundary vertex sticks to the deck (DOM) height");
 ok((hf5 as unknown as { vertexMaxLayer: Map<string, number> }).vertexMaxLayer.get(`${Math.round(sLon * 1e7)}:${Math.round(sLat * 1e7)}`) === 1,
   "man_made=bridge vertex counts as layer 1 for connectivity");
+
+// --- road flattening: plane-fit removes local DEM bumps but keeps the slope ---
+{
+  // synthetic DEM: 40 m base + 1% eastward slope + a 5 m bump at the center cell
+  const tLon = 13.32, tLat = 52.456;
+  const [tE, tN] = lonLatToUtm33(tLon, tLat);
+  const cols = 20, rows = 20, cellM = 10;
+  // origin chosen so (tE,tN) is the CENTER of cell (10,10): sampling there
+  // returns that cell's value exactly (no bilinear dilution of the bump)
+  const header: DemHeader = {
+    crs: "EPSG:25833", cellM, originE: tE - 105, originN: tN - 105,
+    cols, rows, heightOffsetM: 0, heightScaleM: 0.01, nodata: 65535,
+  };
+  const raw = new Uint16Array(cols * rows);
+  for (let r = 0; r < rows; r++)
+    for (let c = 0; c < cols; c++) {
+      const E = header.originE + (c + 0.5) * cellM;
+      const z = 40 + 0.01 * (E - tE); // 1% grade eastward
+      raw[r * cols + c] = Math.round(z / header.heightScaleM);
+    }
+  // bump: +5 m in the single center cell (a local DEM noise spike)
+  const cc = Math.floor((tE - header.originE) / cellM), cr = Math.floor((tN - header.originN) / cellM);
+  raw[cr * cols + cc] += Math.round(5 / header.heightScaleM);
+  const synth = DemField.fromData(header, raw.buffer);
+
+  const hFlat = new HeightField();
+  hFlat.dem = synth;
+  const ring: [number, number][] = [
+    [tLon - 0.0005, tLat - 0.0003],
+    [tLon + 0.0005, tLat - 0.0003],
+    [tLon + 0.0005, tLat + 0.0003],
+    [tLon - 0.0005, tLat + 0.0003],
+  ];
+  const rawF = hFlat.fillMFor([ring], 0, false, true, false);
+  const flatF = hFlat.fillMFor([ring], 0, false, true, true);
+  const rawAtBump = rawF(tLon, tLat);
+  const flatAtBump = flatF(tLon, tLat);
+  ok(rawAtBump - flatAtBump > 3,
+    `plane-fit removes the local bump: raw ${rawAtBump.toFixed(1)} m -> flat ${flatAtBump.toFixed(1)} m`);
+  // slope preserved: east edge vs west edge still differ by ~1% grade
+  const spanM = 0.001 * 111320 * Math.cos((tLat * Math.PI) / 180); // ring width in m
+  const slopeDrop = flatF(tLon + 0.0005, tLat) - flatF(tLon - 0.0005, tLat);
+  ok(Math.abs(slopeDrop - 0.01 * spanM) < 0.3,
+    `overall slope kept: ${slopeDrop.toFixed(2)} m over ${spanM.toFixed(0)} m (expected ~${(0.01 * spanM).toFixed(2)} m)`);
+  // kerbs/markings on the road stick to the FLATTENED surface, not the bump
+  hFlat.registerArea(ring, 0, false, true);
+  ok(Math.abs(hFlat.stickM(tLon, tLat) - flatAtBump) < 0.05,
+    `point inside a road area sticks to the flattened plane (${hFlat.stickM(tLon, tLat).toFixed(2)} m), not the raw bump (${rawAtBump.toFixed(2)} m)`);
+  // non-road areas keep the raw surface
+  const hFlat2 = new HeightField();
+  hFlat2.dem = synth;
+  hFlat2.registerArea(ring, 0, false, false);
+  ok(Math.abs(hFlat2.stickM(tLon, tLat) - rawAtBump) < 0.05,
+    "non-road area (landuse) still sticks to the raw DEM height");
+}
 
 if (failures > 0) {
   console.error(`${failures} height policy test(s) FAILED`);

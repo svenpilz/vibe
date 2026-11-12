@@ -478,10 +478,10 @@ function isBridge(f: { bridge?: string }): boolean {
  *  or layer>0) and polygons CONNECTED to a higher layer take the DOM surface
  *  (stay continuous with the deck); a layer-0 area:highway passing UNDER a
  *  bridge shares no vertex with it and stays on the DGM ground */
-function fillZAt(f: { layer?: number; outer: Q[][][]; bridge?: string }, connected = true): ((p: Pt) => number) | undefined {
+function fillZAt(f: { layer?: number; outer: Q[][][]; bridge?: string }, connected = true, flatten = false): ((p: Pt) => number) | undefined {
   if (!hf || !hf.ready) return undefined;
   const ringsLL = f.outer.map((ring) => ring.map(([x, y]) => [x / Q, y / Q] as [number, number]));
-  const fm = hf.fillMFor(ringsLL, f.layer ?? 0, isBridge(f), connected);
+  const fm = hf.fillMFor(ringsLL, f.layer ?? 0, isBridge(f), connected, flatten);
   return (p: Pt) => fm(xToLon(p[0]), yToLat(p[1])) * pxPerMeter();
 }
 
@@ -532,7 +532,9 @@ function setupHeights(): void {
   // (interpolated) ground height under occluders
   hf.dem?.inpaint();
   for (const f of polys)
-    for (const ring of f.outer) hf.registerArea(q2ll(ring), f.layer, isBridge(f));
+    // area:highway polygons (and man_made=bridge decks) are road areas:
+    // plane-fitted, so kerbs/lane markings on them ride the flat surface
+    for (const ring of f.outer) hf.registerArea(q2ll(ring), f.layer, isBridge(f), "highway" in f);
 }
 
 /** record the WHOLE dataset into the scene graph, once. Every command is
@@ -668,18 +670,20 @@ async function buildGeometry(): Promise<void> {
       const fillSpec: FillSpec = pat ?? { color: solid };
       const outer = area.outer.map(ringPts),
         holes = area.holes.map(ringPts);
-      g.fillPolygon(outer, holes, fillSpec, 0, fillZAt(area));
+      // roads/bridge decks are plane-fitted: locally flat (no DEM-noise
+      // wobble), but the surface can still slope up/down as a whole
+      g.fillPolygon(outer, holes, fillSpec, 0, fillZAt(area, true, true));
       // same-color edge stroke: covers antialiased boundaries and cm-scale
       // geometric gaps between neighboring polygons so areas read as one
       // continuous surface — without letting lower layers shine through the
       // seams at high zoom, the stroke scales with the ground resolution
-      for (const ring of area.outer) g.stroke(closedRingPts(ring), seamW, { color: solid, zAt: fillZAt(area) });
-      for (const ring of area.holes) g.stroke(closedRingPts(ring), seamW, { color: solid, zAt: fillZAt(area) });
+      for (const ring of area.outer) g.stroke(closedRingPts(ring), seamW, { color: solid, zAt: fillZAt(area, true, true) });
+      for (const ring of area.holes) g.stroke(closedRingPts(ring), seamW, { color: solid, zAt: fillZAt(area, true, true) });
       // bridge decks (man_made=bridge or layer>0) get a visible edge so the
       // deck reads as a structure when orbiting
       if (isBridge(area) || area.layer > 0)
         for (const ring of area.outer)
-          g.stroke(closedRingPts(ring), pxToWorld(2.5), { color: rgba("#55555e"), zAt: fillZAt(area) });
+          g.stroke(closedRingPts(ring), pxToWorld(2.5), { color: rgba("#55555e"), zAt: fillZAt(area, true, true) });
     }
 
     // --- buildings: extruded 3D prisms (height from height=*, else

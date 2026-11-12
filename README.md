@@ -54,7 +54,11 @@ status bar shows the current zoom level and the deployed git commit.
 > with a visible edge. A bridge polygon
 > is the ground level for same-layer features inside it (2D) — lane markings, kerbs, lamps on
 > the deck ride at deck height — while lower-layer features inside it (the road passing under
-> the bridge) stay on the ground. Tessellation results are
+> the bridge) stay on the ground. Road and bridge-deck polygons (`area:highway`,
+> `man_made=bridge`) are **plane-fitted** (least squares over the ring plus an interior
+> sample grid): locally flat — DEM noise and polygon/DEM mismatch bumps are removed —
+> but the surface can still slope up or down as a whole, and kerbs/lane markings on the
+> road stick to that flattened plane. Tessellation results are
 > memoized per ring and DEM samples per vertex, so the one-time scene build and any
 > rebuilds reuse them.
 
