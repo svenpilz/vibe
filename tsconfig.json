@@ -14,5 +14,5 @@
     "allowImportingTsExtensions": true,
     "noUnusedLocals": false
   },
-  "include": ["src", "main.ts", "tests", "vite.config.ts"]
+  "include": ["src", "src3d", "scripts", "main.ts", "tests", "vite.config.ts"]
 }

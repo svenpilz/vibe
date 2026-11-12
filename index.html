@@ -3,144 +3,57 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>OSM Micromapping — area:highway visualizer</title>
+  <title>vibe heightfield — 3D OSM Berlin (S Friedenau)</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { height: 100%; overflow: hidden; font-family: system-ui, sans-serif; }
-    #map { width: 100%; height: 100%; display: block; cursor: grab; background: #1a1a1e; }
-    #map.dragging { cursor: grabbing; }
+    html, body { height: 100%; overflow: hidden; font-family: system-ui, sans-serif; background: #0e1116; }
+    #scene { width: 100%; height: 100%; display: block; }
 
     #panel {
-      position: fixed; top: 12px; left: 12px; width: 280px;
-      background: rgba(24, 24, 28, 0.92); color: #eee;
-      border-radius: 10px; padding: 14px;
+      position: fixed; top: 12px; left: 12px;
+      background: rgba(16, 18, 24, 0.88); color: #eee;
+      border-radius: 10px; padding: 12px 14px;
       backdrop-filter: blur(8px);
-      font-size: 13px; line-height: 1.45;
-      max-height: calc(100vh - 24px); overflow-y: auto;
+      font-size: 13px; line-height: 1.5;
+      max-width: 340px;
     }
-    #panel h1 { font-size: 15px; margin-bottom: 8px; }
-    #panel .sub { color: #999; margin-bottom: 10px; font-size: 12px; }
+    #panel h1 { font-size: 15px; margin-bottom: 4px; }
+    #panel .sub { color: #9aa4b2; font-size: 12px; margin-bottom: 6px; }
+    #stats { color: #7ec8ff; font-size: 12px; }
+    #loading { color: #f0c674; font-size: 12px; margin-top: 4px; }
 
-    #dropzone {
-      border: 2px dashed #555;
-      border-radius: 8px;
-      padding: 18px 12px;
-      text-align: center;
-      color: #aaa;
-      cursor: pointer;
-      margin-bottom: 10px;
-      transition: border-color 0.15s, background 0.15s;
+    #help {
+      position: fixed; top: 12px; right: 12px;
+      background: rgba(16, 18, 24, 0.88); color: #cfd6df;
+      border-radius: 10px; padding: 10px 14px;
+      font-size: 12px; line-height: 1.6;
+      backdrop-filter: blur(8px);
+      text-align: right;
     }
-    #dropzone:hover { border-color: #7ec8ff; }
-    #dropzone.over { border-color: #7ec8ff; background: rgba(126, 200, 255, 0.08); }
-    #dropzone .big { font-size: 14px; color: #ddd; margin-bottom: 4px; }
-    #dropzone .hint { font-size: 11px; }
-    #dropzone input { display: none; }
+    #help b { color: #fff; }
 
-    #progressbar {
-      display: none;
-      margin-bottom: 10px;
+    #status {
+      position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
+      background: rgba(16, 18, 24, 0.88); color: #cfd6df;
+      border-radius: 8px; padding: 6px 14px;
+      font-size: 12px; white-space: nowrap;
+      backdrop-filter: blur(8px);
     }
-    #progressbar .label { font-size: 11px; color: #999; margin-bottom: 4px; }
-    #progressbar .track {
-      height: 6px; border-radius: 3px; background: #333; overflow: hidden;
-    }
-    #progressbar .fill {
-      height: 100%; width: 0%;
-      background: linear-gradient(90deg, #7ec8ff, #4ac8e8);
-      transition: width 0.2s;
-    }
-
-    #spinner {
-      display: none;
-      position: fixed;
-      left: 50%; top: 50%;
-      transform: translate(-50%, -50%);
-      z-index: 50;
-      pointer-events: none;
-    }
-    #spinner .ring {
-      width: 46px; height: 46px;
-      border-radius: 50%;
-      border: 5px solid rgba(126, 200, 255, 0.18);
-      border-top-color: #7ec8ff;
-      animation: spin 0.9s linear infinite;
-      margin: 0 auto 10px;
-    }
-    #spinner .txt {
-      font-size: 12px; color: #9aa; text-align: center;
-      background: rgba(24,24,28,0.85); padding: 4px 10px; border-radius: 6px;
-    }
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
-
-    .layer { display: flex; align-items: center; gap: 8px; padding: 3px 0; user-select: none; }
-    .layer input { accent-color: #7ec8ff; }
-    .layer .swatch { width: 14px; height: 14px; border-radius: 3px; flex: none; border: 1px solid rgba(255,255,255,0.25); }
-    .layer label { cursor: pointer; flex: 1; }
-    .layer .count { color: #888; font-size: 11px; }
-
-    #status { position: fixed; bottom: 12px; left: 12px; color: #9aa; font-size: 12px;
-      background: rgba(24,24,28,0.85); padding: 6px 10px; border-radius: 6px; }
-
-    #info {
-      position: fixed; top: 12px; right: 12px; width: 300px;
-      background: rgba(24, 24, 28, 0.92); color: #eee;
-      border-radius: 10px; padding: 14px; font-size: 12.5px;
-      display: none; line-height: 1.5; max-height: calc(100vh - 24px); overflow-y: auto;
-    }
-    #info h3 { font-size: 13px; margin-bottom: 6px; color: #7ec8ff; }
-    #info .tag { display: flex; gap: 8px; }
-    #info .tag .k { color: #ffb86c; min-width: 110px; }
-    #info .tag .v { color: #ddd; word-break: break-all; }
-    #info .close { float: right; cursor: pointer; color: #888; padding: 0 4px; }
-
-    #legend {
-      position: fixed; bottom: 12px; right: 12px;
-      background: rgba(24,24,28,0.92); color: #ccc; border-radius: 8px;
-      padding: 10px 12px; font-size: 11.5px; max-width: 230px;
-    }
-    #legend .row { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
-    #legend .sw { width: 22px; height: 12px; border-radius: 2px; border: 1px solid #444; flex: none; }
-    a { color: #7ec8ff; }
   </style>
 </head>
 <body>
-  <canvas id="map"></canvas>
-
+  <div id="scene"></div>
   <div id="panel">
-    <h1>OSM Micromapping</h1>
-    <div class="sub">area:highway polygons with surface details from centerlines, footways, crossings, kerbs. Works with any Geofabrik <code>.osm.pbf</code> extract.</div>
-
-    <div id="dropzone">
-      <div class="big">Drop a <code>.osm.pbf</code> file here</div>
-      <div class="hint">or click to choose — e.g. berlin-latest.osm.pbf from<br><a href="https://download.geofabrik.de/index.html" target="_blank">download.geofabrik.de</a></div>
-      <input type="file" id="fileinput" accept=".pbf,.osm.pbf" />
-    </div>
-
-    <div id="progressbar">
-      <div class="label" id="pbrlabel">loading…</div>
-      <div class="track"><div class="fill" id="pbrfill"></div></div>
-    </div>
-
-    <div id="layers" style="display:none"></div>
-    <div class="sub" id="zoomhint" style="display:none">scroll to zoom · drag to pan · click a feature for tags</div>
+    <h1>vibe heightfield</h1>
+    <div class="sub">3D OpenStreetMap · 2 km around S Friedenau, Berlin · OSM + SRTM heights</div>
+    <div id="stats"></div>
+    <div id="loading"></div>
   </div>
-
-  <div id="info"></div>
-  <div id="status">drop an .osm.pbf file to begin</div>
-
-  <div id="spinner">
-    <div class="ring"></div>
-    <div class="txt" id="spinnertxt">loading…</div>
+  <div id="help">
+    <b>drag</b> orbit · <b>wheel</b> zoom · <b>right-drag</b> pan<br/>
+    <b>W A S D</b> / arrows drive · <b>C</b> chase cam · <b>R</b> reset car
   </div>
-
-  <div id="legend" style="display:none">
-    <div style="color:#888; margin-bottom:4px">surface colors</div>
-    <div id="legendSurfaces"></div>
-  </div>
-
-  <script type="module" src="./main.ts"></script>
+  <div id="status">loading…</div>
+  <script type="module" src="/src3d/main.ts"></script>
 </body>
 </html>
