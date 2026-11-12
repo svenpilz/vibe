@@ -653,9 +653,11 @@ async function buildGeometry(): Promise<void> {
       const solid = greenColor(gr.kind);
       const outer = gr.outer.map(ringPts),
         holes = gr.holes.map(ringPts);
-      g.fillPolygon(outer, holes, fillSpec, 0, fillZAt(gr));
-      for (const ring of gr.outer) g.stroke(closedRingPts(ring), seamW, { color: solid, zAt: fillZAt(gr) });
-      for (const ring of gr.holes) g.stroke(closedRingPts(ring), seamW, { color: solid, zAt: fillZAt(gr) });
+      // natural=*/grass/scrub/garden is exempt from the connected-to-
+      // higher-layer rule (like landuse): always on the DGM ground
+      g.fillPolygon(outer, holes, fillSpec, 0, fillZAt(gr, false));
+      for (const ring of gr.outer) g.stroke(closedRingPts(ring), seamW, { color: solid, zAt: fillZAt(gr, false) });
+      for (const ring of gr.holes) g.stroke(closedRingPts(ring), seamW, { color: solid, zAt: fillZAt(gr, false) });
     }
 
     // --- highway areas (surface fill) ---
