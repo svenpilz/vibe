@@ -19,7 +19,7 @@ import type {
   Q,
 } from "./src/features";
 import { surfaceColor, normalizeSurface } from "./src/features";
-import { DemField } from "./src/dem";
+import { HeightField } from "./src/height";
 import {
   GlMap,
   SceneGraph,
@@ -64,10 +64,8 @@ let cam = { heading: 0, pitch: 0 };
 
 let view: View = { cx: 10.0, cy: 51.0, scale: 2000 };
 let dataset: Dataset | null = null;
-/** terrain heightfield (DEM) for the bundled example, null when absent */
-let dem: DemField | null = null;
-/** surface model (DOM, includes buildings/bridges) for the bundled example */
-let dom: DemField | null = null;
+/** height model (DGM ground + DOM surface) for the bundled example */
+let hf: HeightField | null = null;
 /** bounds of the loaded dataset, quantized — the scene graph is built from
  *  the full dataset so per-frame frustum culling (not a viewport bbox)
  *  decides what is drawn */
@@ -428,54 +426,57 @@ function draw() {
 
 /** tessellate everything LOD-visible in the whole dataset into the scene
  *  graph; per-frame frustum culling renders only what is on screen */
-/** world-units height of the DEM at a world point (0 without DEM/coverage) */
+/** world-units ground (DGM) height at a world point (0 without height model) */
 function demZAt(p: Pt): number {
-  if (!dem) return 0;
-  const m = dem.sampleM(xToLon(p[0]), yToLat(p[1]));
-  return m === null ? 0 : m * pxPerMeter();
+  if (!hf) return 0;
+  return (hf.groundM(xToLon(p[0]), yToLat(p[1])) ?? 0) * pxPerMeter();
 }
 
-/** world-units height of the topmost surface at a world point, from the DOM
- *  (buildings/bridges/vegetation included; open ground == DGM there) */
-function surfaceZAt(p: Pt): number {
-  const src = dom ?? dem;
-  if (!src) return 0;
-  const m = src.sampleM(xToLon(p[0]), yToLat(p[1]));
-  return m === null ? 0 : m * pxPerMeter();
-}
-
-/** height function for a filled ground feature: higher-layer features (bridge
- *  decks, ...) take the DOM surface height, layer-0 ground takes the DGM */
+/** height function for a filled area feature: layer>0 (bridge deck) takes the
+ *  DOM surface height, layer-0 ground takes the DGM height. An area:highway
+ *  passing UNDER a bridge is layer 0 and therefore stays on the ground —
+ *  geometrically disconnected from the deck above it */
 function fillZAt(f: { layer?: number }): ((p: Pt) => number) | undefined {
-  if (!dem) return undefined;
-  return f.layer !== undefined && f.layer > 0 && dom ? surfaceZAt : demZAt;
+  if (!hf || !hf.ready) return undefined;
+  const fm = hf.fillM(f.layer ?? 0);
+  return (p: Pt) => fm(xToLon(p[0]), yToLat(p[1])) * pxPerMeter();
 }
 
-/** rasterize occluders (buildings + higher-layer features) into the DEM grid
- *  and inpaint the occluded cells from the surrounding visible ground, so
- *  ground hidden under bridges/buildings gets an interpolated height */
-function setupDemOcclusion(): void {
-  if (!dem || !dataset) return;
+/** height for line/point features without their own area (kerbs, lane
+ *  markings, lamps, ...): stick to the road/landuse they belong to by reusing
+ *  its vertices, else the topmost containing area, else the DOM surface */
+function stickZAt(p: Pt): number {
+  if (!hf) return 0;
+  return hf.stickM(xToLon(p[0]), yToLat(p[1])) * pxPerMeter();
+}
+
+/** rasterize occluders (buildings + higher-layer features) into the DGM grid,
+ *  inpaint the occluded ground cells, and register every area polygon so
+ *  kerbs/lane markings can stick to its vertices */
+function setupHeights(): void {
+  if (!hf || !hf.ready || !dataset) return;
   const q2ll = (ring: Q[][]): [number, number][] =>
     ring.map(([x, y]) => [x / Q, y / Q]);
   for (const b of dataset.buildings)
-    for (const ring of b.outer) dem.occludeRing(q2ll(ring));
+    for (const ring of b.outer) hf.dem?.occludeRing(q2ll(ring));
   const polys = [
     ...dataset.areas,
     ...dataset.landuse,
     ...dataset.parking,
     ...dataset.grass,
   ];
-  for (const f of polys)
-    if (f.layer > 0) for (const ring of f.outer) dem.occludeRing(q2ll(ring));
+  for (const f of polys) {
+    if (f.layer > 0) for (const ring of f.outer) hf.dem?.occludeRing(q2ll(ring));
+    for (const ring of f.outer) hf.registerArea(q2ll(ring), f.layer);
+  }
   const lines = [
     ...dataset.centerlines,
     ...dataset.footways,
     ...dataset.crossings,
   ];
   for (const f of lines)
-    if (f.layer > 0) dem.occludeRing(q2ll(f.coords), f.width ?? 6);
-  dem.inpaint();
+    if (f.layer > 0) hf.dem?.occludeRing(q2ll(f.coords), f.width ?? 6);
+  hf.dem?.inpaint();
 }
 
 function buildGeometry() {
@@ -629,19 +630,13 @@ function buildGeometry() {
       // the roof top comes from the DOM (measured surface incl. the building)
       let baseZ = 0;
       let roofZ = h;
-      if ((dem || dom) && b.outer[0]?.length) {
+      if (hf && hf.ready && b.outer[0]?.length) {
         let sx = 0, sy = 0;
         for (const [qx, qy] of b.outer[0]) { sx += qx / Q; sy += qy / Q; }
         const clon = sx / b.outer[0].length, clat = sy / b.outer[0].length;
-        if (dem) {
-          const m = dem.sampleM(clon, clat);
-          if (m !== null) baseZ = m * px;
-        }
-        if (dom) {
-          const rm = dom.sampleM(clon, clat);
-          if (rm !== null) roofZ = Math.max(rm * px, baseZ + 0.5 * px);
-          else roofZ = baseZ + h;
-        } else roofZ = baseZ + h;
+        baseZ = (hf.groundM(clon, clat) ?? 0) * px;
+        roofZ = Math.max((hf.surfaceM(clon, clat) ?? 0) * px, baseZ + 0.5 * px);
+        if (hf.surfaceM(clon, clat) === null) roofZ = baseZ + h;
       }
       g.extrude(outer, Math.max(roofZ - baseZ, 0.5 * px), wall, roof, baseZ);
       const outline = rgba("#8a8a94");
@@ -2716,16 +2711,10 @@ async function loadBundledExample(): Promise<boolean> {
   try {
     const res = await fetch("data/berlin-example.osm.pbf");
     if (!res.ok) return false;
-    try {
-      dem = await DemField.load("data/dem/dgm1-berlin-example.json");
-    } catch {
-      dem = null;
-    }
-    try {
-      dom = await DemField.load("data/dem/dom1-berlin-example.json");
-    } catch {
-      dom = null;
-    }
+    const h = new HeightField();
+    await h.loadDem("data/dem/dgm1-berlin-example.json");
+    await h.loadDom("data/dem/dom1-berlin-example.json");
+    hf = h.ready ? h : null;
     const buf = await res.arrayBuffer();
     loadPbfBuffer(buf, "berlin-example.osm.pbf");
     return true;
@@ -2867,9 +2856,10 @@ function ingestResult(result: ExtractResult, name: string) {
   }
   laneMarkingIndex = buildIndex(dataset.laneMarkings);
   stopLineIndex = buildIndex(dataset.stopLines);
-  setupDemOcclusion();
-  // strokes/points without an explicit zAt sit on the topmost surface
-  g.zAtDefault = dem || dom ? surfaceZAt : null;
+  setupHeights();
+  // strokes/points without an explicit zAt (kerbs, lane markings, lamps, ...)
+  // stick to the road/landuse area they belong to
+  g.zAtDefault = hf && hf.ready ? stickZAt : null;
   kerbGrid = new Map();
   for (const k of dataset.kerbs) {
     const key = Math.floor(k.lon / 50000) * 100000 + Math.floor(k.lat / 50000);
