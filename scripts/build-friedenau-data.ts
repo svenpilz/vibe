@@ -28,13 +28,13 @@ const UA = { "User-Agent": "vibe-heightfield-poc/1.0 (github.com/svenpilz/vibe; 
 
 /** top-level way keys worth keeping for the 3D scene */
 const WAY_KEYS = new Set([
-  "highway", "area:highway", "railway", "building", "landuse", "leisure",
-  "natural", "waterway", "amenity", "shop", "barrier",
+  "highway", "area:highway", "railway", "building", "building:part", "landuse",
+  "leisure", "natural", "waterway", "amenity", "shop", "barrier",
 ]);
 /** per-way tag keys kept in the baked output */
 const TAG_KEYS = new Set([
   "highway", "area:highway", "layer", "bridge", "tunnel", "width", "lanes",
-  "surface", "oneway", "name", "building", "height", "building:levels",
+  "surface", "oneway", "name", "building", "building:part", "height", "building:levels",
   "roof:levels", "roof:shape", "roof:height", "min_height", "landuse",
   "leisure", "natural", "waterway", "amenity", "parking", "barrier", "kerb",
   "footway", "crossing", "lit", "maxspeed", "public_transport", "route",

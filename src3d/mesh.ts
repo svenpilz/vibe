@@ -4,7 +4,7 @@
  * local frame: positions are [east, up, north] meters (three.js x/y/z).
  */
 import type { BakedData, BakedWay, TerrainGrid } from "./schema";
-import { getTag, wayTags, sampleTerrainM, buildingHeightM, minHeightM, osmLayer, layerElevationM, roadWidthM, surfaceColor, buildingPaletteColor, parseHeightM, parseLevels } from "./schema";
+import { getTag, wayTags, sampleTerrainM, buildingHeightM, buildingHeightTaggedM, minHeightM, osmLayer, layerElevationM, roadWidthM, surfaceColor, buildingPaletteColor, parseHeightM, parseLevels } from "./schema";
 import { dequantizeDeg, lonLatToMeters, LAYER_H } from "./geo";
 
 export interface MeshData {
@@ -408,8 +408,8 @@ export function buildRoads(data: BakedData): RoadBuild {
 
 /** Building height from the DOM1 surface model: median of (DOM − DGM) over
  *  sample points inside the footprint — the roof height above bare earth for the
- *  area that projects onto this building. Undefined when no DOM is available or
- *  the median is implausibly small (then OSM tags are used instead). */
+ *  area that projects onto this building. Used only when the building has no
+ *  curated OSM height tags (height=* / building:levels), which take precedence. */
 export function buildingHeightFromDom(data: BakedData, poly: Array<[number, number]>): number | undefined {
   const dom = data.terrainDom;
   if (!dom) return undefined;
@@ -437,14 +437,50 @@ export function buildingHeightFromDom(data: BakedData, poly: Array<[number, numb
 /** Extruded building blocks: walls + triangulated flat roof, one merged mesh. */
 export function buildBuildings(data: BakedData): MeshData {
   const mesh = emptyMesh();
+  // collect building outlines and building:part ways first, so an outline that
+  // contains parts is demoted to a podium at the lowest part height
+  interface B {
+    way: BakedWay;
+    pts: Array<[number, number]>;
+    tags: Record<string, string>;
+    isPart: boolean;
+    ownH: number;
+    centroid: [number, number];
+  }
+  const bs: B[] = [];
   for (const way of data.ways) {
-    if (!getTag(data, way, "building")) continue;
+    const isPart = getTag(data, way, "building:part") !== undefined;
+    if (!isPart && !getTag(data, way, "building")) continue;
     if (way.r.length < 4 || way.r[0] !== way.r[way.r.length - 1]) continue;
     const tags = wayTags(data, way);
-    const ring = way.r.slice(0, -1);
-    const pts = ring.map((r) => nodeXY(data, r));
+    const pts = way.r.slice(0, -1).map((r) => nodeXY(data, r));
     if (pts.length < 3) continue;
-    const h = buildingHeightFromDom(data, pts) ?? buildingHeightM(tags);
+    // curated OSM height tags win (validated against building:parts); DOM median
+    // is the fallback for untagged buildings, then the default
+    const ownH = buildingHeightTaggedM(tags) ?? buildingHeightFromDom(data, pts) ?? buildingHeightM(tags);
+    const centroid = pts.reduce((a, p) => [a[0] + p[0] / pts.length, a[1] + p[1] / pts.length], [0, 0] as [number, number]);
+    bs.push({ way, pts, tags, isPart, ownH, centroid });
+  }
+  const partsOf = new Map<B, B[]>();
+  for (const part of bs) {
+    if (!part.isPart) continue;
+    for (const outer of bs) {
+      if (outer.isPart || outer === part) continue;
+      if (pointInPolygon(part.centroid[0], part.centroid[1], outer.pts)) {
+        const arr = partsOf.get(outer) ?? [];
+        arr.push(part);
+        partsOf.set(outer, arr);
+        break;
+      }
+    }
+  }
+  for (const b of bs) {
+    const way = b.way;
+    const pts = b.pts;
+    const tags = b.tags;
+    // outline with contained parts -> podium at the lowest part height
+    const contained = partsOf.get(b);
+    const h = !b.isPart && contained && contained.length > 0 ? Math.min(...contained.map((p) => p.ownH)) : b.ownH;
     const base = minHeightM(tags);
     // facade v spans one texture tile per floor, so the window rows reflect the levels
     const floors = parseLevels(tags["building:levels"]) ?? Math.max(1, h / 3);
@@ -699,7 +735,7 @@ export class BuildingIndex {
 export function buildingPolygons(data: BakedData): Array<Array<[number, number]>> {
   const out: Array<Array<[number, number]>> = [];
   for (const way of data.ways) {
-    if (!getTag(data, way, "building")) continue;
+    if (!getTag(data, way, "building") && !getTag(data, way, "building:part")) continue;
     if (way.r.length < 4 || way.r[0] !== way.r[way.r.length - 1]) continue;
     out.push(way.r.slice(0, -1).map((r) => nodeXY(data, r)));
   }

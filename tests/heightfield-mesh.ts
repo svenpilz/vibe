@@ -259,6 +259,28 @@ check("facade v spans building:levels (5)", Math.abs(maxV - 5) < 1e-9, `${maxV}`
 let maxV2 = -Infinity;
 for (let i = 1; i < uvMesh.uvs.length; i += 2) maxV2 = Math.max(maxV2, uvMesh.uvs[i]);
 check("facade v falls back to height/3 (9 m -> 3)", Math.abs(maxV2 - 3) < 1e-9, `${maxV2}`);
+// building:part ways render with their own height; an outline containing parts
+// is demoted to a podium at the lowest part height (benchmark: OSM way 396510792)
+const partData = mkData([
+  { ptsM: [[-20, -20], [20, -20], [20, 20], [-20, 20], [-20, -20]], tags: { building: "apartments", "building:levels": "13" } },
+  { ptsM: [[-5, -5], [5, -5], [5, 5], [-5, 5], [-5, -5]], tags: { "building:part": "yes", height: "8.4" } },
+  { ptsM: [[8, 8], [14, 8], [14, 14], [8, 14], [8, 8]], tags: { "building:part": "yes", height: "41.2" } },
+]);
+const partMesh = buildBuildings(partData);
+let partRoofTop = -Infinity;
+for (let i = 1; i < partMesh.positions.length; i += 3) partRoofTop = Math.max(partRoofTop, partMesh.positions[i]);
+check("outline with parts demoted to podium, tallest part wins (50+41.2=91.2)", Math.abs(partRoofTop - 91.2) < 0.01, `${partRoofTop}`);
+check("building parts included in collision polygons", buildingPolygons(partData).length === 3, `${buildingPolygons(partData).length}`);
+// curated OSM height tags win over the DOM median (benchmark way 396510792 parts:
+// tag 41.2 m must beat a lower DOM median)
+{
+  const domTagData = mkData([{ ptsM: [[0, -50], [12, -50], [12, -38], [0, -38], [0, -50]], tags: { building: "yes", height: "41.2" } }]);
+  domTagData.terrainDom = { n: 4, sizeM: 400, originX: -200, originY: -200, heightsDm: new Array(25).fill(500 + 250) }; // DOM suggests 25 m
+  const m = buildBuildings(domTagData);
+  let top = -Infinity;
+  for (let i = 1; i < m.positions.length; i += 3) top = Math.max(top, m.positions[i]);
+  check("OSM height tag wins over DOM median (50+41.2=91.2)", Math.abs(top - 91.2) < 0.01, `${top}`);
+}
 
 // grade limiting: a 10 m spike over a 100 m segment must be flattened to 8%
 const pts: Array<[number, number]> = [[0, 0], [100, 0], [200, 0]];

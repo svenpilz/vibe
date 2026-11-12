@@ -93,6 +93,11 @@ export const ROOF_H = 3;
  * flat-roof allowance, else a default.
  */
 export function buildingHeightM(tags: Record<string, string>): number {
+  return buildingHeightTaggedM(tags) ?? DEFAULT_BUILDING_H;
+}
+
+/** Height from OSM tags only (height=* or building:levels); undefined if untagged. */
+export function buildingHeightTaggedM(tags: Record<string, string>): number | undefined {
   const h = parseHeightM(tags["height"]);
   if (h !== undefined) return h;
   const levels = parseLevels(tags["building:levels"]);
@@ -100,7 +105,7 @@ export function buildingHeightM(tags: Record<string, string>): number {
     const roofLevels = parseLevels(tags["roof:levels"]) ?? 0;
     return levels * M_PER_LEVEL + roofLevels * M_PER_LEVEL + 2;
   }
-  return DEFAULT_BUILDING_H;
+  return undefined;
 }
 
 /** Ground clearance of a building (min_height=*), 0 when absent. */
