@@ -332,7 +332,8 @@ async function boot(): Promise<void> {
       const pitch = qf && qb ? Math.atan2(qb.elev - qf.elev, 4.2) : 0;
       camera.position.set(carState.x, carState.y + eye, carState.z);
       camera.rotation.set(0, 0, 0);
-      camera.rotateY(-carState.heading + Math.PI / 2);
+      // camera looks along -z; rotate so forward = (cos heading, 0, sin heading)
+      camera.rotateY(-carState.heading - Math.PI / 2);
       camera.rotateX(-pitch);
     } else {
       controls.enabled = true;
