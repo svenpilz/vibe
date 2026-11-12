@@ -432,13 +432,14 @@ function demZAt(p: Pt): number {
   return (hf.groundM(xToLon(p[0]), yToLat(p[1])) ?? 0) * pxPerMeter();
 }
 
-/** height function for a filled area feature: layer>0 (bridge deck) takes the
- *  DOM surface height, layer-0 ground takes the DGM height. An area:highway
- *  passing UNDER a bridge is layer 0 and therefore stays on the ground —
- *  geometrically disconnected from the deck above it */
-function fillZAt(f: { layer?: number }): ((p: Pt) => number) | undefined {
+/** height function for a filled area feature: layer>0 decks and polygons
+ *  CONNECTED to a higher layer take the DOM surface (stay continuous with the
+ *  deck); a layer-0 area:highway passing UNDER a bridge shares no vertex with
+ *  it and stays on the DGM ground — geometrically disconnected */
+function fillZAt(f: { layer?: number; outer: Q[][][] }): ((p: Pt) => number) | undefined {
   if (!hf || !hf.ready) return undefined;
-  const fm = hf.fillM(f.layer ?? 0);
+  const ringsLL = f.outer.map((ring) => ring.map(([x, y]) => [x / Q, y / Q] as [number, number]));
+  const fm = hf.fillMFor(ringsLL, f.layer ?? 0);
   return (p: Pt) => fm(xToLon(p[0]), yToLat(p[1])) * pxPerMeter();
 }
 
@@ -465,18 +466,23 @@ function setupHeights(): void {
     ...dataset.parking,
     ...dataset.grass,
   ];
-  for (const f of polys) {
+  for (const f of polys)
     if (f.layer > 0) for (const ring of f.outer) hf.dem?.occludeRing(q2ll(ring));
-    for (const ring of f.outer) hf.registerArea(q2ll(ring), f.layer);
-  }
   const lines = [
     ...dataset.centerlines,
     ...dataset.footways,
     ...dataset.crossings,
   ];
   for (const f of lines)
-    if (f.layer > 0) hf.dem?.occludeRing(q2ll(f.coords), f.width ?? 6);
+    if (f.layer > 0) {
+      hf.dem?.occludeRing(q2ll(f.coords), f.width ?? 6);
+      hf.markHighLine(q2ll(f.coords), f.layer);
+    }
+  // inpaint BEFORE registering areas, so reused vertices get the inpainted
+  // (interpolated) ground height under occluders
   hf.dem?.inpaint();
+  for (const f of polys)
+    for (const ring of f.outer) hf.registerArea(q2ll(ring), f.layer);
 }
 
 function buildGeometry() {
@@ -2709,11 +2715,16 @@ function loadPbfFile(file: File) {
  *  the loaded data and something is visible immediately. */
 async function loadBundledExample(): Promise<boolean> {
   try {
-    const res = await fetch("data/berlin-example.osm.pbf");
-    if (!res.ok) return false;
+    // fetch PBF and both DEM grids in parallel — no point serializing them
     const h = new HeightField();
-    await h.loadDem("data/dem/dgm1-berlin-example.json");
-    await h.loadDom("data/dem/dom1-berlin-example.json");
+    const [res, demOk, domOk] = await Promise.all([
+      fetch("data/berlin-example.osm.pbf"),
+      h.loadDem("data/dem/dgm1-berlin-example.json").then(() => true).catch(() => false),
+      h.loadDom("data/dem/dom1-berlin-example.json").then(() => true).catch(() => false),
+    ]);
+    void demOk;
+    void domOk;
+    if (!res.ok) return false;
     hf = h.ready ? h : null;
     const buf = await res.arrayBuffer();
     loadPbfBuffer(buf, "berlin-example.osm.pbf");

@@ -41,6 +41,11 @@ status bar shows the current zoom level and the deployed git commit.
 > from the DGM base to the **DOM** roof height at their footprint; bridge decks (layer>0)
 > and everything drawn on top (lane markings, kerbs, street lamps, bollards, …) take the
 > **DOM** surface height, i.e. the height of the topmost visible surface from above.
+> An `area:highway` passing *under* a bridge is layer 0 and stays on the ground —
+> geometrically disconnected from the deck. Line features without their own area (kerbs,
+> lane markings, …) stick to the road/landuse they belong to: they reuse the area polygon's
+> own vertices where they coincide (shared OSM nodes), otherwise the topmost containing
+> area — so a kerb on a ground road stays on the ground even when a bridge crosses above.
 
 ## Specification
 

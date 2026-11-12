@@ -62,13 +62,10 @@ export class HeightField {
     return src ? src.sampleM(lon, lat) : null;
   }
 
-  /** height policy for an area feature: layer>0 (bridge deck) -> DOM surface,
-   *  layer 0 -> DGM ground */
+  /** height policy by layer only: layer>0 -> DOM surface, layer 0 -> DGM */
   fillM(layer: number): (lon: number, lat: number) => number {
-    const dom = this.dom;
-    if (layer > 0 && dom) return (lon, lat) => dom.sampleM(lon, lat) ?? 0;
-    const dem = this.dem;
-    return (lon, lat) => (dem ? dem.sampleM(lon, lat) ?? 0 : 0);
+    if (layer > 0) return this.surfaceFn();
+    return this.groundFn();
   }
 
   /** register an area polygon (lon/lat outer ring) so that line/point features
@@ -79,11 +76,14 @@ export class HeightField {
     for (const [lon, lat] of outer) {
       minLon = Math.min(minLon, lon); maxLon = Math.max(maxLon, lon);
       minLat = Math.min(minLat, lat); maxLat = Math.max(maxLat, lat);
+      const key = vkey(lon, lat);
+      const prevMax = this.vertexMaxLayer.get(key) ?? 0;
+      if (layer > prevMax) this.vertexMaxLayer.set(key, layer);
     }
     this.areas.push({ outer, layer, bbox: [minLon, minLat, maxLon, maxLat] });
     const f = this.fillM(layer);
     for (const [lon, lat] of outer) {
-      const key = `${Math.round(lon * 1e7)}:${Math.round(lat * 1e7)}`;
+      const key = vkey(lon, lat);
       const z = f(lon, lat);
       const prev = this.vertexM.get(key);
       // on conflict (shared vertex of a ground road and a bridge), the
@@ -95,6 +95,39 @@ export class HeightField {
     }
   }
   private vertexLayer = new Map<string, number>();
+  /** quantized vertex -> highest layer of any feature touching it */
+  private vertexMaxLayer = new Map<string, number>();
+
+  /** mark the vertices of a higher-layer line (e.g. a bridge way): polygons
+   *  connected to them take the DOM surface height to stay continuous */
+  markHighLine(coords: [number, number][], layer: number): void {
+    for (const [lon, lat] of coords) {
+      const key = vkey(lon, lat);
+      const prevMax = this.vertexMaxLayer.get(key) ?? 0;
+      if (layer > prevMax) this.vertexMaxLayer.set(key, layer);
+    }
+  }
+
+  /** height policy for an area feature: layer>0 (bridge deck) takes the DOM
+   *  surface; a layer-0 polygon that shares a vertex with a higher-layer
+   *  feature is connected to it and also takes the DOM (stays continuous with
+   *  the deck); everything else stays on the DGM ground */
+  fillMFor(rings: [number, number][][], layer: number): (lon: number, lat: number) => number {
+    if (layer > 0) return this.surfaceFn();
+    for (const ring of rings)
+      for (const [lon, lat] of ring)
+        if ((this.vertexMaxLayer.get(vkey(lon, lat)) ?? 0) > 0) return this.surfaceFn();
+    return this.groundFn();
+  }
+
+  private surfaceFn(): (lon: number, lat: number) => number {
+    const dom = this.dom, dem = this.dem;
+    return (lon, lat) => (dom ? dom.sampleM(lon, lat) ?? (dem ? dem.sampleM(lon, lat) ?? 0 : 0) : dem ? dem.sampleM(lon, lat) ?? 0 : 0);
+  }
+  private groundFn(): (lon: number, lat: number) => number {
+    const dem = this.dem;
+    return (lon, lat) => (dem ? dem.sampleM(lon, lat) ?? 0 : 0);
+  }
 
   /** height for a line/point feature at lon/lat: reuse a registered area
    *  vertex when coincident, else the topmost containing area, else the DOM */
@@ -112,6 +145,10 @@ export class HeightField {
     if (best) return this.fillM(best.layer)(lon, lat);
     return this.surfaceM(lon, lat) ?? 0;
   }
+}
+
+function vkey(lon: number, lat: number): string {
+  return `${Math.round(lon * 1e7)}:${Math.round(lat * 1e7)}`;
 }
 
 function pointInRing(lon: number, lat: number, ring: [number, number][]): boolean {

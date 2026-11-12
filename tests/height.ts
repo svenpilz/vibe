@@ -81,6 +81,29 @@ ok(Math.abs(hf3.stickM(sLon, sLat) - surfS) < 0.5 && hf3.stickM(sLon, sLat) > gr
 ok(Math.abs(hf.stickM(13.19, 52.428) - (hf.surfaceM(13.19, 52.428) ?? 0)) < 1e-9,
   "outside all areas: falls back to DOM surface height");
 
+// connected polygons: a layer-0 area sharing a vertex with a layer>0 bridge
+// line takes the DOM surface, so it stays continuous with the deck
+const hf4 = new HeightField();
+hf4.dem = hf.dem;
+hf4.dom = hf.dom;
+hf4.markHighLine([[sLon, sLat], [sLon + 0.001, sLat]], 1);
+const connectedRing: [number, number][] = [
+  [sLon, sLat],
+  [sLon + 0.0004, sLat],
+  [sLon + 0.0004, sLat + 0.0004],
+  [sLon, sLat + 0.0004],
+];
+ok(Math.abs(hf4.fillMFor([connectedRing], 0)(sLon + 0.0002, sLat + 0.0002) - (hf4.surfaceM(sLon + 0.0002, sLat + 0.0002) ?? 0)) < 1e-9,
+  "layer-0 area connected to a bridge line takes DOM height (continuous)");
+const farRing: [number, number][] = [
+  [cLon - 0.0003, cLat - 0.0003],
+  [cLon + 0.0003, cLat - 0.0003],
+  [cLon + 0.0003, cLat + 0.0003],
+  [cLon - 0.0003, cLat + 0.0003],
+];
+ok(Math.abs(hf4.fillMFor([farRing], 0)(cLon, cLat) - (hf4.groundM(cLon, cLat) ?? 0)) < 1e-9,
+  "disconnected layer-0 area stays on DGM ground");
+
 if (failures > 0) {
   console.error(`${failures} height policy test(s) FAILED`);
   process.exit(1);

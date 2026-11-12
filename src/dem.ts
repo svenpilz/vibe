@@ -107,8 +107,22 @@ export class DemField {
   }
 
   /** bilinear ground height in meters at lon/lat (after inpainting);
-   *  null outside the DEM coverage */
+   *  null outside the DEM coverage. Memoized per quantized coordinate —
+   *  scene rebuilds sample the same vertices over and over */
+  private sampleCache = new Map<string, number | null>();
+  private static SAMPLE_CACHE_MAX = 400000;
+
   sampleM(lon: number, lat: number): number | null {
+    const key = `${Math.round(lon * 1e7)}:${Math.round(lat * 1e7)}`;
+    const hit = this.sampleCache.get(key);
+    if (hit !== undefined) return hit;
+    const v = this.sampleMUncached(lon, lat);
+    if (this.sampleCache.size >= DemField.SAMPLE_CACHE_MAX) this.sampleCache.clear();
+    this.sampleCache.set(key, v);
+    return v;
+  }
+
+  private sampleMUncached(lon: number, lat: number): number | null {
     const [E, N] = lonLatToUtm33(lon, lat);
     const fx = (E - this.h.originE) / this.h.cellM - 0.5;
     const fy = (N - this.h.originN) / this.h.cellM - 0.5;
@@ -136,6 +150,7 @@ export class DemField {
   /** mark grid cells covered by an occluder: a closed ring (polygon) or an
    *  open polyline buffered by widthM/2 (bridge deck). rings are [lon,lat]. */
   occludeRing(ring: [number, number][], widthM = 0): void {
+    this.sampleCache.clear();
     const pts = ring.map(([lon, lat]) => lonLatToUtm33(lon, lat));
     const h = this.h;
     let e0 = Infinity, n0 = Infinity, e1 = -Infinity, n1 = -Infinity;
@@ -168,6 +183,7 @@ export class DemField {
   /** Laplacian inpainting of occluded cells from visible neighbors, so ground
    *  hidden under higher-layer features gets an interpolated height */
   inpaint(maxIter = 600): void {
+    this.sampleCache.clear();
     const h = this.h;
     const occ: number[] = [];
     for (let i = 0; i < this.occluded.length; i++)

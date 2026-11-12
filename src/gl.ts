@@ -197,10 +197,27 @@ export function isTriangulationReady(): boolean {
 const MIN_ANGLE = 22;
 
 /** quality triangulation of a simple (hole-free) ring; returns vertices (ring
- *  vertices first, then Steiner points) and flat CCW triangle indices */
+ *  vertices first, then Steiner points) and flat CCW triangle indices.
+ *  Memoized per ring — scene rebuilds on zoom/LOD changes re-tessellate the
+ *  same polygons, and Triangle (WASM) is the expensive part */
+const triCache = new Map<string, PolygonMesh>();
+const TRI_CACHE_MAX = 100000;
+
 export function triangulatePolygon(ring: Pt[]): PolygonMesh {
   if (!triangleReady)
     throw new Error("triangulatePolygon called before initTriangulation() resolved");
+  let cacheKey = "";
+  for (let i = 0; i < ring.length; i++)
+    cacheKey += ring[i][0].toFixed(6) + "," + ring[i][1].toFixed(6) + ";";
+  const hit = triCache.get(cacheKey);
+  if (hit) return hit;
+  const mesh = triangulatePolygonUncached(ring);
+  if (triCache.size >= TRI_CACHE_MAX) triCache.clear();
+  triCache.set(cacheKey, mesh);
+  return mesh;
+}
+
+function triangulatePolygonUncached(ring: Pt[]): PolygonMesh {
   const pts: Pt[] = [];
   for (const p of ring) {
     const l = pts[pts.length - 1];
