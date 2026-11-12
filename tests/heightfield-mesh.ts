@@ -1,5 +1,5 @@
 import type { BakedData, BakedWay } from "../src3d/schema";
-import { triangulatePolygon, buildTerrainMesh, buildRoads, buildBuildings, buildGround, buildLaneMarkings, buildKerbs, buildFurniture, buildRails, buildRoutes, RouteTrack, RoadIndex, BuildingIndex, buildingPolygons, wayNodeLayers, smoothElevations, cleanDomTerrain, colorByHeight, RAMP_M, MAX_GRADE } from "../src3d/mesh";
+import { triangulatePolygon, buildTerrainMesh, bridgeCorridors, buildRoads, buildBuildings, buildGround, buildLaneMarkings, buildKerbs, buildFurniture, buildRails, buildRoutes, RouteTrack, RoadIndex, BuildingIndex, buildingPolygons, wayNodeLayers, smoothElevations, cleanDomTerrain, colorByHeight, RAMP_M, MAX_GRADE } from "../src3d/mesh";
 import { metersToLonLat, quantizeDeg } from "../src3d/geo";
 
 let failures = 0;
@@ -313,6 +313,20 @@ check("low DOM bump outside buildings kept", cleanDomTerrain(domLow, dgmG, []).h
 // small building (5 m) with no grid vertex strictly inside must still be masked via dilation
 const cleanedS = cleanDomTerrain(domG, dgmG, [[[97.5, -2.5], [102.5, -2.5], [102.5, 2.5], [97.5, 2.5]]]);
 check("sub-cell building masked by dilation", cleanedS.heightsDm[2] === 500, `${cleanedS.heightsDm[2]}`);
+// curvature-based filtering: a one-directional edge (row of high DOM vertices)
+// is kept, only circular blobs (high curvature in both directions) are removed
+const edgeDom = { n: 2, sizeM: 200, originX: 0, originY: 0, heightsDm: [500, 500, 800, 500, 500, 800, 500, 500, 800] }; // column i=2 is a roof edge
+const dgm2 = { n: 2, sizeM: 200, originX: 0, originY: 0, heightsDm: new Array(9).fill(500) };
+const cleanedE = cleanDomTerrain(edgeDom, dgm2, []);
+check("one-directional DOM edge is kept (not over-smoothed)", cleanedE.heightsDm[2] === 800 && cleanedE.heightsDm[8] === 800, `${cleanedE.heightsDm[2]},${cleanedE.heightsDm[8]}`);
+const blobDom = { n: 2, sizeM: 200, originX: 0, originY: 0, heightsDm: [500, 500, 500, 500, 800, 500, 500, 500, 500] }; // single spike = tree/sign
+const cleanedBlob = cleanDomTerrain(blobDom, dgm2, []);
+check("circular blob (tree/sign) still falls back to DGM", cleanedBlob.heightsDm[4] === 500, `${cleanedBlob.heightsDm[4]}`);
+// a one-directional DOM edge inside a bridge corridor is masked to DGM
+// (bridges render as 3D decks, not as bumps in the height field)
+const cleanedC = cleanDomTerrain(edgeDom, dgm2, [], 1.5, [[200, 0, 200, 200]]); // corridor along the i=2 edge (x=200)
+check("bridge corridor edge masked to DGM in height field", cleanedC.heightsDm[2] === 500 && cleanedC.heightsDm[8] === 500, `${cleanedC.heightsDm[2]},${cleanedC.heightsDm[8]}`);
+check("bridge corridors collected from layer>0 highway ways", bridgeCorridors(mkData([{ ptsM: [[0, 0], [50, 0]], tags: { highway: "primary", layer: "1", bridge: "yes" } }])).length === 1);
 
 if (failures > 0) {
   console.error(`${failures} test(s) failed`);

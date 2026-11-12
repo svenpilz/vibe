@@ -9,7 +9,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type { BakedData, TerrainGrid } from "./schema";
 import { sampleTerrainM, wayTags, formatViewHash, parseViewHash } from "./schema";
 import { lonLatToMeters } from "./geo";
-import { buildTerrainMesh, buildRoads, buildBuildings, buildGround, buildLaneMarkings, buildKerbs, buildFurniture, buildRails, buildRoutes, RouteTrack, RoadIndex, BuildingIndex, buildingPolygons, cleanDomTerrain, colorByHeight, type MeshData } from "./mesh";
+import { buildTerrainMesh, buildRoads, buildBuildings, buildGround, buildLaneMarkings, buildKerbs, buildFurniture, buildRails, buildRoutes, RouteTrack, RoadIndex, BuildingIndex, buildingPolygons, cleanDomTerrain, bridgeCorridors, colorByHeight, type MeshData } from "./mesh";
 
 const container = document.getElementById("scene") as HTMLElement;
 const hud = {
@@ -173,9 +173,12 @@ async function boot(): Promise<void> {
   let terrainOnly = false;
   let activeTerrain: TerrainGrid = data.terrain;
   let terrainMesh: THREE.Mesh | undefined;
+  // bridge deck corridors are masked out of the cleaned DOM so bridges show as
+  // 3D decks only, not as bumps in the height field
+  const corridors = bridgeCorridors(data);
   const setTerrainMode = (mode: number) => {
     terrainMode = mode;
-    const grid = !data.terrainDom || mode === 1 ? data.terrain : mode === 2 ? data.terrainDom : cleanDomTerrain(data.terrainDom, data.terrain, buildingPolygons(data));
+    const grid = !data.terrainDom || mode === 1 ? data.terrain : mode === 2 ? data.terrainDom : cleanDomTerrain(data.terrainDom, data.terrain, buildingPolygons(data), 1.5, corridors);
     activeTerrain = grid;
     const g = buildTerrainMesh(grid);
     if (terrainOnly) colorByHeight(g); // terrain-only mode: color-code the heights

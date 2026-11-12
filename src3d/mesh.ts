@@ -158,23 +158,50 @@ export function buildTerrainMesh(g: TerrainGrid): MeshData {
  * OSM building footprint — there fall back to the DGM1 (this removes trees,
  * traffic signs, cars, ... that OSM does not model as 3D objects).
  */
-export function cleanDomTerrain(dom: TerrainGrid, dgm: TerrainGrid, buildingPolys: Array<Array<[number, number]>>, thresholdM = 1.5): TerrainGrid {
+/** Bridge deck corridors (layer>0 highway ways) as segments [ax, ay, bx, by]. */
+export function bridgeCorridors(data: BakedData): Array<[number, number, number, number]> {
+  const out: Array<[number, number, number, number]> = [];
+  for (const way of data.ways) {
+    const tags = wayTags(data, way);
+    if (!tags["highway"] || osmLayer(tags) <= 0) continue;
+    const pts = way.r.map((r) => nodeXY(data, r));
+    for (let i = 0; i + 1 < pts.length; i++) out.push([pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]]);
+  }
+  return out;
+}
+
+export function cleanDomTerrain(dom: TerrainGrid, dgm: TerrainGrid, buildingPolys: Array<Array<[number, number]>>, thresholdM = 1.5, corridors: Array<[number, number, number, number]> = [], corridorHalfM = 8): TerrainGrid {
   const n = dom.n;
   const cell = dom.sizeM / n;
   const index = new BuildingIndex(buildingPolys);
+  const H = dom.heightsDm;
+  const at = (i: number, j: number): number => H[Math.max(0, Math.min(n, j)) * (n + 1) + Math.max(0, Math.min(n, i))];
   const heightsDm: number[] = [];
   for (let j = 0; j <= n; j++) {
     for (let i = 0; i <= n; i++) {
       const k = j * (n + 1) + i;
-      const d = dom.heightsDm[k];
+      const d = H[k];
       const g = dgm.heightsDm[k];
-      // Fall back to DGM bare earth wherever the DOM stands out (trees, signs,
-      // cars, building roofs) AND inside the dilated building mask (~0.75 cell,
-      // so sub-cell buildings are covered too) — the 3D building prisms provide
-      // the roofs, and a DOM roof left in the terrain renders as a green tent
-      // over the building.
-      const inBuilding = index.collides(dom.originX + i * cell, dom.originY + j * cell, cell * 0.75);
-      if (inBuilding || d - g > thresholdM * 10) {
+      // Viewing the height field as a manifold: trees/signs/cars are circular
+      // features — high curvature in BOTH directions (large |dxx| and |dyy|) —
+      // while real feature edges (roof edges, walls) curve in only one direction.
+      // Fall back to DGM bare earth only for high blob-like spikes and inside the
+      // dilated building mask (~0.75 cell, so sub-cell buildings are covered too;
+      // the 3D building prisms provide the roofs). One-directional edges are kept,
+      // so the cleaned surface is not over-smoothed.
+      const dxx = Math.abs(at(i - 1, j) + at(i + 1, j) - 2 * d);
+      const dyy = Math.abs(at(i, j - 1) + at(i, j + 1) - 2 * d);
+      const blob = Math.min(dxx, dyy);
+      const px = dom.originX + i * cell;
+      const py = dom.originY + j * cell;
+      const inBuilding = index.collides(px, py, cell * 0.75);
+      // bridge corridors are linear DOM edges that the curvature filter keeps,
+      // but the 3D bridge decks replace them — use DGM underneath so decks stay visible
+      let inCorridor = false;
+      for (const [ax, ay, bx, by] of corridors) {
+        if (distToSegment(px, py, ax, ay, bx, by) < corridorHalfM) { inCorridor = true; break; }
+      }
+      if (inBuilding || inCorridor || (d - g > thresholdM * 10 && blob > thresholdM * 10)) {
         heightsDm.push(g);
       } else {
         heightsDm.push(d);
