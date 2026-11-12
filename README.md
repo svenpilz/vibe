@@ -13,7 +13,9 @@ The 2D micromapping visualizer lives on `main` (https://svenpilz.github.io/vibe/
 
 | Input | Action |
 |---|---|
-| left-drag / wheel / right-drag | orbit / zoom / pan (right-drag pans, it does not rotate) |
+| left-drag | pan in the ground plane (never changes height; leaves chase cam) |
+| wheel / middle-drag | zoom towards the mouse cursor |
+| right-drag | orbit around the screen center (the current target) |
 | `W A S D` or arrow keys | drive the car (accelerate / steer / brake-reverse) |
 | `C` | toggle chase cam (camera follows the car) |
 | `V` | first-person driver view (camera aligned with the car's driving direction) |

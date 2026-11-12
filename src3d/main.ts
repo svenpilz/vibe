@@ -36,8 +36,9 @@ const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerH
 camera.position.set(1600, 1100, 1600);
 
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+controls.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
 controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+controls.zoomToCursor = true; // wheel / middle-drag zoom towards the mouse position
 controls.screenSpacePanning = false; // pan moves the target in the horizontal plane only, never changes its height
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
@@ -232,9 +233,9 @@ async function boot(): Promise<void> {
     if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(e.code)) e.preventDefault();
   });
   window.addEventListener("keyup", (e) => keys.delete(e.code));
-  // right-drag pans (ground plane only, screenSpacePanning=false); leave chase cam so the pan is visible
+  // left-drag pans (ground plane only, screenSpacePanning=false); leave chase cam so the pan is visible
   renderer.domElement.addEventListener("pointerdown", (e) => {
-    if (e.button === 2) follow = false;
+    if (e.button === 0) follow = false;
   });
 
   // buses and S-Bahn trains driving their OSM route relations
