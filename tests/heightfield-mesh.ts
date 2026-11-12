@@ -42,7 +42,7 @@ check("concave polygon area preserved", Math.abs(triAreaSum(concave, ccTris) - p
 check("degenerate -> empty", triangulatePolygon([[0, 0], [1, 1]]).length === 0);
 
 /** synthetic flat dataset: terrain 50 m everywhere, nodes placed via meters */
-function mkData(ways: { ptsM: Array<[number, number]>; tags: Record<string, string> }[], points: { x: number; y: number; tags: Record<string, string> }[] = [], routes: { ptsM: Array<[number, number]>; tags: Record<string, string> }[] = []): BakedData {
+function mkData(ways: { ptsM: Array<[number, number]>; tags: Record<string, string>; eleM?: number[] }[], points: { x: number; y: number; tags: Record<string, string> }[] = [], routes: { ptsM: Array<[number, number]>; tags: Record<string, string> }[] = []): BakedData {
   const keys: string[] = [];
   const values: string[] = [];
   const keyIdx = new Map<string, number>();
@@ -82,7 +82,9 @@ function mkData(ways: { ptsM: Array<[number, number]>; tags: Record<string, stri
   const bakedWays: BakedWay[] = ways.map((w) => {
     const t: number[] = [];
     for (const [k, v] of Object.entries(w.tags)) t.push(intern(keys, keyIdx, k), intern(values, valIdx, v));
-    return { r: w.ptsM.map(([x, y]) => refOf(x, y)), t };
+    const way: BakedWay = { r: w.ptsM.map(([x, y]) => refOf(x, y)), t };
+    if (w.eleM) way.ele = w.eleM;
+    return way;
   });
   const n = 4;
   const heightsDm = new Array((n + 1) * (n + 1)).fill(500);
@@ -177,6 +179,11 @@ const wl = wayNodeLayers(
   new Map([[3, 1]]),
   [[0, 0], [50, 0], [100, 0], [200, 0]],
 );
+// ele=* on a road node pins that point's elevation (per-point, not per-road)
+const eleData = mkData([{ ptsM: [[0, 0], [100, 0], [200, 0]], tags: { highway: "residential" }, eleM: [-1, 47.5, -1] }]);
+const eleSegs = buildRoads(eleData).segments;
+const midSeg = eleSegs.find((s) => Math.abs(s.ax - 100) < 1 || Math.abs(s.bx - 100) < 1);
+check("ele tag pins node elevation (47.5 + lift)", midSeg !== undefined && Math.abs(midSeg.elevA - 47.62) < 0.15 || (midSeg !== undefined && Math.abs(midSeg.elevB - 47.62) < 0.15), JSON.stringify(midSeg && { a: midSeg.elevA, b: midSeg.elevB }));
 check("wayNodeLayers end node at layer 1", wl[3] === 1);
 check("wayNodeLayers mid at layer 0 beyond ramp", wl[0] === 0 && wl[1] === 0, JSON.stringify(wl));
 check("RAMP_M is 60 m", RAMP_M === 60);

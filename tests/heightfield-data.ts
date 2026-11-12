@@ -89,6 +89,11 @@ for (const pt of data.points) {
 check("bus/train route relations present", routeCount > 5 && trainRoutes > 0, `routes=${routeCount} trains=${trainRoutes}`);
 check("railway ways present (S-Bahn)", railWays > 30, `${railWays}`);
 check("bus stops present", busStops > 30, `${busStops}`);
+{
+  let eleWays = 0, eleNodes = 0;
+  for (const w of data.ways) if (w.ele) { eleWays++; eleNodes += w.ele.filter((e) => e >= 0).length; }
+  check("road node ele=* tags baked (surveyed point heights)", eleWays > 100 && eleNodes > 200, `ways=${eleWays} nodes=${eleNodes}`);
+}
 
 if (failures > 0) {
   console.error(`${failures} test(s) failed`);

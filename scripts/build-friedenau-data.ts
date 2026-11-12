@@ -75,6 +75,8 @@ async function parsePbf(): Promise<OSMData> {
 interface KeptWay {
   refs: number[];
   tags: Record<string, string>;
+  /** per-ref OSM ele=* (m a.s.l.) for highway ways; -1 = no tag */
+  ele?: number[];
 }
 
 interface KeptNode {
@@ -210,7 +212,17 @@ function extractWays(data: OSMData): KeptWay[] {
     if (!inside) continue;
     const tags: Record<string, string> = {};
     for (const k of keys) if (TAG_KEYS.has(k)) tags[k] = way.tags[k];
-    kept.push({ refs: way.refs, tags });
+    const keptWay: KeptWay = { refs: way.refs, tags };
+    // keep surveyed node heights (ele=*) on highway ways — per point, not per road
+    if (tags["highway"]) {
+      const ele = way.refs.map((ref) => {
+        const nt = data.nodeTags.get(ref);
+        const e = nt ? parseFloat(nt["ele"] ?? "") : NaN;
+        return Number.isFinite(e) ? e : -1;
+      });
+      if (ele.some((e) => e >= 0)) keptWay.ele = ele;
+    }
+    kept.push(keptWay);
   }
   console.log(`kept ${kept.length} ways within ${RADIUS_M}m + margin`);
   return kept;
@@ -441,9 +453,13 @@ function buildJson(data: OSMData, kept: KeptWay[], keptNodes: KeptNode[], routes
   }
   for (const w of kept) {
     const r: number[] = [];
-    for (const ref of w.refs) {
-      const li = localRef(ref);
-      if (li >= 0) r.push(li);
+    const ele: number[] = [];
+    for (let k = 0; k < w.refs.length; k++) {
+      const li = localRef(w.refs[k]);
+      if (li >= 0) {
+        r.push(li);
+        if (w.ele) ele.push(Math.round(w.ele[k] * 10) / 10);
+      }
     }
     if (r.length < 2) {
       dropped++;
@@ -453,7 +469,9 @@ function buildJson(data: OSMData, kept: KeptWay[], keptNodes: KeptNode[], routes
     for (const [k, v] of Object.entries(w.tags)) {
       t.push(intern(keys, keyIdx, k), intern(values, valIdx, v));
     }
-    ways.push({ r, t });
+    const way: BakedWay = { r, t };
+    if (w.ele && ele.some((e) => e >= 0)) way.ele = ele;
+    ways.push(way);
   }
   console.log(`nodes=${nodes.length / 2} ways=${ways.length} dropped=${dropped} keys=${keys.length} values=${values.length}`);
 

@@ -48,6 +48,8 @@ export interface BakedWay {
   r: number[];
   /** flat tag pairs: [keyIdx, valueIdx, keyIdx, valueIdx, ...] */
   t: number[];
+  /** optional per-node OSM ele=* (meters a.s.l.), aligned with r; -1 = no tag */
+  ele?: number[];
 }
 
 export function getTag(data: BakedData, way: BakedWay, key: string): string | undefined {

@@ -247,15 +247,17 @@ function nodeXY(data: BakedData, localIdx: number): [number, number] {
  * the rendered surface precisely instead of dipping below it mid-segment.
  * If vals (one per input point) are given, they are linearly interpolated.
  */
-export function subdivideOnTerrainGrid(g: TerrainGrid, pts: Array<[number, number]>, vals?: number[]): { pts: Array<[number, number]>; vals: number[] } {
+export function subdivideOnTerrainGrid(g: TerrainGrid, pts: Array<[number, number]>, vals?: number[], vals2?: number[]): { pts: Array<[number, number]>; vals: number[]; vals2: number[] } {
   const cell = g.sizeM / g.n;
   const outPts: Array<[number, number]> = [];
   const outVals: number[] = [];
-  const push = (x: number, y: number, v: number): void => {
+  const outVals2: number[] = [];
+  const push = (x: number, y: number, v: number, v2: number): void => {
     const last = outPts[outPts.length - 1];
     if (last && Math.hypot(x - last[0], y - last[1]) < 1e-9) return;
     outPts.push([x, y]);
     outVals.push(v);
+    outVals2.push(v2);
   };
   for (let i = 0; i + 1 < pts.length; i++) {
     const [ax, ay] = pts[i];
@@ -293,10 +295,13 @@ export function subdivideOnTerrainGrid(g: TerrainGrid, pts: Array<[number, numbe
     }
     ts.sort((a, b) => a - b);
     for (const t of ts) {
-      push(ax + dx * t, ay + dy * t, vals ? vals[i] + (vals[i + 1] - vals[i]) * t : 0);
+      // vals2 uses -1 as "no value" sentinel: endpoints keep their own value,
+      // interior points interpolate only between two real values
+      const v2 = !vals2 ? -1 : t <= 0 ? vals2[i] : t >= 1 ? vals2[i + 1] : vals2[i] < 0 || vals2[i + 1] < 0 ? -1 : vals2[i] + (vals2[i + 1] - vals2[i]) * t;
+      push(ax + dx * t, ay + dy * t, vals ? vals[i] + (vals[i + 1] - vals[i]) * t : 0, v2);
     }
   }
-  return { pts: outPts, vals: outVals };
+  return { pts: outPts, vals: outVals, vals2: outVals2 };
 }
 
 export interface RoadBuild {
@@ -329,18 +334,23 @@ export function buildRoads(data: BakedData): RoadBuild {
     const col = surfaceColor(tags);
     const basePts = way.r.map((r) => nodeXY(data, r));
     const baseFactors = wayNodeLayers(way, layer, maxLayer, basePts);
+    // per-node OSM ele=* (surveyed point heights) where present, else -1
+    const baseEle = way.r.map((_, i) => way.ele?.[i] ?? -1);
     // subdivide at terrain grid lines/diagonals so the ribbon follows the
     // rendered terrain surface exactly along its whole length
-    const sub = subdivideOnTerrainGrid(data.terrain, basePts, baseFactors);
+    const sub = subdivideOnTerrainGrid(data.terrain, basePts, baseFactors, baseEle);
     const pts = sub.pts;
     const factors = sub.vals;
+    const eles = sub.vals2;
     // +0.12 m so road decks render above the landuse ground polygons (+0.08);
     // footways/paths/sidewalks get another +0.12 m kerb lift
     const isFootway = hw === "footway" || hw === "path" || hw === "steps" || hw === "pedestrian" || hw === "cycleway";
     const lift = 0.12 + (isFootway ? 0.12 : 0);
-    const rawElevs = pts.map(([x, y], i) => sampleTerrainM(data.terrain, x, y) + factors[i] * LAYER_H + lift);
+    // a node with an ele tag pins that point's height (ele is per-point, not per-road)
+    const rawElevs = pts.map(([x, y], i) => (eles[i] >= 0 ? eles[i] : sampleTerrainM(data.terrain, x, y)) + factors[i] * LAYER_H + lift);
     // grade smoothing may cut a spike, but never let a road dip below the terrain
-    const elevs = smoothElevations(rawElevs, pts).map((e, i) => Math.max(e, sampleTerrainM(data.terrain, pts[i][0], pts[i][1]) + 0.05));
+    // (or below a pinned ele=* point height)
+    const elevs = smoothElevations(rawElevs, pts).map((e, i) => Math.max(e, (eles[i] >= 0 ? eles[i] : sampleTerrainM(data.terrain, pts[i][0], pts[i][1])) + 0.05));
 
     for (let i = 0; i + 1 < pts.length; i++) {
       const [ax, ay] = pts[i];
