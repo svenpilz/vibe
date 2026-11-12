@@ -139,9 +139,13 @@ export function cleanDomTerrain(dom: TerrainGrid, dgm: TerrainGrid, buildingPoly
       const k = j * (n + 1) + i;
       const d = dom.heightsDm[k];
       const g = dgm.heightsDm[k];
-      // dilate the building mask by ~0.75 cell so buildings smaller than one
-      // grid cell still get DGM ground (otherwise the DOM roof buries them)
-      if (d - g > thresholdM * 10 && !index.collides(dom.originX + i * cell, dom.originY + j * cell, cell * 0.75)) {
+      // Fall back to DGM bare earth wherever the DOM stands out (trees, signs,
+      // cars, building roofs) AND inside the dilated building mask (~0.75 cell,
+      // so sub-cell buildings are covered too) — the 3D building prisms provide
+      // the roofs, and a DOM roof left in the terrain renders as a green tent
+      // over the building.
+      const inBuilding = index.collides(dom.originX + i * cell, dom.originY + j * cell, cell * 0.75);
+      if (inBuilding || d - g > thresholdM * 10) {
         heightsDm.push(g);
       } else {
         heightsDm.push(d);

@@ -254,8 +254,10 @@ const dgmG = { n: 1, sizeM: 100, originX: 0, originY: 0, heightsDm: [500, 500, 5
 const cleaned = cleanDomTerrain(domG, dgmG, []);
 check("tree spike removed (falls back to DGM)", cleaned.heightsDm[2] === 500, `${cleaned.heightsDm[2]}`);
 check("flat area keeps DOM", cleaned.heightsDm[0] === 500);
-const cleanedB = cleanDomTerrain(domG, dgmG, [[[90, -10], [110, -10], [110, 10], [90, 10]]]);
-check("building footprint also falls back to DGM (3D building drawn there)", cleanedB.heightsDm[2] === 500);
+const cleanedB = cleanDomTerrain(domG, dgmG, [[[-20, 80], [20, 80], [20, 120], [-20, 120]]]); // contains the (0,100) spike vertex
+check("building footprint also falls back to DGM (3D building drawn there)", cleanedB.heightsDm[2] === 500, `${cleanedB.heightsDm[2]}`);
+const domLow = { n: 1, sizeM: 100, originX: 0, originY: 0, heightsDm: [500, 510, 500, 500] }; // 1 m bump: below threshold
+check("low DOM bump outside buildings kept", cleanDomTerrain(domLow, dgmG, []).heightsDm[1] === 510);
 // small building (5 m) with no grid vertex strictly inside must still be masked via dilation
 const cleanedS = cleanDomTerrain(domG, dgmG, [[[97.5, -2.5], [102.5, -2.5], [102.5, 2.5], [97.5, 2.5]]]);
 check("sub-cell building masked by dilation", cleanedS.heightsDm[2] === 500, `${cleanedS.heightsDm[2]}`);
