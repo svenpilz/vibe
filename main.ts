@@ -445,10 +445,10 @@ function isBridge(f: { bridge?: string }): boolean {
  *  or layer>0) and polygons CONNECTED to a higher layer take the DOM surface
  *  (stay continuous with the deck); a layer-0 area:highway passing UNDER a
  *  bridge shares no vertex with it and stays on the DGM ground */
-function fillZAt(f: { layer?: number; outer: Q[][][]; bridge?: string }): ((p: Pt) => number) | undefined {
+function fillZAt(f: { layer?: number; outer: Q[][][]; bridge?: string }, connected = true): ((p: Pt) => number) | undefined {
   if (!hf || !hf.ready) return undefined;
   const ringsLL = f.outer.map((ring) => ring.map(([x, y]) => [x / Q, y / Q] as [number, number]));
-  const fm = hf.fillMFor(ringsLL, f.layer ?? 0, isBridge(f));
+  const fm = hf.fillMFor(ringsLL, f.layer ?? 0, isBridge(f), connected);
   return (p: Pt) => fm(xToLon(p[0]), yToLat(p[1])) * pxPerMeter();
 }
 
@@ -587,9 +587,11 @@ function buildGeometry() {
         if (!onLayer(lu)) continue;
         const outer = lu.outer.map(ringPts),
           holes = lu.holes.map(ringPts);
-        g.fillPolygon(outer, holes, { color: fill }, 0, fillZAt(lu));
-        for (const ring of lu.outer) g.stroke(closedRingPts(ring), seamW, { color: fill, zAt: fillZAt(lu) });
-        for (const ring of lu.holes) g.stroke(closedRingPts(ring), seamW, { color: fill, zAt: fillZAt(lu) });
+        // landuse is exempt from the connected-to-higher-layer rule: it
+        // always stays on the DGM ground even where it touches a bridge
+        g.fillPolygon(outer, holes, { color: fill }, 0, fillZAt(lu, false));
+        for (const ring of lu.outer) g.stroke(closedRingPts(ring), seamW, { color: fill, zAt: fillZAt(lu, false) });
+        for (const ring of lu.holes) g.stroke(closedRingPts(ring), seamW, { color: fill, zAt: fillZAt(lu, false) });
       }
     }
 

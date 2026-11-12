@@ -47,7 +47,8 @@ status bar shows the current zoom level and the deployed git commit.
 > own vertices where they coincide (shared OSM nodes), otherwise the topmost containing
 > area — so a kerb on a ground road stays on the ground even when a bridge crosses above.
 > Polygons that share a vertex with a higher-layer feature (road continuing onto a bridge)
-> also take the DOM height, so they stay continuous with the deck. Bridges are identified
+> also take the DOM height, so they stay continuous with the deck — except `landuse`, which
+> always stays on the DGM ground. Bridges are identified
 > **only** by `man_made=bridge` (OSM wiki) — `bridge=*` alone does not mark a bridge.
 > `man_made=bridge` closed ways and multipolygons are extracted as deck areas and rendered
 > with a visible edge. A bridge polygon

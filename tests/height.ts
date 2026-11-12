@@ -118,6 +118,10 @@ const farRing: [number, number][] = [
 ];
 ok(Math.abs(hf4.fillMFor([farRing], 0)(cLon, cLat) - (hf4.groundM(cLon, cLat) ?? 0)) < 1e-9,
   "disconnected layer-0 area stays on DGM ground");
+// landuse exemption: connected=false skips the vertex-sharing rule, so even a
+// polygon sharing a vertex with the bridge line stays on the DGM ground
+ok(Math.abs(hf4.fillMFor([connectedRing], 0, false, false)(sLon + 0.0002, sLat + 0.0002) - (hf4.groundM(sLon + 0.0002, sLat + 0.0002) ?? 0)) < 1e-9,
+  "landuse (connected=false) sharing a bridge vertex still stays on DGM ground");
 
 // man_made=bridge deck without layer: the deck still takes the DOM surface
 // (OSM wiki: man_made=bridge marks the structure) and occludes the ground below

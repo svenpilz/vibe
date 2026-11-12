@@ -120,12 +120,15 @@ export class HeightField {
   /** height policy for an area feature: layer>0 (bridge deck) takes the DOM
    *  surface; a layer-0 polygon that shares a vertex with a higher-layer
    *  feature is connected to it and also takes the DOM (stays continuous with
-   *  the deck); everything else stays on the DGM ground */
-  fillMFor(rings: [number, number][][], layer: number, bridge = false): (lon: number, lat: number) => number {
+   *  the deck); everything else stays on the DGM ground. With
+   *  connected=false the vertex-sharing rule is skipped (landuse always
+   *  stays on the ground, even where it touches a bridge) */
+  fillMFor(rings: [number, number][][], layer: number, bridge = false, connected = true): (lon: number, lat: number) => number {
     if (effLayer(layer, bridge) > 0) return this.surfaceFn();
-    for (const ring of rings)
-      for (const [lon, lat] of ring)
-        if ((this.vertexMaxLayer.get(vkey(lon, lat)) ?? 0) > 0) return this.surfaceFn();
+    if (connected)
+      for (const ring of rings)
+        for (const [lon, lat] of ring)
+          if ((this.vertexMaxLayer.get(vkey(lon, lat)) ?? 0) > 0) return this.surfaceFn();
     return this.groundFn();
   }
 
