@@ -38,7 +38,7 @@ follows the bare-earth DGM1 terrain with extra drag. Buildings block the car.
 
 | What | Source | How |
 |---|---|---|
-| Terrain (absolute elevation) | **Berlin ATKIS DGM1 + DOM1** — official 1 m LiDAR models (DHHN2016, UTM33N xyz tiles via `gdi.berlin.de/data/dgm1/atom` and `/data/dom/atom`, DL-DE-Zero) | baked into 440×440 grids (10 m cells). Default view uses the **DOM1 surface cleaned by the DGM1** (objects > 1.5 m outside building footprints — trees, signs, cars — are filtered out); `H` switches to raw DGM1 or raw DOM1. SRTM only as last-resort pipeline fallback |
+| Terrain (absolute elevation) | **Berlin ATKIS DGM1 + DOM1** — official 1 m LiDAR models (DHHN2016, UTM33N xyz tiles via `gdi.berlin.de/data/dgm1/atom` and `/data/dom/atom`, DL-DE-Zero) | baked into 880×880 grids (5 m cells, bilinearly sampled from the original 1 m lattice — no downsampling loss beyond the grid step). Default view uses the **DOM1 surface cleaned by the DGM1** (objects > 1.5 m outside building footprints — trees, signs, cars — are filtered out); `H` switches to raw DGM1 or raw DOM1. SRTM only as last-resort pipeline fallback |
 | Building heights | OSM `height=*` (216 buildings), else `building:levels`/`roof:levels` × 3 m + roof allowance (8 272 buildings), else 10 m default | `buildingHeightM` in `src3d/schema.ts` |
 | Road vertical stacking | OSM `layer=*` (+ `bridge=yes`/`tunnel=yes` implying ±1) | deck = terrain + layer × 5 m with 60 m ramps where a road meets a higher layer (connecting roads visibly climb to bridge decks); decks get parapets + piers and render 0.12 m above landuse ground so terrain never covers roads |
 

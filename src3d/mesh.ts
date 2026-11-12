@@ -178,7 +178,7 @@ export function treePoints(data: BakedData): Array<[number, number]> {
   return out;
 }
 
-export function cleanDomTerrain(dom: TerrainGrid, dgm: TerrainGrid, buildingPolys: Array<Array<[number, number]>>, thresholdM = 1.5, corridors: Array<[number, number, number, number]> = [], corridorHalfM = 8, trees: Array<[number, number]> = [], treeRadiusM = 4): TerrainGrid {
+export function cleanDomTerrain(dom: TerrainGrid, dgm: TerrainGrid, buildingPolys: Array<Array<[number, number]>>, thresholdM = 1.5, corridors: Array<[number, number, number, number]> = [], corridorHalfM = 8, trees: Array<[number, number]> = [], treeRadiusM = 6): TerrainGrid {
   const n = dom.n;
   const cell = dom.sizeM / n;
   const index = new BuildingIndex(buildingPolys);
@@ -244,9 +244,13 @@ export function cleanDomTerrain(dom: TerrainGrid, dgm: TerrainGrid, buildingPoly
       }
       if (inBuilding || inCorridor) {
         heightsDm.push(g);
-      } else if (isTree || nearTree(px, py)) {
-        // tree/sign identified in the DOM (or mapped): smooth with the 5x5
-        // median kernel; if the crown is still spiky, fall back to DGM
+      } else if (nearTree(px, py)) {
+        // mapped tree: hard-mask to bare earth (the OSM tree locations are the
+        // training labels for the filter)
+        heightsDm.push(g);
+      } else if (isTree) {
+        // tree/sign detected in the DOM itself: smooth with the 5x5 median
+        // kernel; if the crown is still spiky, fall back to DGM
         const m = med[k];
         heightsDm.push(Math.abs(m - g) > thresholdM * 10 ? g : m);
       } else {

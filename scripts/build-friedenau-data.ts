@@ -44,11 +44,11 @@ const TAG_KEYS = new Set([
 const NODE_KEYS = new Set(["highway", "natural", "barrier", "amenity", "public_transport"]);
 const NODE_VALUES = new Set(["street_lamp", "traffic_signals", "tree", "bollard", "bench", "waste_basket", "bus_stop", "bus_station", "stop_position", "platform"]);
 
-const GRID_N = 440;
+const GRID_N = 880; // 5 m cells over 4.4 km; the source DGM1/DOM1 are 1 m
 const GRID_SIZE_M = 4400;
 const DEM_Z = 13;
-/** DGM1 tiles are 2x2 km in UTM33N; decimate the 1 m grid to this step (m) */
-const DGM1_STEP = 10;
+/** DGM1/DOM1 tiles are 2x2 km in UTM33N on a 1 m lattice */
+const DGM1_STEP = 1;
 const DGM1_FEED = "https://gdi.berlin.de/data/dgm1/atom";
 const DOM_FEED = "https://gdi.berlin.de/data/dom/atom";
 
@@ -324,8 +324,12 @@ async function buildTerrainFromFeed(feed: string, prefix: string, dirName: strin
     }
   }
   console.log(`fetching ${tiles.length} DGM1 tiles`);
-  let latticeE0 = Infinity, latticeN0 = Infinity, maxE = -Infinity, maxN = -Infinity;
-  const points: Array<[number, number, number]> = [];
+  const latticeE0 = Math.min(...tiles.map(([te]) => te));
+  const latticeN0 = Math.min(...tiles.map(([, tn]) => tn));
+  const cols = Math.round((Math.max(...tiles.map(([te]) => te)) + 2000 - latticeE0) / DGM1_STEP) + 1;
+  const rows = Math.round((Math.max(...tiles.map(([, tn]) => tn)) + 2000 - latticeN0) / DGM1_STEP) + 1;
+  const lattice = new Float32Array(cols * rows).fill(NaN);
+  let count = 0;
   const dir = join(CACHE, dirName);
   mkdirSync(dir, { recursive: true });
   for (const [te, tn] of tiles) {
@@ -349,21 +353,11 @@ async function buildTerrainFromFeed(feed: string, prefix: string, dirName: strin
       const N = parseFloat(line.slice(sp + 1, sp2));
       const h = parseFloat(line.slice(sp2 + 1));
       if (!Number.isFinite(E) || !Number.isFinite(N) || !Number.isFinite(h)) continue;
-      if (Math.round(E - te) % DGM1_STEP !== 0 || Math.round(N - tn) % DGM1_STEP !== 0) continue;
-      points.push([E, N, h]);
-      if (E < latticeE0) latticeE0 = E;
-      if (N < latticeN0) latticeN0 = N;
-      if (E > maxE) maxE = E;
-      if (N > maxN) maxN = N;
+      lattice[Math.round((N - latticeN0) / DGM1_STEP) * cols + Math.round((E - latticeE0) / DGM1_STEP)] = h;
+      count++;
     }
   }
-  if (points.length < 1000) throw new Error(`too few ${prefix} points`);
-  const cols = Math.round((maxE - latticeE0) / DGM1_STEP) + 1;
-  const rows = Math.round((maxN - latticeN0) / DGM1_STEP) + 1;
-  const lattice = new Float32Array(cols * rows).fill(NaN);
-  for (const [E, N, h] of points) {
-    lattice[Math.round((N - latticeN0) / DGM1_STEP) * cols + Math.round((E - latticeE0) / DGM1_STEP)] = h;
-  }
+  if (count < 1000) throw new Error(`too few ${prefix} points`);
   const sample = (E: number, N: number): number => {
     const fx = (E - latticeE0) / DGM1_STEP;
     const fy = (N - latticeN0) / DGM1_STEP;

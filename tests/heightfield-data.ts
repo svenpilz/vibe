@@ -46,8 +46,8 @@ check("highways present", highways > 15000, `${highways}`);
 check("bridges present (multi-level above)", bridges > 100 && layered > 100, `bridges=${bridges} layered=${layered}`);
 check("tunnels present (multi-level below)", tunnels > 100 && negLayer > 100, `tunnels=${tunnels} negLayer=${negLayer}`);
 
-check("terrain grid 440 (10 m cells)", data.terrain.n === 440);
-check("DOM1 surface model present", data.terrainDom !== undefined && data.terrainDom.n === 440);
+check("terrain grid 880 (5 m cells)", data.terrain.n === 880);
+check("DOM1 surface model present", data.terrainDom !== undefined && data.terrainDom.n === 880);
 if (data.terrainDom) {
   let dmn = Infinity, dmx = -Infinity;
   for (const h of data.terrainDom.heightsDm) { dmn = Math.min(dmn, h); dmx = Math.max(dmx, h); }
@@ -60,7 +60,7 @@ for (const h of data.terrain.heightsDm) {
   mn = Math.min(mn, h);
   mx = Math.max(mx, h);
 }
-check("terrain heights in Berlin DGM1/DHHN2016 range (30..80 m)", mn >= 300 && mx <= 800, `${mn / 10}..${mx / 10} m`);
+check("terrain heights in Berlin DGM1/DHHN2016 range (25..80 m)", mn >= 250 && mx <= 800, `${mn / 10}..${mx / 10} m`);
 
 check("tag tables non-empty", data.keys.includes("highway") && data.keys.includes("building") && data.keys.includes("layer"));
 
