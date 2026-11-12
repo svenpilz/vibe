@@ -121,7 +121,7 @@ export interface RoadSegment {
   wayIdx: number;
 }
 
-/** node id -> max incident road layer (ramps blend up to the highest deck) */
+/** node id -> max incident road layer */
 function nodeMaxLayer(data: BakedData, roadWays: { way: BakedWay; idx: number }[]): Map<number, number> {
   const map = new Map<number, number>();
   for (const { way } of roadWays) {
@@ -132,6 +132,33 @@ function nodeMaxLayer(data: BakedData, roadWays: { way: BakedWay; idx: number }[
     }
   }
   return map;
+}
+
+/** ramp length in meters over which a road climbs to a higher adjacent layer */
+export const RAMP_M = 60;
+
+/**
+ * Per-node elevation factor for one way: the way's own layer in the middle,
+ * blending up to the max incident layer within RAMP_M of a layer transition,
+ * so connecting roads visibly ramp up to bridge decks instead of tilting
+ * over their whole length (and stay continuous at shared nodes).
+ */
+export function wayNodeLayers(way: BakedWay, ownLayer: number, maxLayer: Map<number, number>, pts: Array<[number, number]>): number[] {
+  const n = way.r.length;
+  const factor = new Array<number>(n).fill(ownLayer);
+  const cum = new Array<number>(n).fill(0);
+  for (let i = 1; i < n; i++) cum[i] = cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+  for (let i = 0; i < n; i++) {
+    const m = maxLayer.get(way.r[i]) ?? 0;
+    if (m <= ownLayer) continue;
+    for (let j = 0; j < n; j++) {
+      const d = Math.abs(cum[j] - cum[i]);
+      if (d > RAMP_M) continue;
+      const f = m - (d / RAMP_M) * (m - ownLayer);
+      if (f > factor[j]) factor[j] = f;
+    }
+  }
+  return factor;
 }
 
 function nodeXY(data: BakedData, localIdx: number): [number, number] {
@@ -159,11 +186,6 @@ export function buildRoads(data: BakedData): RoadBuild {
   });
   const maxLayer = nodeMaxLayer(data, roadWays);
 
-  const nodeElev = (localIdx: number): number => {
-    const [x, y] = nodeXY(data, localIdx);
-    return sampleTerrainM(data.terrain, x, y) + (maxLayer.get(localIdx) ?? 0) * LAYER_H;
-  };
-
   for (const { way, idx } of roadWays) {
     const tags = wayTags(data, way);
     const hw = tags["highway"] ?? "";
@@ -174,7 +196,9 @@ export function buildRoads(data: BakedData): RoadBuild {
     const isBridge = layer > 0;
     const col = surfaceColor(tags);
     const pts = way.r.map((r) => nodeXY(data, r));
-    const elevs = way.r.map((r) => nodeElev(r));
+    const factors = wayNodeLayers(way, layer, maxLayer, pts);
+    // +0.12 m so road decks render above the landuse ground polygons (+0.06)
+    const elevs = pts.map(([x, y], i) => sampleTerrainM(data.terrain, x, y) + factors[i] * LAYER_H + 0.12);
 
     for (let i = 0; i + 1 < pts.length; i++) {
       const [ax, ay] = pts[i];
@@ -379,11 +403,18 @@ export class RoadIndex {
     });
   }
 
-  nearest(x: number, y: number, maxDist = 60): RoadQuery | undefined {
+  /**
+   * Nearest segment to (x, y). When refElev is given (the car's current deck
+   * height), segments on other levels — e.g. a bridge passing overhead — get
+   * an elevation penalty, so the car stays on the road it is driving on and
+   * can pass under bridges.
+   */
+  nearest(x: number, y: number, maxDist = 60, refElev?: number): RoadQuery | undefined {
     const cx = Math.floor(x / this.cell);
     const cy = Math.floor(y / this.cell);
     const range = Math.ceil(maxDist / this.cell);
     let best: RoadQuery | undefined;
+    let bestScore = Infinity;
     for (let dx = -range; dx <= range; dx++) {
       for (let dy = -range; dy <= range; dy++) {
         const arr = this.grid.get((cx + dx) * 100000 + (cy + dy));
@@ -399,19 +430,96 @@ export class RoadIndex {
           const py = s.ay + aby * t;
           const dist = Math.hypot(x - px, y - py);
           if (dist > maxDist) continue;
-          if (!best || dist < best.dist) {
-            best = {
-              dist,
-              t,
-              elev: s.elevA + (s.elevB - s.elevA) * t,
-              halfW: s.halfW,
-              layer: s.layer,
-              seg: s,
-            };
+          const elev = s.elevA + (s.elevB - s.elevA) * t;
+          let score = dist;
+          if (refElev !== undefined) score += Math.max(0, Math.abs(elev - refElev) - 2.5) * 4;
+          if (score < bestScore) {
+            bestScore = score;
+            best = { dist, t, elev, halfW: s.halfW, layer: s.layer, seg: s };
           }
         }
       }
     }
     return best;
   }
+}
+
+function pointInPolygon(x: number, y: number, poly: Array<[number, number]>): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i];
+    const [xj, yj] = poly[j];
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+function distToSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  let t = len2 > 0 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (ax + dx * t), py - (ay + dy * t));
+}
+
+/** Spatial index of building footprints for car collision. */
+export class BuildingIndex {
+  private cell = 50;
+  private grid = new Map<number, Array<Array<[number, number]>>>();
+  constructor(polygons: Array<Array<[number, number]>>) {
+    polygons.forEach((poly) => {
+      let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+      for (const [x, y] of poly) {
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+      }
+      for (let cx = Math.floor(x0 / this.cell); cx <= Math.floor(x1 / this.cell); cx++) {
+        for (let cy = Math.floor(y0 / this.cell); cy <= Math.floor(y1 / this.cell); cy++) {
+          const key = cx * 100000 + cy;
+          let arr = this.grid.get(key);
+          if (!arr) {
+            arr = [];
+            this.grid.set(key, arr);
+          }
+          arr.push(poly);
+        }
+      }
+    });
+  }
+
+  /** true when a circle at (x, y) with radius margin touches any footprint */
+  collides(x: number, y: number, margin: number): boolean {
+    const cx = Math.floor(x / this.cell);
+    const cy = Math.floor(y / this.cell);
+    const range = Math.ceil((margin + this.cell) / this.cell);
+    for (let dx = -range; dx <= range; dx++) {
+      for (let dy = -range; dy <= range; dy++) {
+        const arr = this.grid.get((cx + dx) * 100000 + (cy + dy));
+        if (!arr) continue;
+        for (const poly of arr) {
+          if (pointInPolygon(x, y, poly)) return true;
+          for (let i = 0; i < poly.length; i++) {
+            const [ax, ay] = poly[i];
+            const [bx, by] = poly[(i + 1) % poly.length];
+            if (distToSegment(x, y, ax, ay, bx, by) < margin) return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+}
+
+/** Building footprint polygons in local meters, for the collision index. */
+export function buildingPolygons(data: BakedData): Array<Array<[number, number]>> {
+  const out: Array<Array<[number, number]>> = [];
+  for (const way of data.ways) {
+    if (!getTag(data, way, "building")) continue;
+    if (way.r.length < 4 || way.r[0] !== way.r[way.r.length - 1]) continue;
+    out.push(way.r.slice(0, -1).map((r) => nodeXY(data, r)));
+  }
+  return out;
 }

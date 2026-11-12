@@ -18,17 +18,18 @@ The 2D micromapping visualizer lives on `main` (https://svenpilz.github.io/vibe/
 | `C` | toggle chase cam (camera follows the car) |
 | `R` | reset the car to its spawn point |
 
-The car is constrained to the road network: it snaps to the nearest road segment and cannot
-drive past the road edge. Its height follows the road deck elevation, so on a `layer=1` bridge
-it drives 5 m above the road passing underneath.
+The car is constrained to the road network: it snaps to the nearest road segment (elevation-aware,
+so it stays on the level it is driving on and can pass **under bridges**) and cannot drive past
+the road edge or through buildings. Its height follows the road deck elevation, so on a `layer=1`
+bridge it drives 5 m above the road passing underneath.
 
 ## Real heights — three combined sources
 
 | What | Source | How |
 |---|---|---|
-| Terrain (absolute elevation) | SRTM via AWS `elevation-tiles-prod` terrarium tiles | baked into a 160×160 height grid (27.5 m cells) over the 4.4 km area; Berlin here is 33.7–66 m a.s.l. |
+| Terrain (absolute elevation) | **Berlin ATKIS DGM1** — official 1 m LiDAR bare-earth model (DHHN2016, UTM33N xyz tiles via `gdi.berlin.de/data/dgm1/atom`, DL-DE-Zero) | baked into a 220×220 height grid (20 m cells) over the 4.4 km area; 30.5–68 m a.s.l. Bare earth, so roads are never buried under the terrain (SRTM kept as fallback) |
 | Building heights | OSM `height=*` (216 buildings), else `building:levels`/`roof:levels` × 3 m + roof allowance (8 272 buildings), else 10 m default | `buildingHeightM` in `src3d/schema.ts` |
-| Road vertical stacking | OSM `layer=*` (+ `bridge=yes`/`tunnel=yes` implying ±1) | deck = terrain height at the node + max incident layer × 5 m; bridges get parapet walls and support piers down to the terrain, so the stacking is visible from above |
+| Road vertical stacking | OSM `layer=*` (+ `bridge=yes`/`tunnel=yes` implying ±1) | deck = terrain + layer × 5 m with 60 m ramps where a road meets a higher layer (connecting roads visibly climb to bridge decks); decks get parapets + piers and render 0.12 m above landuse ground so terrain never covers roads |
 
 Data is extracted from the **Geofabrik Berlin `.osm.pbf`** (100 MB, parsed with the repo's own
 PBF parser `src/osm-pbf.ts`) and baked into `public/data/friedenau-2km.json` (~9 MB, plus a
@@ -61,6 +62,12 @@ npm test         # all regression tests incl. the heightfield suites
   extruded buildings, ground polygons, road spatial index). No three.js import → unit-testable.
 - `src3d/main.ts` — three.js scene, OrbitControls, car physics + road constraint, HUD.
 - `tests/heightfield-*.ts` — unit tests for the above plus dataset integrity checks.
+
+## Screenshots (headless-rendered verification)
+
+| Overview — roads as gray strips on the terrain, extruded buildings | Under a bridge — elevated deck with piers over the lower road | Top-down city center |
+|---|---|---|
+| ![overview](examples/heightfield-overview.png) | ![under bridge](examples/heightfield-underbridge.png) | ![top-down](examples/heightfield-topdown.png) |
 
 Known POC limitations: building multipolygon relations (courtyards) are not assembled, roofs are
 flat, tunnels are occluded by the terrain surface when viewed from above.

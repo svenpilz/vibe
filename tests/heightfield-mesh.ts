@@ -1,5 +1,5 @@
 import type { BakedData, BakedWay } from "../src3d/schema";
-import { triangulatePolygon, buildTerrainMesh, buildRoads, buildBuildings, buildGround, RoadIndex } from "../src3d/mesh";
+import { triangulatePolygon, buildTerrainMesh, buildRoads, buildBuildings, buildGround, RoadIndex, BuildingIndex, buildingPolygons, wayNodeLayers, RAMP_M } from "../src3d/mesh";
 import { metersToLonLat, quantizeDeg } from "../src3d/geo";
 
 let failures = 0;
@@ -95,8 +95,8 @@ const data = mkData([
 ]);
 const roads = buildRoads(data);
 check("two road ways -> 2 segments", roads.segments.length === 2, `${roads.segments.length}`);
-check("ground road at terrain 50 m", Math.abs(roads.segments[0].elevA - 50) < 1e-6, `${roads.segments[0].elevA}`);
-check("bridge deck at 50+5=55 m", Math.abs(roads.segments[1].elevA - 55) < 1e-6, `${roads.segments[1].elevA}`);
+check("ground road at terrain 50 m", Math.abs(roads.segments[0].elevA - 50) < 0.2, `${roads.segments[0].elevA}`);
+check("bridge deck at 50+5=55 m", Math.abs(roads.segments[1].elevA - 55) < 0.2, `${roads.segments[1].elevA}`);
 check("residential half width 3.75", Math.abs(roads.segments[0].halfW - 3.75) < 1e-9);
 check("road mesh has geometry", roads.mesh.indices.length > 0);
 const bridgeVerts = roads.mesh.positions.length / 3;
@@ -114,15 +114,56 @@ const idx = new RoadIndex(roads.segments);
 const q = idx.nearest(50, 2, 60);
 check("nearest finds ground road", q !== undefined && Math.abs(q.dist - 2) < 1e-9 && q.layer === 0, JSON.stringify(q && { dist: q.dist, layer: q.layer }));
 const qb = idx.nearest(50, 52, 60);
-check("nearest finds bridge deck above", qb !== undefined && qb.layer === 1 && Math.abs(qb.elev - 55) < 1e-6);
+check("nearest finds bridge deck above", qb !== undefined && qb.layer === 1 && Math.abs(qb.elev - 55) < 0.2);
 const qm = idx.nearest(50, 0, 60);
-check("segment midpoint elevation interpolates", qm !== undefined && Math.abs(qm.elev - 50) < 1e-9);
+check("segment midpoint elevation interpolates", qm !== undefined && Math.abs(qm.elev - 50) < 0.2);
 check("far away -> undefined", idx.nearest(1000, 1000, 60) === undefined);
 
 const buildings = buildBuildings(data);
 const roofTop = Math.max(...buildings.positions.filter((_, i) => i % 3 === 1));
 check("building roof at 50+12=62 m", Math.abs(roofTop - 62) < 1e-6, `${roofTop}`);
 check("building mesh has geometry", buildings.indices.length > 0);
+
+// ramp: a layer-0 road whose end node is shared with a layer-1 bridge must
+// climb to deck height at that end, while staying at terrain mid-way
+const rampData = mkData([
+  { ptsM: [[0, 0], [100, 0], [200, 0]], tags: { highway: "motorway" } },
+  { ptsM: [[200, 0], [200, 80]], tags: { highway: "motorway", layer: "1", bridge: "yes" } },
+]);
+const rampRoads = buildRoads(rampData);
+const motorwaySegs = rampRoads.segments.filter((s) => s.wayIdx === 0);
+check("ramp: motorway starts at terrain", Math.abs(motorwaySegs[0].elevA - 50) < 0.2, `${motorwaySegs[0].elevA}`);
+check("ramp: motorway end reaches deck 55 m", Math.abs(motorwaySegs[motorwaySegs.length - 1].elevB - 55) < 0.2, `${motorwaySegs[motorwaySegs.length - 1].elevB}`);
+check("ramp: bridge deck flat at 55 m", rampRoads.segments.filter((s) => s.wayIdx === 1).every((s) => Math.abs(s.elevA - 55) < 0.2 && Math.abs(s.elevB - 55) < 0.2));
+
+// elevation-aware snapping: parallel ground road and bridge deck
+const parData = mkData([
+  { ptsM: [[0, 0], [100, 0]], tags: { highway: "residential" } },
+  { ptsM: [[0, 3], [100, 3]], tags: { highway: "primary", layer: "1", bridge: "yes" } },
+]);
+const parIdx = new RoadIndex(buildRoads(parData).segments);
+const qGround = parIdx.nearest(50, 1.5, 60, 50);
+const qBridge = parIdx.nearest(50, 1.5, 60, 55);
+check("snap with refElev=ground picks layer 0", qGround !== undefined && qGround.layer === 0 && Math.abs(qGround.elev - 50) < 0.2, JSON.stringify(qGround && { l: qGround.layer, e: qGround.elev }));
+check("snap with refElev=deck picks layer 1", qBridge !== undefined && qBridge.layer === 1 && Math.abs(qBridge.elev - 55) < 0.2, JSON.stringify(qBridge && { l: qBridge.layer, e: qBridge.elev }));
+
+// wayNodeLayers: ramp length respected
+const wl = wayNodeLayers(
+  { r: [0, 1, 2, 3], t: [] },
+  0,
+  new Map([[3, 1]]),
+  [[0, 0], [50, 0], [100, 0], [200, 0]],
+);
+check("wayNodeLayers end node at layer 1", wl[3] === 1);
+check("wayNodeLayers mid at layer 0 beyond ramp", wl[0] === 0 && wl[1] === 0, JSON.stringify(wl));
+check("RAMP_M is 60 m", RAMP_M === 60);
+
+// building collision index
+const bIdx = new BuildingIndex([[[0, 0], [10, 0], [10, 10], [0, 10]]]);
+check("collision inside footprint", bIdx.collides(5, 5, 1));
+check("collision within margin of edge", bIdx.collides(10.5, 5, 1));
+check("no collision outside", !bIdx.collides(20, 20, 1));
+check("buildingPolygons extracts closed building ways", buildingPolygons(data).length === 1);
 
 const ground = buildGround(mkData([
   { ptsM: [[-50, 100], [50, 100], [50, 150], [-50, 150], [-50, 100]], tags: { landuse: "grass" } },

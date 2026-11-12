@@ -1,4 +1,4 @@
-import { CENTER, RADIUS_M, LAYER_H, metersPerDegLat, metersPerDegLon, lonLatToMeters, metersToLonLat, quantizeDeg, dequantizeDeg } from "../src3d/geo";
+import { CENTER, RADIUS_M, LAYER_H, metersPerDegLat, metersPerDegLon, lonLatToMeters, metersToLonLat, quantizeDeg, dequantizeDeg, lonLatToUtm33 } from "../src3d/geo";
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -26,6 +26,9 @@ const [x2, y2] = lonLatToMeters(lon2, lat2);
 check("roundtrip 1000m east, 500m south", Math.abs(x2 - 1000) < 0.01 && Math.abs(y2 + 500) < 0.01, `${x2},${y2}`);
 
 check("quantize roundtrip", dequantizeDeg(quantizeDeg(13.341)) === 13.341);
+
+const [E, N] = lonLatToUtm33(13.341, 52.4784);
+check("UTM33N of S Friedenau ~ (387331, 5815543)", Math.abs(E - 387331) < 5 && Math.abs(N - 5815543) < 5, `${E},${N}`);
 
 if (failures > 0) {
   console.error(`${failures} test(s) failed`);

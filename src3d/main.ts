@@ -8,7 +8,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type { BakedData } from "./schema";
 import { sampleTerrainM } from "./schema";
-import { buildTerrainMesh, buildRoads, buildBuildings, buildGround, RoadIndex, type MeshData } from "./mesh";
+import { buildTerrainMesh, buildRoads, buildBuildings, buildGround, RoadIndex, BuildingIndex, buildingPolygons, type MeshData } from "./mesh";
 
 const container = document.getElementById("scene") as HTMLElement;
 const hud = {
@@ -120,6 +120,7 @@ async function boot(): Promise<void> {
   addMesh(roads.mesh, false);
   addMesh(buildBuildings(data), true);
   const index = new RoadIndex(roads.segments);
+  const buildings = new BuildingIndex(buildingPolygons(data));
   hud.loading.textContent = "";
   hud.stats.textContent =
     `${data.ways.length.toLocaleString("en-US")} ways · ` +
@@ -192,7 +193,12 @@ async function boot(): Promise<void> {
     let nx = carState.x + Math.cos(carState.heading) * carState.speed * dt;
     let nz = carState.z + Math.sin(carState.heading) * carState.speed * dt;
 
-    const q = index.nearest(nx, nz, 80);
+    if (buildings.collides(nx, nz, 1.0)) {
+      nx = carState.x;
+      nz = carState.z;
+      carState.speed *= -0.3;
+    }
+    const q = index.nearest(nx, nz, 80, carState.y);
     if (q) {
       const allowed = q.halfW + 0.95;
       if (q.dist > allowed) {
@@ -219,11 +225,11 @@ async function boot(): Promise<void> {
 
     car.position.set(carState.x, carState.y, carState.z);
     car.rotation.y = -carState.heading + Math.PI / 2;
-    const qf = index.nearest(carState.x + Math.cos(carState.heading) * 2.1, carState.z + Math.sin(carState.heading) * 2.1, 30);
-    const qb = index.nearest(carState.x - Math.cos(carState.heading) * 2.1, carState.z - Math.sin(carState.heading) * 2.1, 30);
+    const qf = index.nearest(carState.x + Math.cos(carState.heading) * 2.1, carState.z + Math.sin(carState.heading) * 2.1, 30, carState.y);
+    const qb = index.nearest(carState.x - Math.cos(carState.heading) * 2.1, carState.z - Math.sin(carState.heading) * 2.1, 30, carState.y);
     if (qf && qb) car.rotation.x = Math.atan2(qb.elev - qf.elev, 4.2);
-    const ql = index.nearest(carState.x - Math.sin(carState.heading) * 1, carState.z + Math.cos(carState.heading) * 1, 30);
-    const qr = index.nearest(carState.x + Math.sin(carState.heading) * 1, carState.z - Math.cos(carState.heading) * 1, 30);
+    const ql = index.nearest(carState.x - Math.sin(carState.heading) * 1, carState.z + Math.cos(carState.heading) * 1, 30, carState.y);
+    const qr = index.nearest(carState.x + Math.sin(carState.heading) * 1, carState.z - Math.cos(carState.heading) * 1, 30, carState.y);
     if (ql && qr) car.rotation.z = Math.atan2(ql.elev - qr.elev, 2);
   }
 
@@ -240,7 +246,7 @@ async function boot(): Promise<void> {
     if (hudTimer > 0.25) {
       hudTimer = 0;
       const kmh = Math.round(Math.abs(carState.speed) * 3.6);
-      const q = index.nearest(carState.x, carState.z, 30);
+      const q = index.nearest(carState.x, carState.z, 30, carState.y);
       hud.status.textContent =
         `${kmh} km/h · ${carState.y.toFixed(1)} m a.s.l.` +
         (q ? ` · layer ${q.layer} road` : " · off road") +
@@ -248,6 +254,9 @@ async function boot(): Promise<void> {
     }
   }
   animate();
+
+  // debug/screenshot handle
+  (window as unknown as Record<string, unknown>).__vibe = { camera, controls, carState, index, data, scene, renderer };
 
   window.addEventListener("resize", () => {
     camera.aspect = window.innerWidth / window.innerHeight;
