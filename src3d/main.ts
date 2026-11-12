@@ -341,7 +341,7 @@ async function boot(): Promise<void> {
     if (follow && !driverView) {
       controls.target.lerp(new THREE.Vector3(carState.x, carState.y + 1.5, carState.z), Math.min(1, dt * 5));
     }
-    controls.update();
+    if (!driverView) controls.update();
     renderer.render(scene, camera);
     hudTimer += dt;
     if (hudTimer > 0.25) {
