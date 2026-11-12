@@ -395,6 +395,8 @@ export interface StrokeOpts {
   colorPos?: RGBA;
   dash?: [number, number];
   cap?: "round" | "butt";
+  /** per-vertex height (terrain/DEM displacement); absent = z 0 */
+  zAt?: (p: Pt) => number;
 }
 
 interface Cmd {
@@ -639,6 +641,10 @@ const FOVY = (60 * Math.PI) / 180;
 
 export class GlMap {
   readonly canvas: HTMLCanvasElement;
+  /** default per-vertex height for strokes/circles/halos when the caller does
+   *  not pass one — set to the DEM/DOM surface height when a height model is
+   *  loaded, so lane markings, lamps etc. sit on the visible surface */
+  zAtDefault: ((p: Pt) => number) | null = null;
   private gl: WebGL2RenderingContext;
   private prog: WebGLProgram;
   private uMvp: WebGLUniformLocation;
@@ -951,6 +957,18 @@ void main() {
     this.triZ(cmd, a, z, b, z, c, z, ca, cb, cc, fill);
   }
 
+  /** tri with optional per-vertex height */
+  private triH(
+    cmd: Cmd,
+    a: Pt, b: Pt, c: Pt,
+    ca: RGBA, cb: RGBA, cc: RGBA,
+    fill: FillSpec,
+    zAt?: (p: Pt) => number,
+  ): void {
+    if (zAt) this.triZ(cmd, a, zAt(a), b, zAt(b), c, zAt(c), ca, cb, cc, fill);
+    else this.tri(cmd, a, b, c, ca, cb, cc, fill);
+  }
+
   /** triangle with per-vertex heights (z) */
   private triZ(
     cmd: Cmd,
@@ -980,6 +998,7 @@ void main() {
   /** filled polygon(s) with optional holes (even-odd via stencil), at
    *  height z (world units; 0 = ground plane) */
   fillPolygon(outer: Pt[][], holes: Pt[][], fill: FillSpec, z = 0, zAt?: (p: Pt) => number): void {
+    const zf = zAt ?? this.zAtDefault ?? undefined;
     const cmd = this.beginCmd();
     cmd.pattern = (fill as { pattern?: { key: string; w: number; h: number } }).pattern ?? null;
     if (holes.length > 0) cmd.mask = { outer, holes };
@@ -990,8 +1009,8 @@ void main() {
         const a = verts[tris[i]],
           b = verts[tris[i + 1]],
           c = verts[tris[i + 2]];
-        if (zAt)
-          this.triZ(cmd, a, zAt(a), b, zAt(b), c, zAt(c), col, col, col, fill);
+        if (zf)
+          this.triZ(cmd, a, zf(a), b, zf(b), c, zf(c), col, col, col, fill);
         else this.tri(cmd, a, b, c, col, col, col, fill, z);
       }
     }
@@ -1039,6 +1058,7 @@ void main() {
     colorPos: RGBA,
     cap: "round" | "butt",
     fill: FillSpec,
+    zAt?: (p: Pt) => number,
   ): void {
     const n = pts.length;
     if (n < 2) return;
@@ -1071,8 +1091,8 @@ void main() {
     const L = pts.map((p, i) => [p[0] + off[i][0] * half, p[1] + off[i][1] * half] as Pt);
     const R = pts.map((p, i) => [p[0] - off[i][0] * half, p[1] - off[i][1] * half] as Pt);
     for (let i = 1; i < n; i++) {
-      this.tri(cmd, L[i - 1], L[i], R[i], colorPos, colorPos, color, fill);
-      this.tri(cmd, L[i - 1], R[i], R[i - 1], colorPos, color, color, fill);
+      this.triH(cmd, L[i - 1], L[i], R[i], colorPos, colorPos, color, fill, zAt);
+      this.triH(cmd, L[i - 1], R[i], R[i - 1], colorPos, color, color, fill, zAt);
     }
     if (cap === "round") {
       const K = 6;
@@ -1084,7 +1104,7 @@ void main() {
             center[0] + (bulge[0] * Math.cos(a) + nrm[0] * Math.sin(a)) * half,
             center[1] + (bulge[1] * Math.cos(a) + nrm[1] * Math.sin(a)) * half,
           ];
-          if (prev) this.tri(cmd, center, prev, p, color, color, color, fill);
+          if (prev) this.triH(cmd, center, prev, p, color, color, color, fill, zAt);
           prev = p;
         }
       };
@@ -1105,6 +1125,7 @@ void main() {
     const fill: FillSpec = { color: o.color };
     const colorPos = o.colorPos ?? o.color;
     const half = width / 2;
+    const zAt = o.zAt ?? this.zAtDefault ?? undefined;
     if (o.dash && o.dash[0] > 0) {
       const [on, off] = o.dash;
       let cur: Pt[] = [pts[0]];
@@ -1112,7 +1133,7 @@ void main() {
       let dashLeft = on;
       const flushSeg = () => {
         if (cur.length >= 2)
-          this.emitStrip(cmd, cur, half, o.color, colorPos, o.cap ?? "round", fill);
+          this.emitStrip(cmd, cur, half, o.color, colorPos, o.cap ?? "round", fill, zAt);
         cur = [];
       };
       for (let i = 1; i < pts.length; i++) {
@@ -1142,27 +1163,29 @@ void main() {
       }
       flushSeg();
     } else {
-      this.emitStrip(cmd, pts, half, o.color, colorPos, o.cap ?? "round", fill);
+      this.emitStrip(cmd, pts, half, o.color, colorPos, o.cap ?? "round", fill, zAt);
     }
     this.endCmd(cmd);
   }
 
   /** independent short segments (e.g. zebra stripes), butt caps */
-  strokeSegments(segs: Pt[][], width: number, color: RGBA): void {
+  strokeSegments(segs: Pt[][], width: number, color: RGBA, zAt?: (p: Pt) => number): void {
     if (segs.length === 0) return;
     const cmd = this.beginCmd();
     const fill: FillSpec = { color };
     const half = width / 2;
+    const zf = zAt ?? this.zAtDefault ?? undefined;
     for (const s of segs) {
       if (s.length < 2) continue;
-      this.emitStrip(cmd, s, half, color, color, "butt", fill);
+      this.emitStrip(cmd, s, half, color, color, "butt", fill, zf);
     }
     this.endCmd(cmd);
   }
 
   /** filled circle (triangle fan) */
-  circle(c: Pt, r: number, color: RGBA): void {
+  circle(c: Pt, r: number, color: RGBA, zAt?: (p: Pt) => number): void {
     if (r <= 0) return;
+    const zf = zAt ?? this.zAtDefault ?? undefined;
     const cmd = this.beginCmd();
     const fill: FillSpec = { color };
     const segs = Math.max(10, Math.min(40, Math.round(r * this.s * 1.5)));
@@ -1170,15 +1193,16 @@ void main() {
     for (let k = 0; k <= segs; k++) {
       const a = (k / segs) * Math.PI * 2;
       const p: Pt = [c[0] + r * Math.cos(a), c[1] + r * Math.sin(a)];
-      if (prev) this.tri(cmd, c, prev, p, color, color, color, fill);
+      if (prev) this.triH(cmd, c, prev, p, color, color, color, fill, zf);
       prev = p;
     }
     this.endCmd(cmd);
   }
 
   /** radial-gradient halo: concentric ring fan with per-stop colors */
-  halo(c: Pt, r: number, stops: [number, RGBA][]): void {
+  halo(c: Pt, r: number, stops: [number, RGBA][], zAt?: (p: Pt) => number): void {
     if (r <= 0 || stops.length === 0) return;
+    const zf = zAt ?? this.zAtDefault ?? undefined;
     const cmd = this.beginCmd();
     const fill: FillSpec = { color: [1, 1, 1, 1] };
     const segs = 24;
@@ -1193,8 +1217,8 @@ void main() {
       }
       if (prevRing) {
         for (let k = 0; k < segs; k++) {
-          this.tri(cmd, prevRing[k].p, prevRing[k + 1].p, ring[k + 1].p, prevRing[k].col, prevRing[k + 1].col, ring[k + 1].col, fill);
-          this.tri(cmd, prevRing[k].p, ring[k + 1].p, ring[k].p, prevRing[k].col, ring[k + 1].col, ring[k].col, fill);
+          this.triH(cmd, prevRing[k].p, prevRing[k + 1].p, ring[k + 1].p, prevRing[k].col, prevRing[k + 1].col, ring[k + 1].col, fill, zf);
+          this.triH(cmd, prevRing[k].p, ring[k + 1].p, ring[k].p, prevRing[k].col, ring[k + 1].col, ring[k].col, fill, zf);
         }
       }
       prevRing = ring;

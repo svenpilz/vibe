@@ -1,0 +1,15 @@
+{
+ "crs": "EPSG:25833",
+ "cellM": 10,
+ "originE": 376000,
+ "originN": 5809000,
+ "cols": 1400,
+ "rows": 900,
+ "heightOffsetM": 30,
+ "heightScaleM": 0.01,
+ "nodata": 65535,
+ "minHM": 27.72,
+ "maxHM": 167.52,
+ "source": "ATKIS DOM1 (1m, surface incl. buildings/bridges/vegetation), Geoportal Berlin gdi.berlin.de, Datenlizenz Deutschland Zero 2.0",
+ "area": "berlin-example.osm.pbf bbox + 1 km margin, downsampled to 10 m"
+}

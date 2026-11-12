@@ -54,6 +54,20 @@ const after = dem.sampleM(cLon, cLat)!;
 ok(Number.isFinite(after), `occluded center inpainted to finite height ${after.toFixed(2)} m (raw was ${before.toFixed(2)})`);
 ok(Math.abs(after - before) < 30, `inpainted height ${after.toFixed(2)} within 30 m of raw ${before.toFixed(2)}`);
 
+// DOM (surface model, includes buildings/bridges) for the same area
+const domHeader = JSON.parse(
+  readFileSync("public/data/dem/dom1-berlin-example.json", "utf8"),
+) as DemHeader;
+const domBin = readFileSync("public/data/dem/dom1-berlin-example.bin");
+const dom = DemField.fromData(domHeader, domBin.buffer.slice(domBin.byteOffset, domBin.byteOffset + domBin.byteLength));
+ok(dom.cols === domHeader.cols && dom.rows === domHeader.rows, `DOM grid ${dom.cols}x${dom.rows}`);
+const hDom = dom.sampleM(cLon, cLat);
+ok(hDom !== null && hDom >= (domHeader.minHM ?? 0) && hDom <= (domHeader.maxHM ?? 400),
+  `DOM sample at example center = ${hDom?.toFixed(2)} m within [${domHeader.minHM}, ${domHeader.maxHM}]`);
+ok(hDom !== null && before !== null && hDom >= before - 1,
+  `DOM surface ${hDom?.toFixed(2)} m >= DGM ground ${before.toFixed(2)} m at center`);
+ok((domHeader.maxHM ?? 0) > (header.maxHM ?? 0), `DOM max ${domHeader.maxHM} m > DGM max ${header.maxHM} m (roofs included)`);
+
 if (failures > 0) {
   console.error(`${failures} dem test(s) FAILED`);
   process.exit(1);

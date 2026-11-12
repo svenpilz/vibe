@@ -66,6 +66,8 @@ let view: View = { cx: 10.0, cy: 51.0, scale: 2000 };
 let dataset: Dataset | null = null;
 /** terrain heightfield (DEM) for the bundled example, null when absent */
 let dem: DemField | null = null;
+/** surface model (DOM, includes buildings/bridges) for the bundled example */
+let dom: DemField | null = null;
 /** bounds of the loaded dataset, quantized — the scene graph is built from
  *  the full dataset so per-frame frustum culling (not a viewport bbox)
  *  decides what is drawn */
@@ -433,6 +435,22 @@ function demZAt(p: Pt): number {
   return m === null ? 0 : m * pxPerMeter();
 }
 
+/** world-units height of the topmost surface at a world point, from the DOM
+ *  (buildings/bridges/vegetation included; open ground == DGM there) */
+function surfaceZAt(p: Pt): number {
+  const src = dom ?? dem;
+  if (!src) return 0;
+  const m = src.sampleM(xToLon(p[0]), yToLat(p[1]));
+  return m === null ? 0 : m * pxPerMeter();
+}
+
+/** height function for a filled ground feature: higher-layer features (bridge
+ *  decks, ...) take the DOM surface height, layer-0 ground takes the DGM */
+function fillZAt(f: { layer?: number }): ((p: Pt) => number) | undefined {
+  if (!dem) return undefined;
+  return f.layer !== undefined && f.layer > 0 && dom ? surfaceZAt : demZAt;
+}
+
 /** rasterize occluders (buildings + higher-layer features) into the DEM grid
  *  and inpaint the occluded cells from the surrounding visible ground, so
  *  ground hidden under bridges/buildings gets an interpolated height */
@@ -536,9 +554,9 @@ function buildGeometry() {
         if (!onLayer(lu)) continue;
         const outer = lu.outer.map(ringPts),
           holes = lu.holes.map(ringPts);
-        g.fillPolygon(outer, holes, { color: fill }, 0, dem ? demZAt : undefined);
-        for (const ring of lu.outer) g.stroke(closedRingPts(ring), seamW, { color: fill });
-        for (const ring of lu.holes) g.stroke(closedRingPts(ring), seamW, { color: fill });
+        g.fillPolygon(outer, holes, { color: fill }, 0, fillZAt(lu));
+        for (const ring of lu.outer) g.stroke(closedRingPts(ring), seamW, { color: fill, zAt: fillZAt(lu) });
+        for (const ring of lu.holes) g.stroke(closedRingPts(ring), seamW, { color: fill, zAt: fillZAt(lu) });
       }
     }
 
@@ -556,9 +574,9 @@ function buildGeometry() {
         const fillSpec: FillSpec = pat ?? { color: solid };
         const outer = pk.outer.map(ringPts),
           holes = pk.holes.map(ringPts);
-        g.fillPolygon(outer, holes, fillSpec, 0, dem ? demZAt : undefined);
-        for (const ring of pk.outer) g.stroke(closedRingPts(ring), seamW, { color: solid });
-        for (const ring of pk.holes) g.stroke(closedRingPts(ring), seamW, { color: solid });
+        g.fillPolygon(outer, holes, fillSpec, 0, fillZAt(pk));
+        for (const ring of pk.outer) g.stroke(closedRingPts(ring), seamW, { color: solid, zAt: fillZAt(pk) });
+        for (const ring of pk.holes) g.stroke(closedRingPts(ring), seamW, { color: solid, zAt: fillZAt(pk) });
       }
     }
 
@@ -571,9 +589,9 @@ function buildGeometry() {
       const solid = greenColor(gr.kind);
       const outer = gr.outer.map(ringPts),
         holes = gr.holes.map(ringPts);
-      g.fillPolygon(outer, holes, fillSpec, 0, dem ? demZAt : undefined);
-      for (const ring of gr.outer) g.stroke(closedRingPts(ring), seamW, { color: solid });
-      for (const ring of gr.holes) g.stroke(closedRingPts(ring), seamW, { color: solid });
+      g.fillPolygon(outer, holes, fillSpec, 0, fillZAt(gr));
+      for (const ring of gr.outer) g.stroke(closedRingPts(ring), seamW, { color: solid, zAt: fillZAt(gr) });
+      for (const ring of gr.holes) g.stroke(closedRingPts(ring), seamW, { color: solid, zAt: fillZAt(gr) });
     }
 
     // --- highway areas (surface fill) ---
@@ -587,13 +605,13 @@ function buildGeometry() {
       const fillSpec: FillSpec = pat ?? { color: solid };
       const outer = area.outer.map(ringPts),
         holes = area.holes.map(ringPts);
-      g.fillPolygon(outer, holes, fillSpec, 0, dem ? demZAt : undefined);
+      g.fillPolygon(outer, holes, fillSpec, 0, fillZAt(area));
       // same-color edge stroke: covers antialiased boundaries and cm-scale
       // geometric gaps between neighboring polygons so areas read as one
       // continuous surface — without letting lower layers shine through the
       // seams at high zoom, the stroke scales with the ground resolution
-      for (const ring of area.outer) g.stroke(closedRingPts(ring), seamW, { color: solid });
-      for (const ring of area.holes) g.stroke(closedRingPts(ring), seamW, { color: solid });
+      for (const ring of area.outer) g.stroke(closedRingPts(ring), seamW, { color: solid, zAt: fillZAt(area) });
+      for (const ring of area.holes) g.stroke(closedRingPts(ring), seamW, { color: solid, zAt: fillZAt(area) });
     }
 
     // --- buildings: extruded 3D prisms (height from height=*, else
@@ -606,15 +624,26 @@ function buildGeometry() {
       const h = hM * px; // world units
       const wall: RGBA = [roof[0] * 0.55, roof[1] * 0.55, roof[2] * 0.55, 0.9];
       const outer = b.outer.map(ringPts);
-      // base sits on the terrain: DEM height at the footprint centroid
+      // base sits on the terrain: DGM height at the footprint centroid (the
+      // ground under a building is occluded, so this is the inpainted value);
+      // the roof top comes from the DOM (measured surface incl. the building)
       let baseZ = 0;
-      if (dem && b.outer[0]?.length) {
+      let roofZ = h;
+      if ((dem || dom) && b.outer[0]?.length) {
         let sx = 0, sy = 0;
         for (const [qx, qy] of b.outer[0]) { sx += qx / Q; sy += qy / Q; }
-        const m = dem.sampleM(sx / b.outer[0].length, sy / b.outer[0].length);
-        if (m !== null) baseZ = m * px;
+        const clon = sx / b.outer[0].length, clat = sy / b.outer[0].length;
+        if (dem) {
+          const m = dem.sampleM(clon, clat);
+          if (m !== null) baseZ = m * px;
+        }
+        if (dom) {
+          const rm = dom.sampleM(clon, clat);
+          if (rm !== null) roofZ = Math.max(rm * px, baseZ + 0.5 * px);
+          else roofZ = baseZ + h;
+        } else roofZ = baseZ + h;
       }
-      g.extrude(outer, h, wall, roof, baseZ);
+      g.extrude(outer, Math.max(roofZ - baseZ, 0.5 * px), wall, roof, baseZ);
       const outline = rgba("#8a8a94");
       for (const ring of b.outer)
         g.stroke(closedRingPts(ring), pxToWorld(1.5), { color: outline });
@@ -2692,6 +2721,11 @@ async function loadBundledExample(): Promise<boolean> {
     } catch {
       dem = null;
     }
+    try {
+      dom = await DemField.load("data/dem/dom1-berlin-example.json");
+    } catch {
+      dom = null;
+    }
     const buf = await res.arrayBuffer();
     loadPbfBuffer(buf, "berlin-example.osm.pbf");
     return true;
@@ -2834,6 +2868,8 @@ function ingestResult(result: ExtractResult, name: string) {
   laneMarkingIndex = buildIndex(dataset.laneMarkings);
   stopLineIndex = buildIndex(dataset.stopLines);
   setupDemOcclusion();
+  // strokes/points without an explicit zAt sit on the topmost surface
+  g.zAtDefault = dem || dom ? surfaceZAt : null;
   kerbGrid = new Map();
   for (const k of dataset.kerbs) {
     const key = Math.floor(k.lon / 50000) * 100000 + Math.floor(k.lat / 50000);
