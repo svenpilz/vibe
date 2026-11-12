@@ -45,6 +45,11 @@ check("flat terrain sample", sampleTerrainM(grid([500, 500, 500, 500]), 50, 50) 
 const g2 = grid([0, 1000, 0, 1000]); // corners (0,0)=0m (100,0)=100m (0,100)=0m (100,100)=100m
 check("terrain bilinear midpoint", Math.abs(sampleTerrainM(g2, 50, 50) - 50) < 1e-9);
 check("terrain corner", Math.abs(sampleTerrainM(g2, 100, 100) - 100) < 1e-6);
+// sampling must match the rendered terrain mesh (each cell split along the h00->h11 diagonal)
+const g3 = grid([0, 1000, 1000, 0]); // (0,0)=0 (100,0)=100 (0,100)=100 (100,100)=0
+check("terrain matches mesh triangle tx>ty", Math.abs(sampleTerrainM(g3, 75, 25) - 50) < 1e-9);
+check("terrain matches mesh triangle tx<ty", Math.abs(sampleTerrainM(g3, 25, 75) - 50) < 1e-9);
+check("terrain on mesh diagonal", Math.abs(sampleTerrainM(g3, 50, 50) - 0) < 1e-9);
 
 if (failures > 0) {
   console.error(`${failures} test(s) failed`);

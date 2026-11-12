@@ -194,9 +194,11 @@ export function buildingPaletteColor(x: number, y: number): [number, number, num
   return BUILDING_PALETTE[h % BUILDING_PALETTE.length];
 }
 
-/** Bilinear sample of the terrain grid at local-frame (x, y), meters a.s.l.
- *  heightsDm holds (n+1)^2 vertex heights, row-major, vertices at
- *  origin + i*cell. */
+/** Piecewise-linear sample of the terrain grid at local-frame (x, y), meters a.s.l.
+ *  Matches buildTerrainMesh exactly: each cell is split along the
+ *  (i,j)->(i+1,j+1) diagonal, so draped features follow the rendered surface
+ *  precisely instead of dipping below it. heightsDm holds (n+1)^2 vertex
+ *  heights, row-major, vertices at origin + i*cell. */
 export function sampleTerrainM(g: TerrainGrid, x: number, y: number): number {
   const n = g.n;
   const cell = g.sizeM / n;
@@ -210,5 +212,6 @@ export function sampleTerrainM(g: TerrainGrid, x: number, y: number): number {
   const h10 = g.heightsDm[y0 * (n + 1) + x0 + 1] * 0.1;
   const h01 = g.heightsDm[(y0 + 1) * (n + 1) + x0] * 0.1;
   const h11 = g.heightsDm[(y0 + 1) * (n + 1) + x0 + 1] * 0.1;
-  return (h00 * (1 - tx) + h10 * tx) * (1 - ty) + (h01 * (1 - tx) + h11 * tx) * ty;
+  if (tx >= ty) return h00 + (h10 - h00) * tx + (h11 - h10) * ty;
+  return h00 + (h01 - h00) * ty + (h11 - h01) * tx;
 }

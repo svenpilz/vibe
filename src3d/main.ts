@@ -6,7 +6,7 @@
  */
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import type { BakedData } from "./schema";
+import type { BakedData, TerrainGrid } from "./schema";
 import { sampleTerrainM, wayTags } from "./schema";
 import { lonLatToMeters } from "./geo";
 import { buildTerrainMesh, buildRoads, buildBuildings, buildGround, buildLaneMarkings, buildKerbs, buildFurniture, buildRails, buildRoutes, RouteTrack, RoadIndex, BuildingIndex, buildingPolygons, cleanDomTerrain, type MeshData } from "./mesh";
@@ -149,10 +149,12 @@ async function boot(): Promise<void> {
   // 1 = DGM1 bare earth, 2 = DOM1 raw surface
   const terrainModes = ["DOM1 cleaned (DGM1 filters trees/signs)", "DGM1 bare earth", "DOM1 raw surface"];
   let terrainMode = 0;
+  let activeTerrain: TerrainGrid = data.terrain;
   let terrainMesh: THREE.Mesh | undefined;
   const setTerrainMode = (mode: number) => {
     terrainMode = mode;
     const grid = !data.terrainDom || mode === 1 ? data.terrain : mode === 2 ? data.terrainDom : cleanDomTerrain(data.terrainDom, data.terrain, buildingPolygons(data));
+    activeTerrain = grid;
     const g = buildTerrainMesh(grid);
     if (!terrainMesh) {
       terrainMesh = new THREE.Mesh(toGeometry(g), new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
@@ -164,16 +166,19 @@ async function boot(): Promise<void> {
     }
   };
   setTerrainMode(0);
-  addMesh(buildGround(data), false);
-  const roads = buildRoads(data);
+  // drape all surface features on the same terrain grid that is displayed,
+  // so they sit exactly on the rendered surface instead of below it
+  const viewData: BakedData = { ...data, terrain: activeTerrain };
+  addMesh(buildGround(viewData), false);
+  const roads = buildRoads(viewData);
   addMesh(roads.mesh, false);
-  addMesh(buildLaneMarkings(data, roads.segments), false);
-  addMesh(buildKerbs(data), false);
-  addMesh(buildFurniture(data), false);
-  addMesh(buildRails(data), false);
-  addMesh(buildRoutes(data), false);
+  addMesh(buildLaneMarkings(viewData, roads.segments), false);
+  addMesh(buildKerbs(viewData), false);
+  addMesh(buildFurniture(viewData), false);
+  addMesh(buildRails(viewData), false);
+  addMesh(buildRoutes(viewData), false);
   const facadeMat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, map: makeFacadeTexture() });
-  addMesh(buildBuildings(data), true, facadeMat);
+  addMesh(buildBuildings(viewData), true, facadeMat);
   const index = new RoadIndex(roads.segments);
   const buildings = new BuildingIndex(buildingPolygons(data));
   hud.loading.textContent = "";
@@ -182,7 +187,7 @@ async function boot(): Promise<void> {
     `${roads.segments.length.toLocaleString("en-US")} road segments · ` +
     `2 km around S Friedenau · built in ${(performance.now() - t0).toFixed(0)} ms`;
 
-  const centerH = sampleTerrainM(data.terrain, 0, 0);
+  const centerH = sampleTerrainM(activeTerrain, 0, 0);
   controls.target.set(0, centerH + 2, 0);
 
   // spawn the car on the widest nearby ground-level road
@@ -227,6 +232,10 @@ async function boot(): Promise<void> {
     if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(e.code)) e.preventDefault();
   });
   window.addEventListener("keyup", (e) => keys.delete(e.code));
+  // right-drag pans (ground plane only, screenSpacePanning=false); leave chase cam so the pan is visible
+  renderer.domElement.addEventListener("pointerdown", (e) => {
+    if (e.button === 2) follow = false;
+  });
 
   // buses and S-Bahn trains driving their OSM route relations
   interface Vehicle {
@@ -244,7 +253,7 @@ async function boot(): Promise<void> {
         return [lon, lat] as [number, number];
       });
       const xy = pts.map(([lon, lat]) => lonLatToMeters(lon, lat));
-      const elevs = xy.map(([x, y]) => sampleTerrainM(data.terrain, x, y) + 0.18);
+      const elevs = xy.map(([x, y]) => sampleTerrainM(activeTerrain, x, y) + 0.18);
       return { tags: wayTags(data, route), track: new RouteTrack(xy, elevs) };
     })
     .filter((r) => r.track.length > 800)
@@ -320,20 +329,21 @@ async function boot(): Promise<void> {
     }
   }
   function drawMinimap(): void {
-    // car-centered 500 m radius window, sampled from the full-extent static layer
+    // car-centered 500 m radius window, always centered on the car; the window may
+    // extend past the static layer at the extract edge, so fill the background first
     const halfPx = (mmWindowM / 2) * mmScale;
-    const cx0 = mmStatic.width / 2 + carState.x * mmScale;
-    const cy0 = mmStatic.height / 2 - carState.z * mmScale;
-    const sx = Math.max(0, Math.min(mmStatic.width - 2 * halfPx, cx0 - halfPx));
-    const sy = Math.max(0, Math.min(mmStatic.height - 2 * halfPx, cy0 - halfPx));
+    const sx = mmStatic.width / 2 + carState.x * mmScale - halfPx;
+    const sy = mmStatic.height / 2 - carState.z * mmScale - halfPx;
+    mmCtx.fillStyle = "#3f5a38";
+    mmCtx.fillRect(0, 0, mmCanvas.width, mmCanvas.height);
     mmCtx.imageSmoothingEnabled = true;
     mmCtx.imageSmoothingQuality = "high";
     mmCtx.drawImage(mmStatic, sx, sy, 2 * halfPx, 2 * halfPx, 0, 0, mmCanvas.width, mmCanvas.height);
-    // camera view direction
+    // camera view direction + car marker at the window center (the car)
     const cf = new THREE.Vector3();
     camera.getWorldDirection(cf);
-    const cx = mmCanvas.width / 2 + (carState.x * mmScale + mmStatic.width / 2 - cx0) * (mmCanvas.width / (2 * halfPx));
-    const cy = mmCanvas.height / 2 - (carState.z * mmScale - (cy0 - mmStatic.height / 2)) * (mmCanvas.height / (2 * halfPx));
+    const cx = mmCanvas.width / 2;
+    const cy = mmCanvas.height / 2;
     mmCtx.strokeStyle = "rgba(255,255,255,0.7)";
     mmCtx.lineWidth = 1.5;
     mmCtx.beginPath();
@@ -389,7 +399,7 @@ async function boot(): Promise<void> {
       carState.y = q.elev;
     } else {
       // off-road: follow the bare-earth terrain, with extra drag
-      carState.y = sampleTerrainM(data.terrain, nx, nz);
+      carState.y = sampleTerrainM(activeTerrain, nx, nz);
       carState.speed *= Math.max(0, 1 - 0.6 * dt);
     }
     carState.x = nx;
