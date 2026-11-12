@@ -33,7 +33,7 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.15;
 
 const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.5, 20000);
-camera.position.set(1600, 1100, 1600);
+camera.position.set(1600, 1100, -1600); // three.js z = -north
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
@@ -61,9 +61,16 @@ sun.shadow.bias = -0.0005;
 scene.add(sun);
 
 function toGeometry(m: MeshData): THREE.BufferGeometry {
+  // MeshData is in the local geographic frame (x=east, y=up, z=north); three.js
+  // is right-handed, so flip z to z=-north — otherwise the map renders mirrored
+  // (east/west inverted) when viewed from above with north up.
+  const pos = m.positions.slice();
+  const nor = m.normals.slice();
+  for (let i = 2; i < pos.length; i += 3) pos[i] = -pos[i];
+  for (let i = 2; i < nor.length; i += 3) nor[i] = -nor[i];
   const g = new THREE.BufferGeometry();
-  g.setAttribute("position", new THREE.Float32BufferAttribute(m.positions, 3));
-  g.setAttribute("normal", new THREE.Float32BufferAttribute(m.normals, 3));
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute("normal", new THREE.Float32BufferAttribute(nor, 3));
   g.setAttribute("color", new THREE.Float32BufferAttribute(m.colors, 3));
   g.setAttribute("uv", new THREE.Float32BufferAttribute(m.uvs, 2));
   g.setIndex(m.indices);
@@ -349,7 +356,7 @@ async function boot(): Promise<void> {
     mmCtx.lineWidth = 1.5;
     mmCtx.beginPath();
     mmCtx.moveTo(cx, cy);
-    mmCtx.lineTo(cx + cf.x * 18, cy - cf.z * 18);
+    mmCtx.lineTo(cx + cf.x * 18, cy + cf.z * 18); // three.js z = -north, canvas y is south
     mmCtx.stroke();
     // car marker
     mmCtx.fillStyle = "#ff4433";
@@ -406,8 +413,8 @@ async function boot(): Promise<void> {
     carState.x = nx;
     carState.z = nz;
 
-    car.position.set(carState.x, carState.y, carState.z);
-    car.rotation.y = -carState.heading + Math.PI / 2;
+    car.position.set(carState.x, carState.y, -carState.z);
+    car.rotation.y = carState.heading + Math.PI / 2; // three.js z = -north
     const qf = index.nearest(carState.x + Math.cos(carState.heading) * 2.1, carState.z + Math.sin(carState.heading) * 2.1, 30, carState.y);
     const qb = index.nearest(carState.x - Math.cos(carState.heading) * 2.1, carState.z - Math.sin(carState.heading) * 2.1, 30, carState.y);
     if (qf && qb) car.rotation.x = Math.atan2(qb.elev - qf.elev, 4.2);
@@ -423,8 +430,8 @@ async function boot(): Promise<void> {
     for (const v of vehicles) {
       v.dist += v.speed * dt;
       const p = v.track.pointAt(v.dist);
-      v.mesh.position.set(p.x, p.elev, p.z);
-      v.mesh.rotation.y = -p.heading + Math.PI / 2;
+      v.mesh.position.set(p.x, p.elev, -p.z);
+      v.mesh.rotation.y = p.heading + Math.PI / 2; // three.js z = -north
     }
     if (driverView) {
       // first-person driver view: eye height in the car, looking along heading
@@ -435,16 +442,16 @@ async function boot(): Promise<void> {
       const qf = index.nearest(carState.x + fx * 2.1, carState.z + fz * 2.1, 30, carState.y);
       const qb = index.nearest(carState.x - fx * 2.1, carState.z - fz * 2.1, 30, carState.y);
       const pitch = qf && qb ? Math.atan2(qb.elev - qf.elev, 4.2) : 0;
-      camera.position.set(carState.x, carState.y + eye, carState.z);
+      camera.position.set(carState.x, carState.y + eye, -carState.z);
       camera.rotation.set(0, 0, 0);
-      // camera looks along -z; rotate so forward = (cos heading, 0, sin heading)
-      camera.rotateY(-carState.heading - Math.PI / 2);
+      // camera looks along -z; rotate so forward = (cos heading, 0, -sin heading) (z = -north)
+      camera.rotateY(carState.heading - Math.PI / 2);
       camera.rotateX(-pitch);
     } else {
       controls.enabled = true;
     }
     if (follow && !driverView) {
-      controls.target.lerp(new THREE.Vector3(carState.x, carState.y + 1.5, carState.z), Math.min(1, dt * 5));
+      controls.target.lerp(new THREE.Vector3(carState.x, carState.y + 1.5, -carState.z), Math.min(1, dt * 5));
     }
     if (!driverView) controls.update();
     renderer.render(scene, camera);
