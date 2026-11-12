@@ -68,6 +68,26 @@ ok(hDom !== null && before !== null && hDom >= before - 1,
   `DOM surface ${hDom?.toFixed(2)} m >= DGM ground ${before.toFixed(2)} m at center`);
 ok((domHeader.maxHM ?? 0) > (header.maxHM ?? 0), `DOM max ${domHeader.maxHM} m > DGM max ${header.maxHM} m (roofs included)`);
 
+// structure spot: a tall building inside the example bbox (DOM >> DGM there).
+// Simulates an area:highway-on-a-bridge / building occluder: the ground under
+// it must be inpainted low (DGM), while the feature on top takes the DOM height
+const sLon = 13.3202708, sLat = 52.4559146;
+const dem2bin = readFileSync("public/data/dem/dgm1-berlin-example.bin");
+const dem2 = DemField.fromData(header, dem2bin.buffer.slice(dem2bin.byteOffset, dem2bin.byteOffset + dem2bin.byteLength));
+const rawGround = dem2.sampleM(sLon, sLat)!;
+const surf = dom.sampleM(sLon, sLat)!;
+ok(surf - rawGround > 50, `structure spot: DOM ${surf.toFixed(1)} m >> DGM ${rawGround.toFixed(1)} m`);
+dem2.occludeRing([
+  [sLon - 0.0002, sLat - 0.0002],
+  [sLon + 0.0002, sLat - 0.0002],
+  [sLon + 0.0002, sLat + 0.0002],
+  [sLon - 0.0002, sLat + 0.0002],
+]);
+dem2.inpaint();
+const groundUnder = dem2.sampleM(sLon, sLat)!;
+ok(Number.isFinite(groundUnder) && groundUnder < surf - 20,
+  `occluded ground inpainted to ${groundUnder.toFixed(1)} m (< DOM surface ${surf.toFixed(1)} m); the layer>0 feature itself renders at the DOM height`);
+
 if (failures > 0) {
   console.error(`${failures} dem test(s) FAILED`);
   process.exit(1);
