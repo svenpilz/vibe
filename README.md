@@ -354,7 +354,8 @@ the anchored left traffic edge (lane 1) to the right edge (lane n). Line style:
   their links) render. Grass, buildings, centerlines, footways, crossings and kerbs
   appear from zoom 20; lane markings from zoom 17.
 - Every class has an on/off toggle with a live feature count. LOD culling applies to both
-  drawing and click-picking.
+  drawing and click-picking. **Wireframe mode** (checkbox in the panel or the `w` key)
+  draws the tessellation as triangle-edge lines instead of filled surfaces.
 - Spatial indexes (uniform grids over quantized coordinates) limit drawing and picking
   to the visible viewport.
 
