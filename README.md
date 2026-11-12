@@ -13,10 +13,15 @@ The 2D micromapping visualizer lives on `main` (https://svenpilz.github.io/vibe/
 
 | Input | Action |
 |---|---|
-| left-drag / wheel / right-drag | orbit / zoom / pan (mouse navigation) |
+| left-drag / wheel / right-drag | orbit / zoom / pan (right-drag pans, it does not rotate) |
 | `W A S D` or arrow keys | drive the car (accelerate / steer / brake-reverse) |
 | `C` | toggle chase cam (camera follows the car) |
+| `V` | first-person driver view (camera aligned with the car's driving direction) |
+| `H` | cycle terrain source (DGM1-cleaned DOM1 / raw DGM1 / raw DOM1) |
 | `R` | reset the car to its spawn point |
+
+A north-up minimap (bottom-right) shows a 500 m radius around the car with roads, buildings,
+the car marker and the camera view direction.
 
 The car drives on the road network (elevation-aware snapping, so it can pass **under bridges**,
 and on a `layer=1` deck it drives 5 m above the road below) and can also go **off-road** — it then
