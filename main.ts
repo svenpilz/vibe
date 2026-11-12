@@ -551,13 +551,17 @@ function buildGeometry() {
       for (const ring of area.holes) g.stroke(closedRingPts(ring), seamW, { color: solid });
     }
 
-    // --- buildings: translucent fill (residential light orange, other
-    //     even lighter) + outline; not the main focus of the rendering
+    // --- buildings: extruded 3D prisms (height from height=*, else
+    //     building:levels*3m, else 6m); top-down they look like the old
+    //     translucent fill + outline, tilted they stand up
     for (const b of bl) {
       if (!onLayer(b)) continue;
-      const fill = rgba(b.usage === "residential" ? "#f0b98a" : "#f5e9d8", 0.45);
+      const roof = rgba(b.usage === "residential" ? "#f0b98a" : "#f5e9d8", 0.45);
+      const hM = b.heightM ?? (b.levels !== undefined ? b.levels * 3 : 6);
+      const h = hM * px; // world units
+      const wall: RGBA = [roof[0] * 0.55, roof[1] * 0.55, roof[2] * 0.55, 0.9];
       const outer = b.outer.map(ringPts);
-      g.fillPolygon(outer, [], { color: fill });
+      g.extrude(outer, h, wall, roof);
       const outline = rgba("#8a8a94");
       for (const ring of b.outer)
         g.stroke(closedRingPts(ring), pxToWorld(1.5), { color: outline });

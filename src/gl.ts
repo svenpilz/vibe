@@ -606,6 +606,7 @@ export class GlMap {
   private gl: WebGL2RenderingContext;
   private prog: WebGLProgram;
   private uMvp: WebGLUniformLocation;
+  private uOrigin: WebGLUniformLocation;
   private uUseTex: WebGLUniformLocation;
   private uTex: WebGLUniformLocation;
   private aPos: number;
@@ -630,6 +631,10 @@ export class GlMap {
   /** css pixels per world unit at the target (set by setCamera) */
   s = 1;
   private mvp = new Float32Array(16);
+  /** camera ground target; rendering translates vertices by -target so
+   *  float32 vertex precision stays sub-pixel even at max zoom */
+  private camTX = 0;
+  private camTY = 0;
   private eye: [number, number, number] = [0, 0, 1];
   private fwd: [number, number, number] = [0, 0, -1];
   private right: [number, number, number] = [1, 0, 0];
@@ -648,10 +653,10 @@ export class GlMap {
 
     const vs = `#version 300 es
 in vec2 a_pos; in vec4 a_color; in vec2 a_uv; in float a_zgeo; in float a_zord;
-uniform mat4 u_mvp;
+uniform mat4 u_mvp; uniform vec2 u_origin;
 out vec4 v_color; out vec2 v_uv;
 void main() {
-  vec4 p = u_mvp * vec4(a_pos, a_zgeo, 1.0);
+  vec4 p = u_mvp * vec4(a_pos - u_origin, a_zgeo, 1.0);
   // tiny per-command bias keeps coplanar paint order under LEQUAL; real
   // geometry z dominates when the camera is tilted
   p.z += (a_zord * 2.0 - 1.0) * 1e-4 * p.w;
@@ -684,6 +689,7 @@ void main() {
       throw new Error("link: " + gl.getProgramInfoLog(prog));
     this.prog = prog;
     this.uMvp = gl.getUniformLocation(prog, "u_mvp")!;
+    this.uOrigin = gl.getUniformLocation(prog, "u_origin")!;
     this.uUseTex = gl.getUniformLocation(prog, "u_useTex")!;
     this.uTex = gl.getUniformLocation(prog, "u_tex")!;
     this.aPos = gl.getAttribLocation(prog, "a_pos");
@@ -773,6 +779,8 @@ void main() {
       dist * 100 + 1e7,
     );
     this.mvp = mat4Mul(proj, view);
+    this.camTX = tx;
+    this.camTY = ty;
   }
 
   /** camera basis for pan/zoom math (ground-projected up) */
@@ -1177,7 +1185,16 @@ void main() {
     const gl = this.gl;
     if (scene.totalCmds === 0) return;
     gl.useProgram(this.prog);
-    gl.uniformMatrix4fv(this.uMvp, false, this.mvp);
+    // render in camera-local coordinates: the shader subtracts u_origin from
+    // each vertex (float32 subtraction of two nearby values is exact), so the
+    // matrix must add it back — world vertices are huge (~1e5) and float32
+    // would otherwise jitter them by whole pixels at high zoom
+    const local = mat4Mul(
+      this.mvp,
+      new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, this.camTX, this.camTY, 0, 1]),
+    );
+    gl.uniformMatrix4fv(this.uMvp, false, local);
+    gl.uniform2f(this.uOrigin, this.camTX, this.camTY);
     const planes = frustumPlanes(this.mvp);
     const wire = this.wireframe;
     const setAttribs = (vao: WebGLVertexArrayObject, buf: WebGLBuffer) => {
