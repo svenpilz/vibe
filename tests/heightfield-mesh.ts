@@ -319,8 +319,8 @@ check("tree spike removed (falls back to DGM)", cleaned.heightsDm[2] === 500, `$
 check("flat area keeps DOM", cleaned.heightsDm[0] === 500);
 const cleanedB = cleanDomTerrain(domG, dgmG, [[[-20, 80], [20, 80], [20, 120], [-20, 120]]]); // contains the (0,100) spike vertex
 check("building footprint also falls back to DGM (3D building drawn there)", cleanedB.heightsDm[2] === 500, `${cleanedB.heightsDm[2]}`);
-const domLow = { n: 1, sizeM: 100, originX: 0, originY: 0, heightsDm: [500, 510, 500, 500] }; // 1 m single-cell bump: noise, not an edge
-check("low non-edge DOM bump treated as noise -> DGM", cleanDomTerrain(domLow, dgmG, []).heightsDm[1] === 500);
+const domLow = { n: 1, sizeM: 100, originX: 0, originY: 0, heightsDm: [500, 510, 500, 500] }; // 1 m bump: not a tree blob
+check("cleaned DOM keeps non-tree surface detail (low bump kept)", cleanDomTerrain(domLow, dgmG, []).heightsDm[1] === 510);
 // mapped tree: median smoothing kernel removes the spike (cleaned value ~ DGM, not the raw spike)
 {
   const treeDom = { n: 2, sizeM: 200, originX: 0, originY: 0, heightsDm: [500, 500, 500, 500, 900, 500, 500, 500, 500] }; // 40 m spike at center (100,100)

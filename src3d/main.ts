@@ -168,7 +168,7 @@ async function boot(): Promise<void> {
   const t0 = performance.now();
   // terrain source switch (H): 0 = DOM1 cleaned with DGM1 (default, replaces SRTM),
   // 1 = DGM1 bare earth, 2 = DOM1 raw surface
-  const terrainModes = ["DOM1 cleaned (DGM1 filters trees/signs)", "DGM1 bare earth", "DOM1 raw surface"];
+  const terrainModes = ["DOM1 cleaned (trees identified in the DOM and removed)", "DGM1 bare earth", "DOM1 raw surface (original)"];
   let terrainMode = 0;
   let terrainOnly = false;
   let activeTerrain: TerrainGrid = data.terrain;

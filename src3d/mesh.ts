@@ -227,13 +227,12 @@ export function cleanDomTerrain(dom: TerrainGrid, dgm: TerrainGrid, buildingPoly
       // are noise -> DGM bare earth.
       const dxx = Math.abs(at(i - 1, j) + at(i + 1, j) - 2 * d);
       const dyy = Math.abs(at(i, j - 1) + at(i, j + 1) - 2 * d);
-      // edge = strong curvature in exactly one direction; blob = curvature in
-      // BOTH directions (tree/sign/car crowns). The blob threshold is learned
-      // from the mapped trees (0.3 m gives ~87% recall on them, see tests);
-      // edges need a strong one-directional signal (thresholdM).
+      // Trees are identified in the DOM as TALL blobs: strong curvature in
+      // BOTH directions (min(|dxx|,|dyy|) high) AND standing well above the
+      // bare earth (d - g > threshold). Small surface bumps are kept — the DOM
+      // itself is the signal, only trees are removed.
       const blobT = 3; // dm, calibrated on mapped trees
-      const isBlob = Math.min(dxx, dyy) > blobT;
-      const isEdge = Math.max(dxx, dyy) > thresholdM * 10 && Math.min(dxx, dyy) < blobT;
+      const isTree = Math.min(dxx, dyy) > blobT && d - g > thresholdM * 10;
       const px = dom.originX + i * cell;
       const py = dom.originY + j * cell;
       const inBuilding = index.collides(px, py, cell * 0.75);
@@ -245,15 +244,14 @@ export function cleanDomTerrain(dom: TerrainGrid, dgm: TerrainGrid, buildingPoly
       }
       if (inBuilding || inCorridor) {
         heightsDm.push(g);
-      } else if (isBlob || nearTree(px, py)) {
-        // tree/sign detected in the height field (or mapped): smooth with the
-        // 5x5 median kernel; if the crown is still spiky, fall back to DGM
+      } else if (isTree || nearTree(px, py)) {
+        // tree/sign identified in the DOM (or mapped): smooth with the 5x5
+        // median kernel; if the crown is still spiky, fall back to DGM
         const m = med[k];
         heightsDm.push(Math.abs(m - g) > thresholdM * 10 ? g : m);
-      } else if (isEdge) {
-        heightsDm.push(d);
       } else {
-        heightsDm.push(g);
+        // cleaned DOM: keep the surface itself — only trees are removed
+        heightsDm.push(d);
       }
     }
   }
