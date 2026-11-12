@@ -243,6 +243,9 @@ check("tree spike removed (falls back to DGM)", cleaned.heightsDm[2] === 500, `$
 check("flat area keeps DOM", cleaned.heightsDm[0] === 500);
 const cleanedB = cleanDomTerrain(domG, dgmG, [[[90, -10], [110, -10], [110, 10], [90, 10]]]);
 check("building footprint also falls back to DGM (3D building drawn there)", cleanedB.heightsDm[2] === 500);
+// small building (5 m) with no grid vertex strictly inside must still be masked via dilation
+const cleanedS = cleanDomTerrain(domG, dgmG, [[[97.5, -2.5], [102.5, -2.5], [102.5, 2.5], [97.5, 2.5]]]);
+check("sub-cell building masked by dilation", cleanedS.heightsDm[2] === 500, `${cleanedS.heightsDm[2]}`);
 
 if (failures > 0) {
   console.error(`${failures} test(s) failed`);

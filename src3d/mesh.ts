@@ -139,7 +139,9 @@ export function cleanDomTerrain(dom: TerrainGrid, dgm: TerrainGrid, buildingPoly
       const k = j * (n + 1) + i;
       const d = dom.heightsDm[k];
       const g = dgm.heightsDm[k];
-      if (d - g > thresholdM * 10 && !index.collides(dom.originX + i * cell, dom.originY + j * cell, 0.5)) {
+      // dilate the building mask by ~0.75 cell so buildings smaller than one
+      // grid cell still get DGM ground (otherwise the DOM roof buries them)
+      if (d - g > thresholdM * 10 && !index.collides(dom.originX + i * cell, dom.originY + j * cell, cell * 0.75)) {
         heightsDm.push(g);
       } else {
         heightsDm.push(d);
