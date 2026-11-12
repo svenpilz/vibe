@@ -24,7 +24,7 @@ export interface AreaFeature {
   trafficJunction?: boolean;
   /** OSM layer=* tag (default 0) */
   layer: number;
-  /** OSM bridge=* tag (undefined when absent/"no") */
+  /** man_made=bridge: the feature is a bridge deck/structure (undefined otherwise) */
   bridge?: string;
   /** OSM level=* tag (undefined when absent) */
   level?: number;
@@ -47,7 +47,7 @@ export interface LineFeature {
   name?: string;
   /** OSM layer=* tag (default 0) */
   layer: number;
-  /** OSM bridge=* tag (undefined when absent/"no") */
+  /** man_made=bridge: the feature is a bridge deck/structure (undefined otherwise) */
   bridge?: string;
   /** OSM level=* tag (undefined when absent) */
   level?: number;
@@ -152,7 +152,7 @@ export interface BuildingFeature {
   name?: string;
   /** OSM layer=* tag (default 0) */
   layer: number;
-  /** OSM bridge=* tag (undefined when absent/"no") */
+  /** man_made=bridge: the feature is a bridge deck/structure (undefined otherwise) */
   bridge?: string;
   /** OSM level=* tag (undefined when absent) */
   level?: number;
@@ -171,7 +171,7 @@ export interface GrassFeature {
   kind: string;
   /** OSM layer=* tag (default 0) */
   layer: number;
-  /** OSM bridge=* tag (undefined when absent/"no") */
+  /** man_made=bridge: the feature is a bridge deck/structure (undefined otherwise) */
   bridge?: string;
   /** OSM level=* tag (undefined when absent) */
   level?: number;
@@ -185,7 +185,7 @@ export interface ManholeFeature {
   id: string;
   /** OSM layer=* tag (default 0) */
   layer: number;
-  /** OSM bridge=* tag (undefined when absent/"no") */
+  /** man_made=bridge: the feature is a bridge deck/structure (undefined otherwise) */
   bridge?: string;
   /** OSM level=* tag (undefined when absent) */
   level?: number;
@@ -201,7 +201,7 @@ export interface ParkingFeature {
   surfaceColour?: string;
   /** OSM layer=* tag (default 0) */
   layer: number;
-  /** OSM bridge=* tag (undefined when absent/"no") */
+  /** man_made=bridge: the feature is a bridge deck/structure (undefined otherwise) */
   bridge?: string;
   /** OSM level=* tag (undefined when absent) */
   level?: number;
@@ -215,7 +215,7 @@ export interface StreetLampFeature {
   id: string;
   /** OSM layer=* tag (default 0) */
   layer: number;
-  /** OSM bridge=* tag (undefined when absent/"no") */
+  /** man_made=bridge: the feature is a bridge deck/structure (undefined otherwise) */
   bridge?: string;
   /** OSM level=* tag (undefined when absent) */
   level?: number;
@@ -230,7 +230,7 @@ export interface LanduseFeature {
   kind: string;
   /** OSM layer=* tag (default 0) */
   layer: number;
-  /** OSM bridge=* tag (undefined when absent/"no") */
+  /** man_made=bridge: the feature is a bridge deck/structure (undefined otherwise) */
   bridge?: string;
   /** OSM level=* tag (undefined when absent) */
   level?: number;
@@ -244,7 +244,7 @@ export interface BollardFeature {
   id: string;
   /** OSM layer=* tag (default 0) */
   layer: number;
-  /** OSM bridge=* tag (undefined when absent/"no") */
+  /** man_made=bridge: the feature is a bridge deck/structure (undefined otherwise) */
   bridge?: string;
   /** OSM level=* tag (undefined when absent) */
   level?: number;
@@ -259,7 +259,7 @@ export interface FenceFeature {
   fence?: string;
   /** OSM layer=* tag (default 0) */
   layer: number;
-  /** OSM bridge=* tag (undefined when absent/"no") */
+  /** man_made=bridge: the feature is a bridge deck/structure (undefined otherwise) */
   bridge?: string;
   /** OSM level=* tag (undefined when absent) */
   level?: number;
@@ -274,7 +274,7 @@ export interface KerbFeature {
   tactilePaving?: string;
   /** OSM layer=* tag (default 0) */
   layer: number;
-  /** OSM bridge=* tag (undefined when absent/"no") */
+  /** man_made=bridge: the feature is a bridge deck/structure (undefined otherwise) */
   bridge?: string;
   /** OSM level=* tag (undefined when absent) */
   level?: number;
@@ -291,7 +291,7 @@ export interface KerbWayFeature {
   overrides?: { idx: number; kerb: string }[];
   /** OSM layer=* tag (default 0) */
   layer: number;
-  /** OSM bridge=* tag (undefined when absent/"no") */
+  /** man_made=bridge: the feature is a bridge deck/structure (undefined otherwise) */
   bridge?: string;
   /** OSM level=* tag (undefined when absent) */
   level?: number;

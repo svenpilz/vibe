@@ -21,12 +21,12 @@ import { DemField } from "./dem";
 interface AreaEntry {
   outer: [number, number][]; // lon/lat ring
   layer: number;
-  /** bridge=* tag: the area is a bridge deck even without layer>0 */
+  /** man_made=bridge: the area is a bridge deck even without layer>0 */
   bridge: boolean;
   bbox: [number, number, number, number]; // minLon, minLat, maxLon, maxLat
 }
 
-/** effective structure level: bridge=* counts as at least layer 1 */
+/** effective structure level: a man_made=bridge deck counts as at least layer 1 */
 function effLayer(layer: number, bridge: boolean): number {
   return bridge ? Math.max(layer, 1) : layer;
 }

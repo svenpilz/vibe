@@ -119,8 +119,8 @@ const farRing: [number, number][] = [
 ok(Math.abs(hf4.fillMFor([farRing], 0)(cLon, cLat) - (hf4.groundM(cLon, cLat) ?? 0)) < 1e-9,
   "disconnected layer-0 area stays on DGM ground");
 
-// bridge=* without layer: the deck still takes the DOM surface (OSM wiki:
-// bridge=yes/viaduct on an area) and occludes the ground below
+// man_made=bridge deck without layer: the deck still takes the DOM surface
+// (OSM wiki: man_made=bridge marks the structure) and occludes the ground below
 const hf5 = new HeightField();
 hf5.dem = hf.dem;
 hf5.dom = hf.dom;
@@ -132,11 +132,11 @@ const bridgeRing: [number, number][] = [
 ];
 hf5.registerArea(bridgeRing, 0, true);
 ok(Math.abs(hf5.fillMFor([bridgeRing], 0, true)(sLon, sLat) - surfS) < 0.5,
-  `bridge=yes area at layer 0 takes DOM height ${hf5.fillMFor([bridgeRing], 0, true)(sLon, sLat).toFixed(1)} m`);
+  `man_made=bridge area at layer 0 takes DOM height ${hf5.fillMFor([bridgeRing], 0, true)(sLon, sLat).toFixed(1)} m`);
 ok(Math.abs(hf5.stickM(sLon, sLat) - surfS) < 0.5,
-  "kerb on a bridge=yes boundary vertex sticks to the deck (DOM) height");
+  "kerb on a man_made=bridge boundary vertex sticks to the deck (DOM) height");
 ok((hf5 as unknown as { vertexMaxLayer: Map<string, number> }).vertexMaxLayer.get(`${Math.round(sLon * 1e7)}:${Math.round(sLat * 1e7)}`) === 1,
-  "bridge=yes vertex counts as layer 1 for connectivity");
+  "man_made=bridge vertex counts as layer 1 for connectivity");
 
 if (failures > 0) {
   console.error(`${failures} height policy test(s) FAILED`);

@@ -422,7 +422,9 @@ function draw() {
     }
   }
   if (scene) g.renderScene(scene);
-  if (loading && scene) hideLoadUi();
+  // hide only once the first frame WITH the loaded dataset rendered — at boot
+  // an empty scene exists before any load starts and must not dismiss the UI
+  if (loading && scene && dataset) hideLoadUi();
 }
 
 /** tessellate everything LOD-visible in the whole dataset into the scene
@@ -433,13 +435,14 @@ function demZAt(p: Pt): number {
   return (hf.groundM(xToLon(p[0]), yToLat(p[1])) ?? 0) * pxPerMeter();
 }
 
-/** bridge=* (OSM wiki): the feature is a bridge deck/viaduct structure */
+/** man_made=bridge (OSM wiki): the feature is a bridge deck structure.
+ *  bridge=* alone does not identify a bridge */
 function isBridge(f: { bridge?: string }): boolean {
   return !!f.bridge;
 }
 
-/** height function for a filled area feature: bridge decks (bridge=* or
- *  layer>0) and polygons CONNECTED to a higher layer take the DOM surface
+/** height function for a filled area feature: bridge decks (man_made=bridge
+ *  or layer>0) and polygons CONNECTED to a higher layer take the DOM surface
  *  (stay continuous with the deck); a layer-0 area:highway passing UNDER a
  *  bridge shares no vertex with it and stays on the DGM ground */
 function fillZAt(f: { layer?: number; outer: Q[][][]; bridge?: string }): ((p: Pt) => number) | undefined {
@@ -521,11 +524,17 @@ function buildGeometry() {
       // must paint AFTER its surrounding area, or the surrounding
       // fill covers the island's surface
       visibleAreas(bbox).sort((a, b) =>
-        a.highway === "traffic_island" && b.highway !== "traffic_island"
-          ? 1
-          : b.highway === "traffic_island" && a.highway !== "traffic_island"
-            ? -1
-            : 0,
+        // man_made=bridge deck areas FIRST: an area:highway mapped on the
+        // same deck paints its surface over the deck fill
+        a.highway === "bridge" && b.highway !== "bridge"
+          ? -1
+          : b.highway === "bridge" && a.highway !== "bridge"
+            ? 1
+            : a.highway === "traffic_island" && b.highway !== "traffic_island"
+              ? 1
+              : b.highway === "traffic_island" && a.highway !== "traffic_island"
+                ? -1
+                : 0,
       )
     : [];
   const bl =
@@ -636,8 +645,8 @@ function buildGeometry() {
       // seams at high zoom, the stroke scales with the ground resolution
       for (const ring of area.outer) g.stroke(closedRingPts(ring), seamW, { color: solid, zAt: fillZAt(area) });
       for (const ring of area.holes) g.stroke(closedRingPts(ring), seamW, { color: solid, zAt: fillZAt(area) });
-      // bridge decks (bridge=* or layer>0) get a visible edge so the deck
-      // reads as a structure when orbiting
+      // bridge decks (man_made=bridge or layer>0) get a visible edge so the
+      // deck reads as a structure when orbiting
       if (isBridge(area) || area.layer > 0)
         for (const ring of area.outer)
           g.stroke(closedRingPts(ring), pxToWorld(2.5), { color: rgba("#55555e"), zAt: fillZAt(area) });
@@ -2760,6 +2769,23 @@ function hideLoadUi(): void {
   document.getElementById("legend")!.style.display = "block";
 }
 
+/** show the progress bar + spinner and hide the drop zone for a dataset load
+ *  (called at the START of every load, including the bundled example's fetch
+ *  phase — otherwise nothing is visible while the PBF/DEMs download) */
+function showLoadUi(name: string, byteLength?: number): void {
+  loading = true;
+  document.getElementById("dropzone")!.style.display = "none";
+  document.getElementById("progressbar")!.style.display = "block";
+  const pfill = document.getElementById("pbrfill") as HTMLDivElement;
+  pfill.style.width = "0%";
+  document.getElementById("spinner")!.style.display = "block";
+  document.getElementById("spinnertxt")!.textContent = `loading ${name}…`;
+  document.getElementById("layers")!.style.display = "none";
+  statusEl.textContent = byteLength
+    ? `loading ${name} (${(byteLength / 1e6).toFixed(1)} MB)…`
+    : `loading ${name}…`;
+}
+
 function loadPbfFile(file: File) {
   file.arrayBuffer().then((buf) => loadPbfBuffer(buf, file.name));
 }
@@ -2789,7 +2815,7 @@ async function finishLoadAsync(name: string): Promise<void> {
 async function loadBundledExample(): Promise<boolean> {
   try {
     // fetch PBF and both DEM grids in parallel — no point serializing them
-    loading = true;
+    showLoadUi("berlin-example.osm.pbf");
     uiPhase("loading height models (DGM+DOM)", 3);
     const h = new HeightField();
     const [res, demOk, domOk] = await Promise.all([
@@ -2819,20 +2845,7 @@ function loadPbfBuffer(buf: ArrayBuffer, name: string) {
   });
   currentWorker = worker;
   const loadStart = performance.now();
-  loading = true;
-
-  const dropzone = document.getElementById("dropzone")!;
-  const pbar = document.getElementById("progressbar")!;
-  const pfill = document.getElementById("pbrfill") as HTMLDivElement;
-  const plabel = document.getElementById("pbrlabel")!;
-  const spinner = document.getElementById("spinner")!;
-  const spinnerTxt = document.getElementById("spinnertxt")!;
-  dropzone.style.display = "none";
-  pbar.style.display = "block";
-  spinner.style.display = "block";
-  spinnerTxt.textContent = `loading ${name}…`;
-  document.getElementById("layers")!.style.display = "none";
-  statusEl.textContent = `loading ${name} (${(buf.byteLength / 1e6).toFixed(1)} MB)…`;
+  showLoadUi(name, buf.byteLength);
 
   worker.onmessage = (e: MessageEvent) => {
     const m = e.data;
@@ -2868,9 +2881,9 @@ function loadPbfBuffer(buf: ArrayBuffer, name: string) {
     } else if (m.type === "error") {
       loading = false;
       statusEl.textContent = `error: ${m.message}`;
-      pbar.style.display = "none";
-      spinner.style.display = "none";
-      dropzone.style.display = "block";
+      document.getElementById("progressbar")!.style.display = "none";
+      document.getElementById("spinner")!.style.display = "none";
+      document.getElementById("dropzone")!.style.display = "block";
       worker.terminate();
       currentWorker = null;
     }
