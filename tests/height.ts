@@ -260,6 +260,47 @@ ok((hf5 as unknown as { vertexMaxLayer: Map<string, number> }).vertexMaxLayer.ge
     `lane marking inside the connected ramp sticks to the road surface (${hf7.stickM(pAdj[0], pAdj[1]).toFixed(2)} m = flattened fill ${flatAdj.toFixed(2)} m)`);
 }
 
+// --- roads always use the DOM (visible surface), except occluded cells ---
+{
+  // synthetic grids: DGM flat 40 m, DOM flat 42 m (DOM = topmost surface)
+  const tLon = 13.32, tLat = 52.456;
+  const [tE, tN] = lonLatToUtm33(tLon, tLat);
+  const cols = 20, rows = 20, cellM = 10;
+  const header: DemHeader = {
+    crs: "EPSG:25833", cellM, originE: tE - 105, originN: tN - 105,
+    cols, rows, heightOffsetM: 0, heightScaleM: 0.01, nodata: 65535,
+  };
+  const mk = (z: number) => {
+    const raw = new Uint16Array(cols * rows).fill(Math.round(z / header.heightScaleM));
+    return DemField.fromData(header, raw.buffer);
+  };
+  const hR = new HeightField();
+  hR.dem = mk(40);
+  hR.dom = mk(42);
+  // occlude the east half (as if a bridge deck is above it in 2D), then inpaint
+  hR.dem.occludeRing([
+    [tLon + 0.0001, tLat - 0.0004], [tLon + 0.0009, tLat - 0.0004],
+    [tLon + 0.0009, tLat + 0.0004], [tLon + 0.0001, tLat + 0.0004],
+  ]);
+  hR.dem.inpaint();
+  ok(hR.dem.isOccluded(tLon + 0.0005, tLat) && !hR.dem.isOccluded(tLon - 0.0005, tLat),
+    "occlusion mask: east cell occluded, west cell not");
+  // road ring fully in the non-occluded west: takes the DOM (42 m)
+  const westRing: [number, number][] = [
+    [tLon - 0.0008, tLat - 0.0002], [tLon - 0.0002, tLat - 0.0002],
+    [tLon - 0.0002, tLat + 0.0002], [tLon - 0.0008, tLat + 0.0002],
+  ];
+  ok(Math.abs(hR.fillMFor([westRing], 0, false, true, true)(tLon - 0.0005, tLat) - 42) < 0.1,
+    `open road takes the DOM surface (${hR.fillMFor([westRing], 0, false, true, true)(tLon - 0.0005, tLat).toFixed(2)} m ≈ 42)`);
+  // road ring fully under the occluder: takes the inpainted DGM ground (40 m)
+  const eastRing: [number, number][] = [
+    [tLon + 0.0002, tLat - 0.0002], [tLon + 0.0008, tLat - 0.0002],
+    [tLon + 0.0008, tLat + 0.0002], [tLon + 0.0002, tLat + 0.0002],
+  ];
+  ok(Math.abs(hR.fillMFor([eastRing], 0, false, true, true)(tLon + 0.0005, tLat) - 40) < 0.1,
+    `occluded road (under a bridge in 2D) stays on the inpainted ground (${hR.fillMFor([eastRing], 0, false, true, true)(tLon + 0.0005, tLat).toFixed(2)} m ≈ 40)`);
+}
+
 if (failures > 0) {
   console.error(`${failures} height policy test(s) FAILED`);
   process.exit(1);

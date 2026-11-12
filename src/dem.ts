@@ -112,6 +112,16 @@ export class DemField {
   private sampleCache = new Map<string, number | null>();
   private static SAMPLE_CACHE_MAX = 400000;
 
+  /** is the DGM cell at lon/lat occluded from above (under a building or a
+   *  higher-layer feature in 2D)? Those cells are inpainted by inpaint() */
+  isOccluded(lon: number, lat: number): boolean {
+    const [E, N] = lonLatToUtm33(lon, lat);
+    const c = Math.floor((E - this.h.originE) / this.h.cellM);
+    const r = Math.floor((N - this.h.originN) / this.h.cellM);
+    if (c < 0 || r < 0 || c >= this.h.cols || r >= this.h.rows) return false;
+    return this.occluded[r * this.h.cols + c] === 1;
+  }
+
   sampleM(lon: number, lat: number): number | null {
     const key = `${Math.round(lon * 1e7)}:${Math.round(lat * 1e7)}`;
     const hit = this.sampleCache.get(key);

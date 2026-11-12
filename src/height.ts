@@ -158,8 +158,11 @@ export class HeightField {
       const prevMax = this.vertexMaxLayer.get(key) ?? 0;
       if (eff > prevMax) this.vertexMaxLayer.set(key, eff);
     }
-    // road/bridge deck areas are plane-fitted: locally flat, but can slope
-    const f = road ? planeFitM([outer], this.fillM(eff)) : this.fillM(eff);
+    // road/bridge deck areas are plane-fitted: locally flat, but can slope.
+    // layer-0 roads use the road surface (DOM except occluded); decks (eff>0)
+    // use the pure DOM
+    const baseFn = road ? (eff > 0 ? this.surfaceFn() : this.roadSurfaceFn()) : this.fillM(eff);
+    const f = road ? planeFitM([outer], baseFn) : baseFn;
     this.areas.push({ outer, layer, bridge, road, fn: f, bbox: [minLon, minLat, maxLon, maxLat] });
     for (const [lon, lat] of outer) {
       const key = vkey(lon, lat);
@@ -241,9 +244,10 @@ export class HeightField {
       if (eff > 0) continue; // structures already render on the DOM
       if (!direct[i] && !adjacent[i]) continue;
       this.connectedRings.add(this.ringKey(a.outer));
-      // recompute the stored fn on the DOM surface so sticking features ride
-      // the same (plane-fitted) surface as the rendered fill
-      const f = a.road ? planeFitM([a.outer], this.surfaceFn()) : this.surfaceFn();
+      // recompute the stored fn so sticking features ride the same
+      // (plane-fitted) surface as the rendered fill
+      const base = eff > 0 || !a.road ? this.surfaceFn() : this.roadSurfaceFn();
+      const f = a.road ? planeFitM([a.outer], base) : base;
       a.fn = f;
       for (const [lon, lat] of a.outer) {
         const key = vkey(lon, lat);
@@ -267,6 +271,7 @@ export class HeightField {
   fillMFor(rings: [number, number][][], layer: number, bridge = false, connected = true, flatten = false): (lon: number, lat: number) => number {
     let base: (lon: number, lat: number) => number;
     if (effLayer(layer, bridge) > 0) base = this.surfaceFn();
+    else if (flatten) base = this.roadSurfaceFn(); // roads: always the visible surface (DOM), occluded -> inpainted ground
     else {
       let hit = false;
       if (connected) {
@@ -287,6 +292,19 @@ export class HeightField {
   private surfaceFn(): (lon: number, lat: number) => number {
     const dom = this.dom, dem = this.dem;
     return (lon, lat) => (dom ? dom.sampleM(lon, lat) ?? (dem ? dem.sampleM(lon, lat) ?? 0 : 0) : dem ? dem.sampleM(lon, lat) ?? 0 : 0);
+  }
+
+  /** road surface: the DOM (the visible top surface from above — on open
+   *  ground that IS the road surface), except where the ground cell is
+   *  occluded from above (under a bridge/building in 2D): there the
+   *  inpainted DGM ground is used, so a layer-0 road passing under a bridge
+   *  stays on the ground instead of snapping to the deck */
+  private roadSurfaceFn(): (lon: number, lat: number) => number {
+    const dom = this.dom, dem = this.dem;
+    return (lon, lat) => {
+      if (dem && dem.isOccluded(lon, lat)) return dem.sampleM(lon, lat) ?? 0;
+      return dom ? dom.sampleM(lon, lat) ?? (dem ? dem.sampleM(lon, lat) ?? 0 : 0) : dem ? dem.sampleM(lon, lat) ?? 0 : 0;
+    };
   }
   private groundFn(): (lon: number, lat: number) => number {
     const dem = this.dem;
