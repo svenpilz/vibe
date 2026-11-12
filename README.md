@@ -59,7 +59,7 @@ status bar shows the current zoom level and the deployed git commit.
 | Footways       | `highway=footway` or `footway=sidewalk` ways                              | |
 | Crossings      | `footway=crossing` or `crossing=*` ways                                    | `crossing:markings=*`, falling back to `crossing=zebra → zebra` |
 | Kerbs          | `barrier=kerb` or `kerb=*` nodes **and** ways                              | `kerb` type + `tactile_paving`; kerb nodes on a kerb way override locally (~1 m) |
-| Buildings      | `building=*` closed ways and multipolygon relations                        | Outline only |
+| Buildings      | `building=*` closed ways and multipolygon relations (`building:levels`/`height` carried) | Extruded in 3D: height tag, else levels×3 m, else 6 m |
 | Grass          | `landuse=grass` closed ways and multipolygon relations (holes supported)    | also `natural=scrub`, `leisure=garden` |
 | Parking        | `amenity=parking` closed ways and multipolygon relations (holes supported) | `amenity=parking` + `parking=lane` ways on a carriageway are parking lanes instead (§5) |
 | Landuse        | `landuse=residential/commercial/retail` closed ways                        | translucent fill |
@@ -346,7 +346,9 @@ the anchored left traffic edge (lane 1) to the right edge (lane n). Line style:
 - Surface palette: asphalt, concrete, sett, paving_stones, cobblestone, gravel, grass,
   compacted and more (legend on screen). `surface:colour`/`colour` overrides the palette
   when present and valid.
-- Buildings: gray outlines. Grass: green fill. Kerbs: red raised, teal lowered, purple
+- Buildings: extruded 3D prisms when the camera is tilted (height from `height=*`, else
+  `building:levels`×3 m, else 6 m), flat translucent fill + outline when viewed top-down.
+  Grass: green fill. Kerbs: red raised, teal lowered, purple
   flush, yellow tactile paving. Areas fill with a same-color edge stroke so adjacent
   polygons read as one continuous surface.
 - **Level of detail** (zoom thresholds, slippy-map zoom levels): highway areas always
