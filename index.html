@@ -32,6 +32,15 @@
     }
     #help b { color: #fff; }
 
+    #minimap {
+      position: fixed; bottom: 12px; right: 12px;
+      background: rgba(16, 18, 24, 0.85);
+      border-radius: 8px; padding: 6px;
+      backdrop-filter: blur(8px);
+    }
+    #minimap canvas { display: block; border-radius: 4px; }
+    #minimap .label { color: #9aa4b2; font-size: 10px; text-align: center; margin-top: 2px; }
+
     #status {
       position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
       background: rgba(16, 18, 24, 0.88); color: #cfd6df;
@@ -54,6 +63,7 @@
     <b>W A S D</b> / arrows drive · <b>C</b> chase cam · <b>V</b> driver view · <b>R</b> reset car
   </div>
   <div id="status">loading…</div>
+  <div id="minimap"><canvas id="minimap-canvas" width="220" height="220"></canvas><div class="label">N ↑ · 2 km around S Friedenau</div></div>
   <script type="module" src="/src3d/main.ts"></script>
 </body>
 </html>

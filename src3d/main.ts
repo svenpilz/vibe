@@ -261,6 +261,66 @@ async function boot(): Promise<void> {
     else buses++;
   }
 
+  // minimap: static layer rendered once, car marker per frame
+  const mmCanvas = document.getElementById("minimap-canvas") as HTMLCanvasElement;
+  const mmCtx = mmCanvas.getContext("2d")!;
+  const mmStatic = document.createElement("canvas");
+  mmStatic.width = mmCanvas.width;
+  mmStatic.height = mmCanvas.height;
+  const mmScale = mmCanvas.width / 4400; // px per meter, covers the 4.4 km grid
+  const mmToPx = (x: number, z: number): [number, number] => [mmCanvas.width / 2 + x * mmScale, mmCanvas.height / 2 - z * mmScale];
+  {
+    const c = mmStatic.getContext("2d")!;
+    c.fillStyle = "#3f5a38";
+    c.fillRect(0, 0, mmStatic.width, mmStatic.height);
+    c.strokeStyle = "#6b6f78";
+    c.lineWidth = Math.max(1, 2 * mmScale * 3);
+    c.beginPath();
+    for (const seg of roads.segments) {
+      const [x0, y0] = mmToPx(seg.ax, seg.ay);
+      const [x1, y1] = mmToPx(seg.bx, seg.by);
+      c.moveTo(x0, y0);
+      c.lineTo(x1, y1);
+    }
+    c.stroke();
+    c.fillStyle = "#c9bfa8";
+    for (const poly of buildingPolygons(data)) {
+      c.beginPath();
+      poly.forEach(([x, z], i) => {
+        const [px, py] = mmToPx(x, z);
+        if (i === 0) c.moveTo(px, py);
+        else c.lineTo(px, py);
+      });
+      c.closePath();
+      c.fill();
+    }
+  }
+  function drawMinimap(): void {
+    mmCtx.drawImage(mmStatic, 0, 0);
+    // camera view direction
+    const cf = new THREE.Vector3();
+    camera.getWorldDirection(cf);
+    const [cx, cy] = mmToPx(carState.x, carState.z);
+    mmCtx.strokeStyle = "rgba(255,255,255,0.7)";
+    mmCtx.lineWidth = 1.5;
+    mmCtx.beginPath();
+    mmCtx.moveTo(cx, cy);
+    mmCtx.lineTo(cx + cf.x * 18, cy - cf.z * 18);
+    mmCtx.stroke();
+    // car marker
+    mmCtx.fillStyle = "#ff4433";
+    mmCtx.save();
+    mmCtx.translate(cx, cy);
+    mmCtx.rotate(Math.PI / 2 - carState.heading); // canvas y is south, heading is atan2(north, east)
+    mmCtx.beginPath();
+    mmCtx.moveTo(0, -6);
+    mmCtx.lineTo(4, 5);
+    mmCtx.lineTo(-4, 5);
+    mmCtx.closePath();
+    mmCtx.fill();
+    mmCtx.restore();
+  }
+
   const clock = new THREE.Clock();
   let hudTimer = 0;
 
@@ -344,6 +404,7 @@ async function boot(): Promise<void> {
     }
     if (!driverView) controls.update();
     renderer.render(scene, camera);
+    if (hudTimer > 0.1) drawMinimap();
     hudTimer += dt;
     if (hudTimer > 0.25) {
       hudTimer = 0;
