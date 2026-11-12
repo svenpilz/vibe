@@ -18,10 +18,9 @@ The 2D micromapping visualizer lives on `main` (https://svenpilz.github.io/vibe/
 | `C` | toggle chase cam (camera follows the car) |
 | `R` | reset the car to its spawn point |
 
-The car is constrained to the road network: it snaps to the nearest road segment (elevation-aware,
-so it stays on the level it is driving on and can pass **under bridges**) and cannot drive past
-the road edge or through buildings. Its height follows the road deck elevation, so on a `layer=1`
-bridge it drives 5 m above the road passing underneath.
+The car drives on the road network (elevation-aware snapping, so it can pass **under bridges**,
+and on a `layer=1` deck it drives 5 m above the road below) and can also go **off-road** — it then
+follows the bare-earth DGM1 terrain with extra drag. Buildings block the car.
 
 ## Real heights — three combined sources
 

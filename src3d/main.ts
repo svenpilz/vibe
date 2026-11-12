@@ -190,9 +190,11 @@ async function boot(): Promise<void> {
 
   const keys = new Set<string>();
   let follow = true;
+  let driverView = false;
   window.addEventListener("keydown", (e) => {
     keys.add(e.code);
-    if (e.code === "KeyC") follow = !follow;
+    if (e.code === "KeyC") { follow = !follow; driverView = false; }
+    if (e.code === "KeyV") { driverView = !driverView; follow = false; }
     if (e.code === "KeyR" && spawn) {
       carState.x = spawn.x;
       carState.y = spawn.y;
@@ -288,26 +290,13 @@ async function boot(): Promise<void> {
       carState.speed *= -0.3;
     }
     const q = index.nearest(nx, nz, 80, carState.y);
-    if (q) {
-      const allowed = q.halfW + 0.95;
-      if (q.dist > allowed) {
-        const abx = q.seg.bx - q.seg.ax;
-        const aby = q.seg.by - q.seg.ay;
-        const len = Math.hypot(abx, aby) || 1;
-        const px = q.seg.ax + abx * q.t;
-        const py = q.seg.ay + aby * q.t;
-        let ox = nx - px;
-        let oy = nz - py;
-        const ol = Math.hypot(ox, oy) || 1;
-        ox /= ol;
-        oy /= ol;
-        nx = px + ox * allowed;
-        nz = py + oy * allowed;
-        carState.speed *= 0.55;
-      }
+    const onRoad = q !== undefined && q.dist <= q.halfW + 0.95;
+    if (onRoad && q) {
       carState.y = q.elev;
     } else {
+      // off-road: follow the bare-earth terrain, with extra drag
       carState.y = sampleTerrainM(data.terrain, nx, nz);
+      carState.speed *= Math.max(0, 1 - 1.8 * dt);
     }
     carState.x = nx;
     carState.z = nz;
@@ -332,7 +321,23 @@ async function boot(): Promise<void> {
       v.mesh.position.set(p.x, p.elev, p.z);
       v.mesh.rotation.y = -p.heading + Math.PI / 2;
     }
-    if (follow) {
+    if (driverView) {
+      // first-person driver view: eye height in the car, looking along heading
+      controls.enabled = false;
+      const eye = 1.62;
+      const fx = Math.cos(carState.heading);
+      const fz = Math.sin(carState.heading);
+      const qf = index.nearest(carState.x + fx * 2.1, carState.z + fz * 2.1, 30, carState.y);
+      const qb = index.nearest(carState.x - fx * 2.1, carState.z - fz * 2.1, 30, carState.y);
+      const pitch = qf && qb ? Math.atan2(qb.elev - qf.elev, 4.2) : 0;
+      camera.position.set(carState.x, carState.y + eye, carState.z);
+      camera.rotation.set(0, 0, 0);
+      camera.rotateY(-carState.heading + Math.PI / 2);
+      camera.rotateX(-pitch);
+    } else {
+      controls.enabled = true;
+    }
+    if (follow && !driverView) {
       controls.target.lerp(new THREE.Vector3(carState.x, carState.y + 1.5, carState.z), Math.min(1, dt * 5));
     }
     controls.update();
@@ -345,7 +350,7 @@ async function boot(): Promise<void> {
       hud.status.textContent =
         `${kmh} km/h · ${carState.y.toFixed(1)} m a.s.l.` +
         (q ? ` · layer ${q.layer} road` : " · off road") +
-        ` · ${follow ? "chase cam (C)" : "free cam (C)"} · R reset · commit ${__COMMIT__}`;
+        ` · ${driverView ? "driver view (V)" : follow ? "chase cam (C)" : "free cam (C)"} · R reset · commit ${__COMMIT__}`;
     }
   }
   animate();
