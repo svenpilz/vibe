@@ -2,7 +2,7 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main, heightfield]
+    branches: [main, heightfield-experimental]
   workflow_dispatch:
 
 permissions:
@@ -33,10 +33,10 @@ jobs:
       - name: Build static site
         run: npm run build
 
-      # heightfield branch -> subfolder (https://svenpilz.github.io/vibe/vibe-heightfield/)
+      # heightfield-experimental branch -> subfolder (https://svenpilz.github.io/vibe/vibe-heightfield/)
       - uses: actions/checkout@v4
         with:
-          ref: heightfield
+          ref: heightfield-experimental
           path: heightfield-src
 
       - name: Install dependencies (heightfield)
