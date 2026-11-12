@@ -286,11 +286,12 @@ async function boot(): Promise<void> {
   const mmCanvas = document.getElementById("minimap-canvas") as HTMLCanvasElement;
   const mmCtx = mmCanvas.getContext("2d")!;
   const mmStatic = document.createElement("canvas");
-  mmStatic.width = mmCanvas.width;
-  mmStatic.height = mmCanvas.height;
-  const mmScale = mmCanvas.width / 4400; // px per meter of the static full-extent layer
+  const mmSS = 4; // supersample the static layer so the 500 m window is not blurry
+  mmStatic.width = mmCanvas.width * mmSS;
+  mmStatic.height = mmCanvas.height * mmSS;
+  const mmScale = mmStatic.width / 4400; // px per meter of the static full-extent layer
   const mmWindowM = 1000; // minimap shows a 500 m radius around the car
-  const mmToPx = (x: number, z: number): [number, number] => [mmCanvas.width / 2 + x * mmScale, mmCanvas.height / 2 - z * mmScale];
+  const mmToPx = (x: number, z: number): [number, number] => [mmStatic.width / 2 + x * mmScale, mmStatic.height / 2 - z * mmScale];
   {
     const c = mmStatic.getContext("2d")!;
     c.fillStyle = "#3f5a38";
@@ -320,16 +321,18 @@ async function boot(): Promise<void> {
   function drawMinimap(): void {
     // car-centered 500 m radius window, sampled from the full-extent static layer
     const halfPx = (mmWindowM / 2) * mmScale;
-    const cx0 = mmCanvas.width / 2 + carState.x * mmScale;
-    const cy0 = mmCanvas.height / 2 - carState.z * mmScale;
+    const cx0 = mmStatic.width / 2 + carState.x * mmScale;
+    const cy0 = mmStatic.height / 2 - carState.z * mmScale;
     const sx = Math.max(0, Math.min(mmStatic.width - 2 * halfPx, cx0 - halfPx));
     const sy = Math.max(0, Math.min(mmStatic.height - 2 * halfPx, cy0 - halfPx));
+    mmCtx.imageSmoothingEnabled = true;
+    mmCtx.imageSmoothingQuality = "high";
     mmCtx.drawImage(mmStatic, sx, sy, 2 * halfPx, 2 * halfPx, 0, 0, mmCanvas.width, mmCanvas.height);
     // camera view direction
     const cf = new THREE.Vector3();
     camera.getWorldDirection(cf);
-    const cx = mmCanvas.width / 2 + (carState.x * mmScale + mmCanvas.width / 2 - cx0) * (mmCanvas.width / (2 * halfPx));
-    const cy = mmCanvas.height / 2 - (carState.z * mmScale - (cy0 - mmCanvas.height / 2)) * (mmCanvas.height / (2 * halfPx));
+    const cx = mmCanvas.width / 2 + (carState.x * mmScale + mmStatic.width / 2 - cx0) * (mmCanvas.width / (2 * halfPx));
+    const cy = mmCanvas.height / 2 - (carState.z * mmScale - (cy0 - mmStatic.height / 2)) * (mmCanvas.height / (2 * halfPx));
     mmCtx.strokeStyle = "rgba(255,255,255,0.7)";
     mmCtx.lineWidth = 1.5;
     mmCtx.beginPath();
