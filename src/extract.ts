@@ -539,6 +539,13 @@ function parseLayer(v: string | undefined): number {
   return Number.isFinite(n) ? Math.max(-16, Math.min(16, n)) : 0;
 }
 
+/** bridge=* (OSM wiki: bridge=yes/viaduct/... on ways/areas, usually with
+ *  layer>=1); man_made=bridge deck areas count as bridges too.
+ *  Undefined when absent or "no" */
+function parseBridge(v: string | undefined): string | undefined {
+  return v === undefined || v === "no" ? undefined : v;
+}
+
 /** building:levels=* -> floor count (first value of a "2;3" list) */
 function parseLevels(v: string | undefined): number | undefined {
   if (v === undefined) return undefined;
@@ -615,6 +622,7 @@ export function extractFeatures(
   const parkingLanesOnCarriageway: {
     id: string;
     layer: number;
+    bridge?: string;
     outer: Q[][][];
     holes: Q[][][];
     bbox: [number, number, number, number];
@@ -659,6 +667,7 @@ export function extractFeatures(
         parkingLanesOnCarriageway.push({
           id: `w${way.id}`,
           layer: parseLayer(tags["layer"]),
+          bridge: parseBridge(tags["bridge"] ?? (tags["man_made"] === "bridge" ? "yes" : undefined)),
           outer: [qc2],
           holes: [],
           bbox: bboxOfQ(qc2),
@@ -673,6 +682,7 @@ export function extractFeatures(
           surface: tags["surface"],
           surfaceColour: tags["surface:colour"],
           layer: parseLayer(tags["layer"]),
+          bridge: parseBridge(tags["bridge"] ?? (tags["man_made"] === "bridge" ? "yes" : undefined)),
           level: parseLevel(tags["level"]),
           outer: [qc],
           holes: [],
@@ -697,6 +707,7 @@ export function extractFeatures(
           id: `w${way.id}`,
           kind: landuseKind,
           layer: parseLayer(tags["layer"]),
+          bridge: parseBridge(tags["bridge"] ?? (tags["man_made"] === "bridge" ? "yes" : undefined)),
           level: parseLevel(tags["level"]),
           outer: [qc],
           holes: [],
@@ -717,6 +728,7 @@ export function extractFeatures(
           usage: buildingUsage(tags),
           name: tags["name"],
           layer: parseLayer(tags["layer"]),
+          bridge: parseBridge(tags["bridge"] ?? (tags["man_made"] === "bridge" ? "yes" : undefined)),
           level: parseLevel(tags["level"]),
           levels: parseLevels(tags["building:levels"]),
           heightM: parseHeightM(tags["height"]),
@@ -755,6 +767,7 @@ export function extractFeatures(
           tags["junction"] === "roundabout" ||
           tags["junction"] === "circular",
         layer: parseLayer(tags["layer"]),
+          bridge: parseBridge(tags["bridge"] ?? (tags["man_made"] === "bridge" ? "yes" : undefined)),
         level: parseLevel(tags["level"]),
         outer: [qc],
         holes: [],
@@ -780,6 +793,7 @@ export function extractFeatures(
           id: `w${way.id}`,
           kind: greenKind,
           layer: parseLayer(tags["layer"]),
+          bridge: parseBridge(tags["bridge"] ?? (tags["man_made"] === "bridge" ? "yes" : undefined)),
           level: parseLevel(tags["level"]),
           outer: [qc],
           holes: [],
@@ -798,6 +812,7 @@ export function extractFeatures(
           id: `w${way.id}`,
           fence: tags["fence_type"],
           layer: parseLayer(tags["layer"]),
+          bridge: parseBridge(tags["bridge"] ?? (tags["man_made"] === "bridge" ? "yes" : undefined)),
           level: parseLevel(tags["level"]),
           coords: qc,
           bbox: bboxOfQ(qc),
@@ -826,6 +841,7 @@ export function extractFeatures(
         tactilePaving: tags["tactile_paving"],
         overrides: overrides.length > 0 ? overrides : undefined,
         layer: parseLayer(tags["layer"]),
+          bridge: parseBridge(tags["bridge"] ?? (tags["man_made"] === "bridge" ? "yes" : undefined)),
         level: parseLevel(tags["level"]),
         coords: qc,
         bbox: bboxOfQ(qc),
@@ -858,6 +874,7 @@ export function extractFeatures(
           lit: tags["lit"],
           name: tags["name"],
           layer: parseLayer(tags["layer"]),
+          bridge: parseBridge(tags["bridge"] ?? (tags["man_made"] === "bridge" ? "yes" : undefined)),
           level: parseLevel(tags["level"]),
           coords: qc,
           bbox: bboxOfQ(qc),
@@ -875,6 +892,7 @@ export function extractFeatures(
           lit: tags["lit"],
           name: tags["name"],
           layer: parseLayer(tags["layer"]),
+          bridge: parseBridge(tags["bridge"] ?? (tags["man_made"] === "bridge" ? "yes" : undefined)),
           level: parseLevel(tags["level"]),
           coords: qc,
           bbox: bboxOfQ(qc),
@@ -928,6 +946,7 @@ export function extractFeatures(
           lit: tags["lit"],
           name: tags["name"],
           layer: parseLayer(tags["layer"]),
+          bridge: parseBridge(tags["bridge"] ?? (tags["man_made"] === "bridge" ? "yes" : undefined)),
           level: parseLevel(tags["level"]),
           coords: qc,
           bbox: bboxOfQ(qc),
@@ -969,6 +988,7 @@ export function extractFeatures(
           surface: parkingTags["surface"],
           surfaceColour: parkingTags["surface:colour"],
           layer: parseLayer(parkingTags["layer"]),
+          bridge: parseBridge(parkingTags["bridge"] ?? (parkingTags["man_made"] === "bridge" ? "yes" : undefined)),
           level: parseLevel(parkingTags["level"]),
           outer: outerRingsP,
           holes: holeRingsP,
@@ -1024,6 +1044,7 @@ export function extractFeatures(
         id: `r${rel.id}`,
         kind: greenKind,
         layer: parseLayer(tags["layer"]),
+          bridge: parseBridge(tags["bridge"] ?? (tags["man_made"] === "bridge" ? "yes" : undefined)),
         level: parseLevel(tags["level"]),
         outer: outerRings,
         holes: holeRings,
@@ -1039,6 +1060,7 @@ export function extractFeatures(
         usage: buildingUsage(tags),
         name: tags["name"],
         layer: parseLayer(tags["layer"]),
+          bridge: parseBridge(tags["bridge"] ?? (tags["man_made"] === "bridge" ? "yes" : undefined)),
         level: parseLevel(tags["level"]),
         levels: parseLevels(tags["building:levels"]),
         heightM: parseHeightM(tags["height"]),
@@ -1065,6 +1087,7 @@ export function extractFeatures(
         tags["junction"] === "roundabout" ||
         tags["junction"] === "circular",
       layer: parseLayer(tags["layer"]),
+          bridge: parseBridge(tags["bridge"] ?? (tags["man_made"] === "bridge" ? "yes" : undefined)),
       level: parseLevel(tags["level"]),
       outer: outerRings,
       holes: holeRings,
@@ -1097,6 +1120,7 @@ export function extractFeatures(
         type: "manhole",
         id: `n${id}`,
         layer: parseLayer(tags["layer"]),
+        bridge: undefined, // manholes are never bridges (man_made narrowed above)
         level: parseLevel(tags["level"]),
         lat: Math.round(c.lat * 1e7),
         lon: Math.round(c.lon * 1e7),
@@ -1110,6 +1134,7 @@ export function extractFeatures(
         type: "streetlamp",
         id: `n${id}`,
         layer: parseLayer(tags["layer"]),
+          bridge: parseBridge(tags["bridge"] ?? (tags["man_made"] === "bridge" ? "yes" : undefined)),
         level: parseLevel(tags["level"]),
         lat: Math.round(c.lat * 1e7),
         lon: Math.round(c.lon * 1e7),
@@ -1123,6 +1148,7 @@ export function extractFeatures(
         type: "bollard",
         id: `n${id}`,
         layer: parseLayer(tags["layer"]),
+          bridge: parseBridge(tags["bridge"] ?? (tags["man_made"] === "bridge" ? "yes" : undefined)),
         level: parseLevel(tags["level"]),
         lat: Math.round(c.lat * 1e7),
         lon: Math.round(c.lon * 1e7),

@@ -432,14 +432,19 @@ function demZAt(p: Pt): number {
   return (hf.groundM(xToLon(p[0]), yToLat(p[1])) ?? 0) * pxPerMeter();
 }
 
-/** height function for a filled area feature: layer>0 decks and polygons
- *  CONNECTED to a higher layer take the DOM surface (stay continuous with the
- *  deck); a layer-0 area:highway passing UNDER a bridge shares no vertex with
- *  it and stays on the DGM ground — geometrically disconnected */
-function fillZAt(f: { layer?: number; outer: Q[][][] }): ((p: Pt) => number) | undefined {
+/** bridge=* (OSM wiki): the feature is a bridge deck/viaduct structure */
+function isBridge(f: { bridge?: string }): boolean {
+  return !!f.bridge;
+}
+
+/** height function for a filled area feature: bridge decks (bridge=* or
+ *  layer>0) and polygons CONNECTED to a higher layer take the DOM surface
+ *  (stay continuous with the deck); a layer-0 area:highway passing UNDER a
+ *  bridge shares no vertex with it and stays on the DGM ground */
+function fillZAt(f: { layer?: number; outer: Q[][][]; bridge?: string }): ((p: Pt) => number) | undefined {
   if (!hf || !hf.ready) return undefined;
   const ringsLL = f.outer.map((ring) => ring.map(([x, y]) => [x / Q, y / Q] as [number, number]));
-  const fm = hf.fillMFor(ringsLL, f.layer ?? 0);
+  const fm = hf.fillMFor(ringsLL, f.layer ?? 0, isBridge(f));
   return (p: Pt) => fm(xToLon(p[0]), yToLat(p[1])) * pxPerMeter();
 }
 
@@ -449,6 +454,14 @@ function fillZAt(f: { layer?: number; outer: Q[][][] }): ((p: Pt) => number) | u
 function stickZAt(p: Pt): number {
   if (!hf) return 0;
   return hf.stickM(xToLon(p[0]), yToLat(p[1])) * pxPerMeter();
+}
+
+/** height for a line/point feature on its own layer: inside a bridge polygon
+ *  in 2D, same-layer features take the deck height, lower-layer ones (the
+ *  road passing under the bridge) stay on the ground */
+function lineZAt(f: { layer?: number }): (p: Pt) => number {
+  const L = f.layer ?? 0;
+  return (p: Pt) => (hf ? hf.stickM(xToLon(p[0]), yToLat(p[1]), L) : 0) * pxPerMeter();
 }
 
 /** rasterize occluders (buildings + higher-layer features) into the DGM grid,
@@ -467,22 +480,22 @@ function setupHeights(): void {
     ...dataset.grass,
   ];
   for (const f of polys)
-    if (f.layer > 0) for (const ring of f.outer) hf.dem?.occludeRing(q2ll(ring));
+    if (f.layer > 0 || isBridge(f)) for (const ring of f.outer) hf.dem?.occludeRing(q2ll(ring));
   const lines = [
     ...dataset.centerlines,
     ...dataset.footways,
     ...dataset.crossings,
   ];
   for (const f of lines)
-    if (f.layer > 0) {
+    if (f.layer > 0 || isBridge(f)) {
       hf.dem?.occludeRing(q2ll(f.coords), f.width ?? 6);
-      hf.markHighLine(q2ll(f.coords), f.layer);
+      hf.markHighLine(q2ll(f.coords), f.layer, isBridge(f));
     }
   // inpaint BEFORE registering areas, so reused vertices get the inpainted
   // (interpolated) ground height under occluders
   hf.dem?.inpaint();
   for (const f of polys)
-    for (const ring of f.outer) hf.registerArea(q2ll(ring), f.layer);
+    for (const ring of f.outer) hf.registerArea(q2ll(ring), f.layer, isBridge(f));
 }
 
 function buildGeometry() {
@@ -619,6 +632,11 @@ function buildGeometry() {
       // seams at high zoom, the stroke scales with the ground resolution
       for (const ring of area.outer) g.stroke(closedRingPts(ring), seamW, { color: solid, zAt: fillZAt(area) });
       for (const ring of area.holes) g.stroke(closedRingPts(ring), seamW, { color: solid, zAt: fillZAt(area) });
+      // bridge decks (bridge=* or layer>0) get a visible edge so the deck
+      // reads as a structure when orbiting
+      if (isBridge(area) || area.layer > 0)
+        for (const ring of area.outer)
+          g.stroke(closedRingPts(ring), pxToWorld(2.5), { color: rgba("#55555e"), zAt: fillZAt(area) });
     }
 
     // --- buildings: extruded 3D prisms (height from height=*, else
@@ -647,7 +665,7 @@ function buildGeometry() {
       g.extrude(outer, Math.max(roofZ - baseZ, 0.5 * px), wall, roof, baseZ);
       const outline = rgba("#8a8a94");
       for (const ring of b.outer)
-        g.stroke(closedRingPts(ring), pxToWorld(1.5), { color: outline });
+        g.stroke(closedRingPts(ring), pxToWorld(1.5), { color: outline, zAt: () => baseZ });
     }
 
     // --- centerlines (surface detail) ---
@@ -656,7 +674,7 @@ function buildGeometry() {
       g.stroke(
         linePts(cl.coords),
         Math.max(pxToWorld(1), (cl.width ?? 1.5) * px * 0.5),
-        { color: withAlpha(featureColor(cl.surface, cl.surfaceColour), 0.9) },
+        { color: withAlpha(featureColor(cl.surface, cl.surfaceColour), 0.9), zAt: lineZAt(cl) },
       );
     }
 
@@ -678,6 +696,7 @@ function buildGeometry() {
             fw.surface || fw.surfaceColour
               ? featureColor(fw.surface, fw.surfaceColour)
               : rgba("#cfcfd6"),
+          zAt: lineZAt(fw),
         },
       );
     }
@@ -695,6 +714,7 @@ function buildGeometry() {
           g.stroke(linePts(cr.coords), Math.max(pxToWorld(2), widthM * px), {
             color: rgba("#5a5a60"),
             cap: "butt",
+            zAt: lineZAt(cr),
           });
           drawZebra(cr, widthM, stripe);
         } else if (m.includes("dash")) {
@@ -707,6 +727,7 @@ function buildGeometry() {
             color: rgba(stripe),
             dash: [pxToWorld(2), pxToWorld(3)],
             cap: "butt",
+            zAt: lineZAt(cr),
           });
         }
       } else if (layers.footways) {
@@ -715,6 +736,7 @@ function buildGeometry() {
         g.stroke(linePts(cr.coords), Math.max(pxToWorld(1.5), widthM * px * 0.4), {
           color: rgba("#8a8a92", 0.7),
           cap: "butt",
+          zAt: lineZAt(cr),
         });
       }
       if (clipped) g.popClip();
@@ -733,6 +755,7 @@ function buildGeometry() {
       if (!sl.line || sl.line.length < 2) continue;
       g.stroke(linePts(sl.line), Math.max(pxToWorld(2), 0.4 * px2), {
         color: rgba("#e8e8e8"),
+        zAt: lineZAt(sl),
       });
     }
 
@@ -743,7 +766,7 @@ function buildGeometry() {
       const fc = rgba("#1a1a1a");
       for (const f of fs) {
         if (!onLayer(f)) continue;
-        g.stroke(linePts(f.coords), fw2, { color: fc });
+        g.stroke(linePts(f.coords), fw2, { color: fc, zAt: lineZAt(f) });
       }
     }
 
@@ -764,8 +787,8 @@ function buildGeometry() {
           [0, rgba("rgb(255,225,120)", 0.95)],
           [0.35, rgba("rgb(255,210,80)", 0.45)],
           [1, rgba("rgb(255,200,60)", 0)],
-        ]);
-        g.circle([x, y], Math.max(pxToWorld(1.5), halo * 0.12), rgba("#ffe178"));
+        ], lineZAt(sl));
+        g.circle([x, y], Math.max(pxToWorld(1.5), halo * 0.12), rgba("#ffe178"), lineZAt(sl));
       }
     }
 
@@ -777,7 +800,7 @@ function buildGeometry() {
         if (!onLayer(mh)) continue;
         const x = lonToX(mh.lon / Q),
           y = latToY(mh.lat / Q);
-        g.circle([x, y], mr, rgba("#2f3134"));
+        g.circle([x, y], mr, rgba("#2f3134"), lineZAt(mh));
         // lighter stripes across the cover
         const segs: Pt[][] = [];
         for (let k = -1; k <= 1; k++) {
@@ -788,7 +811,7 @@ function buildGeometry() {
             [x + half, yy],
           ]);
         }
-        g.strokeSegments(segs, stripe, rgba("#565a60"));
+        g.strokeSegments(segs, stripe, rgba("#565a60"), lineZAt(mh));
       }
     }
 
@@ -799,7 +822,7 @@ function buildGeometry() {
         if (!onLayer(b)) continue;
         const x = lonToX(b.lon / Q),
           y = latToY(b.lat / Q);
-        g.circle([x, y], br, rgba("#2f3134")); // dark anthracite
+        g.circle([x, y], br, rgba("#2f3134"), lineZAt(b)); // dark anthracite
       }
     }
   }
@@ -843,6 +866,7 @@ function drawKerbWays(
   for (const kw of kws) {
     if (!onLayer(kw)) continue;
     const base = kerbClass(kw.kerb);
+    const kwZ = lineZAt(kw);
 
     // screen coords + per-vertex normals (right side = road)
     const pts: [number, number][] = kw.coords.map((c) => [
@@ -906,7 +930,7 @@ function drawKerbWays(
 
       if (t === "high" || tPrev === "high") {
         // solid dark kerb line
-        g.stroke([a, b], kerbW, { color: dark, cap: "butt" });
+        g.stroke([a, b], kerbW, { color: dark, cap: "butt", zAt: kwZ });
         // shadow on the road side (right)
         g.stroke(
           [
@@ -914,13 +938,13 @@ function drawKerbWays(
             [b[0] + (nb[0] * (kerbW + shadowW)) / 2, b[1] + (nb[1] * (kerbW + shadowW)) / 2],
           ],
           kerbW,
-          { color: rgba("#000000", 0.28), cap: "butt" },
+          { color: rgba("#000000", 0.28), cap: "butt", zAt: kwZ },
         );
       } else if (t === "lowered" || tPrev === "lowered") {
         // gradient across the kerb width: bright (sidewalk, left) fading
         // to dark (road, right) — appears 3D-shaped; per-vertex colors on
         // the two strip edges reproduce the linear gradient
-        g.stroke([a, b], kerbW, { color: bright, colorPos: dark, cap: "butt" });
+        g.stroke([a, b], kerbW, { color: bright, colorPos: dark, cap: "butt", zAt: kwZ });
       }
     }
   }
@@ -976,7 +1000,7 @@ function drawZebra(cr: LineFeature, widthM: number, color: string) {
     }
     walked += segLen;
   }
-  g.strokeSegments(segs, lineW, rgba(color));
+  g.strokeSegments(segs, lineW, rgba(color), lineZAt(cr));
 }
 
 /**
@@ -1023,7 +1047,7 @@ function drawBoundaryDashes(cr: LineFeature, widthM: number, color: string) {
       }
       off.push([pts[i][0] + nx * offset * side, pts[i][1] + ny * offset * side]);
     }
-    g.stroke(off, lineW, { color: rgba(color), dash, cap: "butt" });
+    g.stroke(off, lineW, { color: rgba(color), dash, cap: "butt", zAt: lineZAt(cr) });
   }
 }
 
@@ -1274,10 +1298,11 @@ function drawLaneMarkings(cl: LineFeature) {
         ? undefined
         : [Math.max(pxToWorld(3), 1.2 * px), Math.max(pxToWorld(2), 1.0 * px)],
       cap: "round",
+      zAt: lineZAt(cl),
     });
     if (samplesOnly) {
       const dot = rgba("#ff3355");
-      for (const p of pts) g.circle(p, pxToWorld(2), dot);
+      for (const p of pts) g.circle(p, pxToWorld(2), dot, lineZAt(cl));
     }
   };
 
@@ -1298,6 +1323,7 @@ function drawLaneMarkings(cl: LineFeature) {
       color: rgba("#e8e8e8"),
       dash: [Math.max(pxToWorld(3), 1.2 * px), Math.max(pxToWorld(2), 1.0 * px)],
       cap: "round",
+      zAt: lineZAt(cl),
     });
   }
   if (hasSpline && sp && !samplesOnly) {
@@ -1348,6 +1374,7 @@ function drawLaneMarkings(cl: LineFeature) {
       if (line.length < 2) continue;
       g.stroke(linePts(line), Math.max(pxToWorld(2), 0.4 * px), {
         color: rgba("#e8e8e8"),
+        zAt: lineZAt(cl),
       });
     }
   }
@@ -1530,7 +1557,7 @@ function drawTurnArrows(cl: LineFeature) {
         p[0] + tx * headLen,
         p[1] + ty * headLen,
       ];
-      g.fillPolygon([[b1, tip, b2]], [], { color: arrowCol });
+      g.fillPolygon([[b1, tip, b2]], [], { color: arrowCol }, 0, lineZAt(cl));
     };
     if (dirs.length === 1 && dirs[0] === Math.PI) {
       // REVERSE: straight shaft, then a U-shaped hook turning

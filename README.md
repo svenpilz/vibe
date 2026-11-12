@@ -46,6 +46,13 @@ status bar shows the current zoom level and the deployed git commit.
 > lane markings, …) stick to the road/landuse they belong to: they reuse the area polygon's
 > own vertices where they coincide (shared OSM nodes), otherwise the topmost containing
 > area — so a kerb on a ground road stays on the ground even when a bridge crosses above.
+> Polygons that share a vertex with a higher-layer feature (road continuing onto a bridge)
+> also take the DOM height, so they stay continuous with the deck. Bridge decks are detected
+> via `bridge=*` **or** `man_made=bridge` and rendered with a visible edge. A bridge polygon
+> is the ground level for same-layer features inside it (2D) — lane markings, kerbs, lamps on
+> the deck ride at deck height — while lower-layer features inside it (the road passing under
+> the bridge) stay on the ground. Tessellation results are
+> memoized per ring and DEM samples per vertex, so zoom/LOD rebuilds reuse them.
 
 ## Specification
 

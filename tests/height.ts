@@ -77,9 +77,24 @@ hf3.registerArea(roadRing, 1);
 ok(Math.abs(hf3.stickM(sLon, sLat) - surfS) < 0.5 && hf3.stickM(sLon, sLat) > groundS + 50,
   "shared vertex: higher layer (bridge deck) height wins");
 
-// point outside all areas falls back to the DOM surface
-ok(Math.abs(hf.stickM(13.19, 52.428) - (hf.surfaceM(13.19, 52.428) ?? 0)) < 1e-9,
-  "outside all areas: falls back to DOM surface height");
+// fallback outside all areas: layer>0 -> DOM surface, layer 0 -> DGM ground
+ok(Math.abs(hf.stickM(13.19, 52.428, 1) - (hf.surfaceM(13.19, 52.428) ?? 0)) < 1e-9,
+  "outside all areas, layer 1: falls back to DOM surface height");
+ok(Math.abs(hf.stickM(13.19, 52.428, 0) - (hf.groundM(13.19, 52.428) ?? 0)) < 1e-9,
+  "outside all areas, layer 0: falls back to DGM ground");
+
+// the bridge deck polygon is the ground level for SAME-layer features inside
+// it (2D), while lower-layer features inside it (road under the bridge in 2D)
+// stay on the ground
+const hf6 = new HeightField();
+hf6.dem = hf.dem;
+hf6.dom = hf.dom;
+hf6.registerArea(roadRing, 1, true); // bridge deck over the structure spot
+const insideP: [number, number] = [sLon + 0.0002, sLat + 0.0002];
+ok(Math.abs(hf6.stickM(insideP[0], insideP[1], 1) - (hf6.surfaceM(insideP[0], insideP[1]) ?? 0)) < 1e-9,
+  "same-layer feature inside bridge polygon takes the deck (DOM) height");
+ok(Math.abs(hf6.stickM(insideP[0], insideP[1], 0) - (hf6.groundM(insideP[0], insideP[1]) ?? 0)) < 1e-9,
+  "layer-0 feature inside bridge polygon (road underneath in 2D) stays on ground");
 
 // connected polygons: a layer-0 area sharing a vertex with a layer>0 bridge
 // line takes the DOM surface, so it stays continuous with the deck
@@ -103,6 +118,25 @@ const farRing: [number, number][] = [
 ];
 ok(Math.abs(hf4.fillMFor([farRing], 0)(cLon, cLat) - (hf4.groundM(cLon, cLat) ?? 0)) < 1e-9,
   "disconnected layer-0 area stays on DGM ground");
+
+// bridge=* without layer: the deck still takes the DOM surface (OSM wiki:
+// bridge=yes/viaduct on an area) and occludes the ground below
+const hf5 = new HeightField();
+hf5.dem = hf.dem;
+hf5.dom = hf.dom;
+const bridgeRing: [number, number][] = [
+  [sLon, sLat],
+  [sLon + 0.0004, sLat],
+  [sLon + 0.0004, sLat + 0.0004],
+  [sLon, sLat + 0.0004],
+];
+hf5.registerArea(bridgeRing, 0, true);
+ok(Math.abs(hf5.fillMFor([bridgeRing], 0, true)(sLon, sLat) - surfS) < 0.5,
+  `bridge=yes area at layer 0 takes DOM height ${hf5.fillMFor([bridgeRing], 0, true)(sLon, sLat).toFixed(1)} m`);
+ok(Math.abs(hf5.stickM(sLon, sLat) - surfS) < 0.5,
+  "kerb on a bridge=yes boundary vertex sticks to the deck (DOM) height");
+ok((hf5 as unknown as { vertexMaxLayer: Map<string, number> }).vertexMaxLayer.get(`${Math.round(sLon * 1e7)}:${Math.round(sLat * 1e7)}`) === 1,
+  "bridge=yes vertex counts as layer 1 for connectivity");
 
 if (failures > 0) {
   console.error(`${failures} height policy test(s) FAILED`);

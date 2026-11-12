@@ -24,6 +24,8 @@ export interface AreaFeature {
   trafficJunction?: boolean;
   /** OSM layer=* tag (default 0) */
   layer: number;
+  /** OSM bridge=* tag (undefined when absent/"no") */
+  bridge?: string;
   /** OSM level=* tag (undefined when absent) */
   level?: number;
   outer: Q[][][];
@@ -45,6 +47,8 @@ export interface LineFeature {
   name?: string;
   /** OSM layer=* tag (default 0) */
   layer: number;
+  /** OSM bridge=* tag (undefined when absent/"no") */
+  bridge?: string;
   /** OSM level=* tag (undefined when absent) */
   level?: number;
   /** ids of the highway areas the way corresponds to (markings clipped to them) */
@@ -148,6 +152,8 @@ export interface BuildingFeature {
   name?: string;
   /** OSM layer=* tag (default 0) */
   layer: number;
+  /** OSM bridge=* tag (undefined when absent/"no") */
+  bridge?: string;
   /** OSM level=* tag (undefined when absent) */
   level?: number;
   /** building:levels=* (floor count, used as the extrusion height heuristic) */
@@ -165,6 +171,8 @@ export interface GrassFeature {
   kind: string;
   /** OSM layer=* tag (default 0) */
   layer: number;
+  /** OSM bridge=* tag (undefined when absent/"no") */
+  bridge?: string;
   /** OSM level=* tag (undefined when absent) */
   level?: number;
   outer: Q[][][];
@@ -177,6 +185,8 @@ export interface ManholeFeature {
   id: string;
   /** OSM layer=* tag (default 0) */
   layer: number;
+  /** OSM bridge=* tag (undefined when absent/"no") */
+  bridge?: string;
   /** OSM level=* tag (undefined when absent) */
   level?: number;
   lat: Q;
@@ -191,6 +201,8 @@ export interface ParkingFeature {
   surfaceColour?: string;
   /** OSM layer=* tag (default 0) */
   layer: number;
+  /** OSM bridge=* tag (undefined when absent/"no") */
+  bridge?: string;
   /** OSM level=* tag (undefined when absent) */
   level?: number;
   outer: Q[][][];
@@ -203,6 +215,8 @@ export interface StreetLampFeature {
   id: string;
   /** OSM layer=* tag (default 0) */
   layer: number;
+  /** OSM bridge=* tag (undefined when absent/"no") */
+  bridge?: string;
   /** OSM level=* tag (undefined when absent) */
   level?: number;
   lat: Q;
@@ -216,6 +230,8 @@ export interface LanduseFeature {
   kind: string;
   /** OSM layer=* tag (default 0) */
   layer: number;
+  /** OSM bridge=* tag (undefined when absent/"no") */
+  bridge?: string;
   /** OSM level=* tag (undefined when absent) */
   level?: number;
   outer: Q[][][];
@@ -228,6 +244,8 @@ export interface BollardFeature {
   id: string;
   /** OSM layer=* tag (default 0) */
   layer: number;
+  /** OSM bridge=* tag (undefined when absent/"no") */
+  bridge?: string;
   /** OSM level=* tag (undefined when absent) */
   level?: number;
   lat: Q;
@@ -241,6 +259,8 @@ export interface FenceFeature {
   fence?: string;
   /** OSM layer=* tag (default 0) */
   layer: number;
+  /** OSM bridge=* tag (undefined when absent/"no") */
+  bridge?: string;
   /** OSM level=* tag (undefined when absent) */
   level?: number;
   coords: Q[][];
@@ -254,6 +274,8 @@ export interface KerbFeature {
   tactilePaving?: string;
   /** OSM layer=* tag (default 0) */
   layer: number;
+  /** OSM bridge=* tag (undefined when absent/"no") */
+  bridge?: string;
   /** OSM level=* tag (undefined when absent) */
   level?: number;
   lat: Q;
@@ -269,6 +291,8 @@ export interface KerbWayFeature {
   overrides?: { idx: number; kerb: string }[];
   /** OSM layer=* tag (default 0) */
   layer: number;
+  /** OSM bridge=* tag (undefined when absent/"no") */
+  bridge?: string;
   /** OSM level=* tag (undefined when absent) */
   level?: number;
   coords: Q[][];

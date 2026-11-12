@@ -21,7 +21,14 @@ import { DemField } from "./dem";
 interface AreaEntry {
   outer: [number, number][]; // lon/lat ring
   layer: number;
+  /** bridge=* tag: the area is a bridge deck even without layer>0 */
+  bridge: boolean;
   bbox: [number, number, number, number]; // minLon, minLat, maxLon, maxLat
+}
+
+/** effective structure level: bridge=* counts as at least layer 1 */
+function effLayer(layer: number, bridge: boolean): number {
+  return bridge ? Math.max(layer, 1) : layer;
 }
 
 export class HeightField {
@@ -70,27 +77,28 @@ export class HeightField {
 
   /** register an area polygon (lon/lat outer ring) so that line/point features
    *  can reuse its vertices and stick to it */
-  registerArea(outer: [number, number][], layer: number): void {
+  registerArea(outer: [number, number][], layer: number, bridge = false): void {
     if (outer.length < 3) return;
+    const eff = effLayer(layer, bridge);
     let minLon = Infinity, minLat = Infinity, maxLon = -Infinity, maxLat = -Infinity;
     for (const [lon, lat] of outer) {
       minLon = Math.min(minLon, lon); maxLon = Math.max(maxLon, lon);
       minLat = Math.min(minLat, lat); maxLat = Math.max(maxLat, lat);
       const key = vkey(lon, lat);
       const prevMax = this.vertexMaxLayer.get(key) ?? 0;
-      if (layer > prevMax) this.vertexMaxLayer.set(key, layer);
+      if (eff > prevMax) this.vertexMaxLayer.set(key, eff);
     }
-    this.areas.push({ outer, layer, bbox: [minLon, minLat, maxLon, maxLat] });
-    const f = this.fillM(layer);
+    this.areas.push({ outer, layer, bridge, bbox: [minLon, minLat, maxLon, maxLat] });
+    const f = this.fillM(eff);
     for (const [lon, lat] of outer) {
       const key = vkey(lon, lat);
       const z = f(lon, lat);
       const prev = this.vertexM.get(key);
       // on conflict (shared vertex of a ground road and a bridge), the
       // higher layer's height wins — it is the visible top from above
-      if (prev === undefined || layer > this.vertexLayer.get(key)!) {
+      if (prev === undefined || eff > this.vertexLayer.get(key)!) {
         this.vertexM.set(key, z);
-        this.vertexLayer.set(key, layer);
+        this.vertexLayer.set(key, eff);
       }
     }
   }
@@ -100,11 +108,12 @@ export class HeightField {
 
   /** mark the vertices of a higher-layer line (e.g. a bridge way): polygons
    *  connected to them take the DOM surface height to stay continuous */
-  markHighLine(coords: [number, number][], layer: number): void {
+  markHighLine(coords: [number, number][], layer: number, bridge = false): void {
+    const eff = effLayer(layer, bridge);
     for (const [lon, lat] of coords) {
       const key = vkey(lon, lat);
       const prevMax = this.vertexMaxLayer.get(key) ?? 0;
-      if (layer > prevMax) this.vertexMaxLayer.set(key, layer);
+      if (eff > prevMax) this.vertexMaxLayer.set(key, eff);
     }
   }
 
@@ -112,8 +121,8 @@ export class HeightField {
    *  surface; a layer-0 polygon that shares a vertex with a higher-layer
    *  feature is connected to it and also takes the DOM (stays continuous with
    *  the deck); everything else stays on the DGM ground */
-  fillMFor(rings: [number, number][][], layer: number): (lon: number, lat: number) => number {
-    if (layer > 0) return this.surfaceFn();
+  fillMFor(rings: [number, number][][], layer: number, bridge = false): (lon: number, lat: number) => number {
+    if (effLayer(layer, bridge) > 0) return this.surfaceFn();
     for (const ring of rings)
       for (const [lon, lat] of ring)
         if ((this.vertexMaxLayer.get(vkey(lon, lat)) ?? 0) > 0) return this.surfaceFn();
@@ -129,21 +138,31 @@ export class HeightField {
     return (lon, lat) => (dem ? dem.sampleM(lon, lat) ?? 0 : 0);
   }
 
-  /** height for a line/point feature at lon/lat: reuse a registered area
-   *  vertex when coincident, else the topmost containing area, else the DOM */
-  stickM(lon: number, lat: number): number {
-    const key = `${Math.round(lon * 1e7)}:${Math.round(lat * 1e7)}`;
+  /** height for a line/point feature at lon/lat on layer `layer`:
+   *  1. reuse a registered area vertex when coincident (shared OSM node),
+   *  2. else the containing area on the SAME OR LOWER layer — a bridge deck
+   *     polygon is the ground level for same-layer features inside it, while
+   *     lower-layer features inside it (road passing under the bridge in 2D)
+   *     stay on the ground,
+   *  3. else DOM surface for layer>0, DGM ground for layer 0 */
+  stickM(lon: number, lat: number, layer = 0): number {
+    const key = vkey(lon, lat);
     const hit = this.vertexM.get(key);
     if (hit !== undefined) return hit;
-    let best: AreaEntry | null = null;
+    let best: AreaEntry | null = null,
+      bestEff = -1;
     for (const a of this.areas) {
       const [minLon, minLat, maxLon, maxLat] = a.bbox;
       if (lon < minLon || lon > maxLon || lat < minLat || lat > maxLat) continue;
       if (!pointInRing(lon, lat, a.outer)) continue;
-      if (!best || a.layer > best.layer) best = a;
+      const e = effLayer(a.layer, a.bridge);
+      if (e <= layer && e > bestEff) {
+        best = a;
+        bestEff = e;
+      }
     }
-    if (best) return this.fillM(best.layer)(lon, lat);
-    return this.surfaceM(lon, lat) ?? 0;
+    if (best) return this.fillM(bestEff)(lon, lat);
+    return layer > 0 ? this.surfaceM(lon, lat) ?? 0 : this.groundM(lon, lat) ?? 0;
   }
 }
 
