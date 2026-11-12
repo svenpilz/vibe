@@ -269,14 +269,15 @@ async function boot(): Promise<void> {
     const down = keys.has("KeyS") || keys.has("ArrowDown");
     const left = keys.has("KeyA") || keys.has("ArrowLeft");
     const right = keys.has("KeyD") || keys.has("ArrowRight");
-    const accel = up ? 9 : down ? -7 : 0;
+    const accel = up ? 13 : down ? -9 : 0;
     carState.speed += accel * dt;
-    carState.speed -= carState.speed * 0.55 * dt + Math.sign(carState.speed) * 1.2 * dt;
-    carState.speed = Math.max(-8, Math.min(28, carState.speed));
+    carState.speed -= carState.speed * 0.35 * dt + Math.sign(carState.speed) * 0.8 * dt;
+    carState.speed = Math.max(-9, Math.min(33, carState.speed));
     if (!up && !down && Math.abs(carState.speed) < 0.4) carState.speed = 0;
 
-    const steerTarget = (left ? 1 : 0) - (right ? 1 : 0);
-    carState.steer += (steerTarget * 0.55 - carState.steer) * Math.min(1, dt * 8);
+    // heading = atan2(north, east): positive steer turns right on screen, so left = negative
+    const steerTarget = (right ? 1 : 0) - (left ? 1 : 0);
+    carState.steer += (steerTarget * 0.6 - carState.steer) * Math.min(1, dt * 10);
     if (Math.abs(carState.speed) > 0.05) {
       carState.heading += (carState.speed / 2.8) * Math.tan(carState.steer) * dt;
     }
@@ -296,7 +297,7 @@ async function boot(): Promise<void> {
     } else {
       // off-road: follow the bare-earth terrain, with extra drag
       carState.y = sampleTerrainM(data.terrain, nx, nz);
-      carState.speed *= Math.max(0, 1 - 1.8 * dt);
+      carState.speed *= Math.max(0, 1 - 0.6 * dt);
     }
     carState.x = nx;
     carState.z = nz;
