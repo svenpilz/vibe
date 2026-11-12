@@ -94,7 +94,7 @@ function makeFacadeTexture(): THREE.Texture {
 }
 
 function addMesh(m: MeshData, shadow: boolean, mat?: THREE.Material): void {
-  const material = mat ?? new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+  const material = mat ?? new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
   const mesh = new THREE.Mesh(toGeometry(m), material);
   mesh.castShadow = shadow;
   mesh.receiveShadow = true;

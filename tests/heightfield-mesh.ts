@@ -104,7 +104,20 @@ const data = mkData([
   { ptsM: [[0, -50], [100, -50], [100, -60], [0, -60], [0, -50]], tags: { building: "yes", height: "12" } },
 ]);
 const roads = buildRoads(data);
-check("two road ways -> 2 segments", roads.segments.length === 2, `${roads.segments.length}`);
+check("two road ways -> segments (subdivided at grid lines)", roads.segments.length >= 2, `${roads.segments.length}`);
+{
+  const cell = 400 / 4;
+  const inOneCell = roads.segments.every((s) => {
+    const fx0 = (Math.min(s.ax, s.bx) + 200) / cell;
+    const fx1 = (Math.max(s.ax, s.bx) + 200) / cell;
+    const fy0 = (Math.min(s.ay, s.by) + 200) / cell;
+    const fy1 = (Math.max(s.ay, s.by) + 200) / cell;
+    const fd0 = (Math.min(s.ax - s.ay, s.bx - s.by) + 0) / cell;
+    const fd1 = (Math.max(s.ax - s.ay, s.bx - s.by) + 0) / cell;
+    return Math.ceil(fx1 - 1e-9) - Math.floor(fx0 + 1e-9) <= 1 && Math.ceil(fy1 - 1e-9) - Math.floor(fy0 + 1e-9) <= 1 && Math.ceil(fd1 - 1e-9) - Math.floor(fd0 + 1e-9) <= 1;
+  });
+  check("every road segment lies within one terrain cell", inOneCell);
+}
 check("ground road at terrain 50 m", Math.abs(roads.segments[0].elevA - 50) < 0.2, `${roads.segments[0].elevA}`);
 check("bridge deck at 50+5=55 m", Math.abs(roads.segments[1].elevA - 55) < 0.2, `${roads.segments[1].elevA}`);
 check("residential half width 3.75", Math.abs(roads.segments[0].halfW - 3.75) < 1e-9);

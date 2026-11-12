@@ -231,6 +231,66 @@ function nodeXY(data: BakedData, localIdx: number): [number, number] {
   return lonLatToMeters(lon, lat);
 }
 
+/**
+ * Subdivide a polyline wherever it crosses a terrain grid line (x = const,
+ * y = const) or a cell diagonal (x - y = const) — exactly the lines the
+ * terrain mesh is triangulated along — so every sub-segment lies within a
+ * single terrain triangle and a ribbon draped on the sampled heights follows
+ * the rendered surface precisely instead of dipping below it mid-segment.
+ * If vals (one per input point) are given, they are linearly interpolated.
+ */
+export function subdivideOnTerrainGrid(g: TerrainGrid, pts: Array<[number, number]>, vals?: number[]): { pts: Array<[number, number]>; vals: number[] } {
+  const cell = g.sizeM / g.n;
+  const outPts: Array<[number, number]> = [];
+  const outVals: number[] = [];
+  const push = (x: number, y: number, v: number): void => {
+    const last = outPts[outPts.length - 1];
+    if (last && Math.hypot(x - last[0], y - last[1]) < 1e-9) return;
+    outPts.push([x, y]);
+    outVals.push(v);
+  };
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const [ax, ay] = pts[i];
+    const [bx, by] = pts[i + 1];
+    const dx = bx - ax;
+    const dy = by - ay;
+    const ts: number[] = [0, 1];
+    if (Math.abs(dx) > 1e-12) {
+      const k0 = Math.ceil((Math.min(ax, bx) - g.originX) / cell - 1e-9);
+      const k1 = Math.floor((Math.max(ax, bx) - g.originX) / cell + 1e-9);
+      for (let k = k0; k <= k1; k++) {
+        const t = (g.originX + k * cell - ax) / dx;
+        if (t > 1e-9 && t < 1 - 1e-9) ts.push(t);
+      }
+    }
+    if (Math.abs(dy) > 1e-12) {
+      const k0 = Math.ceil((Math.min(ay, by) - g.originY) / cell - 1e-9);
+      const k1 = Math.floor((Math.max(ay, by) - g.originY) / cell + 1e-9);
+      for (let k = k0; k <= k1; k++) {
+        const t = (g.originY + k * cell - ay) / dy;
+        if (t > 1e-9 && t < 1 - 1e-9) ts.push(t);
+      }
+    }
+    const dxy = dx - dy;
+    if (Math.abs(dxy) > 1e-12) {
+      const c0 = g.originX - g.originY;
+      const lo = Math.min(ax - ay, bx - by);
+      const hi = Math.max(ax - ay, bx - by);
+      const k0 = Math.ceil((lo - c0) / cell - 1e-9);
+      const k1 = Math.floor((hi - c0) / cell + 1e-9);
+      for (let k = k0; k <= k1; k++) {
+        const t = (c0 + k * cell - (ax - ay)) / dxy;
+        if (t > 1e-9 && t < 1 - 1e-9) ts.push(t);
+      }
+    }
+    ts.sort((a, b) => a - b);
+    for (const t of ts) {
+      push(ax + dx * t, ay + dy * t, vals ? vals[i] + (vals[i + 1] - vals[i]) * t : 0);
+    }
+  }
+  return { pts: outPts, vals: outVals };
+}
+
 export interface RoadBuild {
   mesh: MeshData;
   segments: RoadSegment[];
@@ -259,14 +319,20 @@ export function buildRoads(data: BakedData): RoadBuild {
     const layer = osmLayer(tags);
     const isBridge = layer > 0;
     const col = surfaceColor(tags);
-    const pts = way.r.map((r) => nodeXY(data, r));
-    const factors = wayNodeLayers(way, layer, maxLayer, pts);
-    // +0.12 m so road decks render above the landuse ground polygons (+0.06);
+    const basePts = way.r.map((r) => nodeXY(data, r));
+    const baseFactors = wayNodeLayers(way, layer, maxLayer, basePts);
+    // subdivide at terrain grid lines/diagonals so the ribbon follows the
+    // rendered terrain surface exactly along its whole length
+    const sub = subdivideOnTerrainGrid(data.terrain, basePts, baseFactors);
+    const pts = sub.pts;
+    const factors = sub.vals;
+    // +0.12 m so road decks render above the landuse ground polygons (+0.08);
     // footways/paths/sidewalks get another +0.12 m kerb lift
     const isFootway = hw === "footway" || hw === "path" || hw === "steps" || hw === "pedestrian" || hw === "cycleway";
     const lift = 0.12 + (isFootway ? 0.12 : 0);
     const rawElevs = pts.map(([x, y], i) => sampleTerrainM(data.terrain, x, y) + factors[i] * LAYER_H + lift);
-    const elevs = smoothElevations(rawElevs, pts);
+    // grade smoothing may cut a spike, but never let a road dip below the terrain
+    const elevs = smoothElevations(rawElevs, pts).map((e, i) => Math.max(e, sampleTerrainM(data.terrain, pts[i][0], pts[i][1]) + 0.05));
 
     for (let i = 0; i + 1 < pts.length; i++) {
       const [ax, ay] = pts[i];
@@ -457,7 +523,7 @@ export function buildGround(data: BakedData): MeshData {
     if (pts.length < 3) continue;
     const col = isAreaHighway ? surfaceColor(tags) : groundColor(tags);
     const layer = osmLayer(tags);
-    const lift = isAreaHighway ? layerElevationM(tags) + 0.06 : 0.06;
+    const lift = isAreaHighway ? layerElevationM(tags) + 0.10 : 0.08;
     const idx = pts.map(([x, y]) => pushVert(mesh, x, sampleTerrainM(data.terrain, x, y) + lift, y, 0, 1, 0, col));
     const tris = triangulatePolygon(pts);
     for (let k = 0; k + 2 < tris.length; k += 3) {
