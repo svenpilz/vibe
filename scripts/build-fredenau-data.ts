@@ -50,6 +50,7 @@ const DEM_Z = 13;
 /** DGM1 tiles are 2x2 km in UTM33N; decimate the 1 m grid to this step (m) */
 const DGM1_STEP = 10;
 const DGM1_FEED = "https://gdi.berlin.de/data/dgm1/atom";
+const DOM_FEED = "https://gdi.berlin.de/data/dom/atom";
 
 async function ensurePbf(): Promise<void> {
   if (existsSync(PBF_PATH)) return;
@@ -273,12 +274,13 @@ async function sampleDem(lon: number, lat: number): Promise<number> {
  * UTM33N xyz tiles via the gdi.berlin.de atom feed), decimated to DGM1_STEP.
  * Falls back to SRTM terrarium tiles when the DGM1 download fails.
  */
-async function buildTerrain(): Promise<TerrainGrid> {
+async function buildTerrain(): Promise<{ dgm: TerrainGrid; dom?: TerrainGrid }> {
   const originX = -GRID_SIZE_M / 2;
   const originY = -GRID_SIZE_M / 2;
   const cell = GRID_SIZE_M / GRID_N;
+  let dgm: TerrainGrid;
   try {
-    return await buildTerrainDgm1(originX, originY, cell);
+    dgm = await buildTerrainFromFeed(DGM1_FEED, "DGM1", "dgm1", originX, originY, cell);
   } catch (e) {
     console.log("DGM1 failed, falling back to SRTM:", (e as Error).message);
     const heightsDm: number[] = [];
@@ -289,11 +291,18 @@ async function buildTerrain(): Promise<TerrainGrid> {
       }
       if (j % 40 === 0) console.log(`terrain row ${j}/${GRID_N}`);
     }
-    return { n: GRID_N, sizeM: GRID_SIZE_M, originX, originY, heightsDm };
+    dgm = { n: GRID_N, sizeM: GRID_SIZE_M, originX, originY, heightsDm };
   }
+  let dom: TerrainGrid | undefined;
+  try {
+    dom = await buildTerrainFromFeed(DOM_FEED, "DOM1", "dom", originX, originY, cell);
+  } catch (e) {
+    console.log("DOM1 failed (optional):", (e as Error).message);
+  }
+  return { dgm, dom };
 }
 
-async function buildTerrainDgm1(originX: number, originY: number, cell: number): Promise<TerrainGrid> {
+async function buildTerrainFromFeed(feed: string, prefix: string, dirName: string, originX: number, originY: number, cell: number): Promise<TerrainGrid> {
   const [E0, N0] = lonLatToUtm33(CENTER.lon, CENTER.lat);
   const half = GRID_SIZE_M / 2 + 100;
   const tiles: Array<[number, number]> = [];
@@ -305,19 +314,19 @@ async function buildTerrainDgm1(originX: number, originY: number, cell: number):
   console.log(`fetching ${tiles.length} DGM1 tiles`);
   let latticeE0 = Infinity, latticeN0 = Infinity, maxE = -Infinity, maxN = -Infinity;
   const points: Array<[number, number, number]> = [];
-  const dir = join(CACHE, "dgm1");
+  const dir = join(CACHE, dirName);
   mkdirSync(dir, { recursive: true });
   for (const [te, tn] of tiles) {
-    const file = join(dir, `DGM1_${te / 1000}_${tn / 1000}.zip`);
+    const file = join(dir, `${prefix}_${te / 1000}_${tn / 1000}.zip`);
     if (!existsSync(file)) {
-      const url = `${DGM1_FEED}/DGM1_${te / 1000}_${tn / 1000}.zip`;
+      const url = `${feed}/${prefix}_${te / 1000}_${tn / 1000}.zip`;
       const r = await fetch(url, { headers: UA });
-      if (!r.ok) throw new Error(`DGM1 tile failed: ${r.status} ${url}`);
+      if (!r.ok) throw new Error(`${prefix} tile failed: ${r.status} ${url}`);
       writeFileSync(file, Buffer.from(await r.arrayBuffer()));
     }
     const entries = unzip(new Uint8Array(readFileSync(file)));
     const xyz = entries[0]?.data.toString("utf8");
-    if (!xyz) throw new Error("empty DGM1 tile");
+    if (!xyz) throw new Error(`empty ${prefix} tile`);
     console.log(`parsing tile ${te / 1000}_${tn / 1000} (${(xyz.length / 1e6).toFixed(0)} MB)`);
     for (const line of xyz.split("\n")) {
       if (!line) continue;
@@ -336,7 +345,7 @@ async function buildTerrainDgm1(originX: number, originY: number, cell: number):
       if (N > maxN) maxN = N;
     }
   }
-  if (points.length < 1000) throw new Error("too few DGM1 points");
+  if (points.length < 1000) throw new Error(`too few ${prefix} points`);
   const cols = Math.round((maxE - latticeE0) / DGM1_STEP) + 1;
   const rows = Math.round((maxN - latticeN0) / DGM1_STEP) + 1;
   const lattice = new Float32Array(cols * rows).fill(NaN);
@@ -367,7 +376,7 @@ async function buildTerrainDgm1(originX: number, originY: number, cell: number):
   return { n: GRID_N, sizeM: GRID_SIZE_M, originX, originY, heightsDm };
 }
 
-function buildJson(data: OSMData, kept: KeptWay[], keptNodes: KeptNode[], routes: KeptRelation[], terrain: TerrainGrid): BakedData {
+function buildJson(data: OSMData, kept: KeptWay[], keptNodes: KeptNode[], routes: KeptRelation[], terrain: TerrainGrid, terrainDom?: TerrainGrid): BakedData {
   const keys: string[] = [];
   const values: string[] = [];
   const keyIdx = new Map<string, number>();
@@ -460,6 +469,7 @@ function buildJson(data: OSMData, kept: KeptWay[], keptNodes: KeptNode[], routes
     ways,
     points,
     routes: routeWays,
+    terrainDom,
   };
 }
 
@@ -469,8 +479,8 @@ async function main(): Promise<void> {
   const kept = extractWays(data);
   const nodes = extractNodes(data);
   const routes = extractRoutes(data);
-  const terrain = await buildTerrain();
-  const baked = buildJson(data, kept, nodes, routes, terrain);
+  const { dgm, dom } = await buildTerrain();
+  const baked = buildJson(data, kept, nodes, routes, dgm, dom);
   mkdirSync(join(ROOT, "public/data"), { recursive: true });
   const json = JSON.stringify(baked);
   writeFileSync(OUT_PATH, json);

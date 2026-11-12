@@ -9,7 +9,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type { BakedData } from "./schema";
 import { sampleTerrainM, wayTags } from "./schema";
 import { lonLatToMeters } from "./geo";
-import { buildTerrainMesh, buildRoads, buildBuildings, buildGround, buildLaneMarkings, buildKerbs, buildFurniture, buildRails, buildRoutes, RouteTrack, RoadIndex, BuildingIndex, buildingPolygons, type MeshData } from "./mesh";
+import { buildTerrainMesh, buildRoads, buildBuildings, buildGround, buildLaneMarkings, buildKerbs, buildFurniture, buildRails, buildRoutes, RouteTrack, RoadIndex, BuildingIndex, buildingPolygons, cleanDomTerrain, type MeshData } from "./mesh";
 
 const container = document.getElementById("scene") as HTMLElement;
 const hud = {
@@ -142,7 +142,24 @@ async function boot(): Promise<void> {
   const data: BakedData = await res.json();
 
   const t0 = performance.now();
-  addMesh(buildTerrainMesh(data.terrain), false);
+  // terrain source switch: 0 = DGM1 bare earth, 1 = DOM1 raw surface, 2 = DOM1 cleaned with DGM1
+  let terrainMode = 0;
+  const terrainModes = ["DGM1 bare earth", "DOM1 raw surface", "DOM1 cleaned (DGM1 filters trees/signs)"];
+  let terrainMesh: THREE.Mesh | undefined;
+  const setTerrainMode = (mode: number) => {
+    terrainMode = mode;
+    const grid = mode === 0 || !data.terrainDom ? data.terrain : mode === 1 ? data.terrainDom : cleanDomTerrain(data.terrainDom, data.terrain, buildingPolygons(data));
+    const g = buildTerrainMesh(grid);
+    if (!terrainMesh) {
+      terrainMesh = new THREE.Mesh(toGeometry(g), new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
+      terrainMesh.receiveShadow = true;
+      scene.add(terrainMesh);
+    } else {
+      terrainMesh.geometry.dispose();
+      terrainMesh.geometry = toGeometry(g);
+    }
+  };
+  setTerrainMode(0);
   addMesh(buildGround(data), false);
   const roads = buildRoads(data);
   addMesh(roads.mesh, false);
@@ -195,6 +212,7 @@ async function boot(): Promise<void> {
     keys.add(e.code);
     if (e.code === "KeyC") { follow = !follow; driverView = false; }
     if (e.code === "KeyV") { driverView = !driverView; follow = false; }
+    if (e.code === "KeyH") setTerrainMode((terrainMode + 1) % terrainModes.length);
     if (e.code === "KeyR" && spawn) {
       carState.x = spawn.x;
       carState.y = spawn.y;
@@ -413,7 +431,7 @@ async function boot(): Promise<void> {
       hud.status.textContent =
         `${kmh} km/h · ${carState.y.toFixed(1)} m a.s.l.` +
         (q ? ` · layer ${q.layer} road` : " · off road") +
-        ` · ${driverView ? "driver view (V)" : follow ? "chase cam (C)" : "free cam (C)"} · R reset · commit ${__COMMIT__}`;
+        ` · ${driverView ? "driver view (V)" : follow ? "chase cam (C)" : "free cam (C)"} · terrain: ${terrainModes[terrainMode]} (H) · R reset · commit ${__COMMIT__}`;
     }
   }
   animate();

@@ -45,6 +45,14 @@ check("bridges present (multi-level above)", bridges > 100 && layered > 100, `br
 check("tunnels present (multi-level below)", tunnels > 100 && negLayer > 100, `tunnels=${tunnels} negLayer=${negLayer}`);
 
 check("terrain grid 440 (10 m cells)", data.terrain.n === 440);
+check("DOM1 surface model present", data.terrainDom !== undefined && data.terrainDom.n === 440);
+if (data.terrainDom) {
+  let dmn = Infinity, dmx = -Infinity;
+  for (const h of data.terrainDom.heightsDm) { dmn = Math.min(dmn, h); dmx = Math.max(dmx, h); }
+  let gmx = -Infinity;
+  for (const h of data.terrain.heightsDm) gmx = Math.max(gmx, h);
+  check("DOM1 includes building roofs (max > DGM max)", dmx > gmx, `dom max ${(dmx/10).toFixed(1)} m vs dgm max ${(gmx/10).toFixed(1)} m`);
+}
 let mn = Infinity, mx = -Infinity;
 for (const h of data.terrain.heightsDm) {
   mn = Math.min(mn, h);

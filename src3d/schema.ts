@@ -28,6 +28,8 @@ export interface BakedData {
   radiusM: number;
   layerH: number;
   terrain: TerrainGrid;
+  /** optional DOM1 surface model (includes buildings/trees), same grid layout */
+  terrainDom?: TerrainGrid;
   /** tag keys table */
   keys: string[];
   /** tag values table */

@@ -1,5 +1,5 @@
 import type { BakedData, BakedWay } from "../src3d/schema";
-import { triangulatePolygon, buildTerrainMesh, buildRoads, buildBuildings, buildGround, buildLaneMarkings, buildKerbs, buildFurniture, buildRails, buildRoutes, RouteTrack, RoadIndex, BuildingIndex, buildingPolygons, wayNodeLayers, smoothElevations, RAMP_M, MAX_GRADE } from "../src3d/mesh";
+import { triangulatePolygon, buildTerrainMesh, buildRoads, buildBuildings, buildGround, buildLaneMarkings, buildKerbs, buildFurniture, buildRails, buildRoutes, RouteTrack, RoadIndex, BuildingIndex, buildingPolygons, wayNodeLayers, smoothElevations, cleanDomTerrain, RAMP_M, MAX_GRADE } from "../src3d/mesh";
 import { metersToLonLat, quantizeDeg } from "../src3d/geo";
 
 let failures = 0;
@@ -234,6 +234,15 @@ const pts: Array<[number, number]> = [[0, 0], [100, 0], [200, 0]];
 const sm = smoothElevations([50, 60, 50], pts);
 check("grade limit caps 10 m spike to 8 m", Math.abs(sm[1] - 58) < 1e-9, JSON.stringify(sm));
 check("MAX_GRADE is 8%", MAX_GRADE === 0.08);
+
+// cleanDomTerrain: tree spike outside buildings -> DGM; inside building -> DOM kept? (building footprint -> DGM since 3D building drawn); flat -> DOM
+const domG = { n: 1, sizeM: 100, originX: 0, originY: 0, heightsDm: [500, 500, 800, 500] }; // (100,0) has 80m tree spike
+const dgmG = { n: 1, sizeM: 100, originX: 0, originY: 0, heightsDm: [500, 500, 500, 500] };
+const cleaned = cleanDomTerrain(domG, dgmG, []);
+check("tree spike removed (falls back to DGM)", cleaned.heightsDm[2] === 500, `${cleaned.heightsDm[2]}`);
+check("flat area keeps DOM", cleaned.heightsDm[0] === 500);
+const cleanedB = cleanDomTerrain(domG, dgmG, [[[90, -10], [110, -10], [110, 10], [90, 10]]]);
+check("building footprint also falls back to DGM (3D building drawn there)", cleanedB.heightsDm[2] === 500);
 
 if (failures > 0) {
   console.error(`${failures} test(s) failed`);

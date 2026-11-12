@@ -123,6 +123,32 @@ export function buildTerrainMesh(g: TerrainGrid): MeshData {
   return m;
 }
 
+/**
+ * Cleaned DOM terrain: use the DOM1 surface everywhere, except where the DOM
+ * stands > threshold above the DGM1 bare earth AND the point is not inside an
+ * OSM building footprint — there fall back to the DGM1 (this removes trees,
+ * traffic signs, cars, ... that OSM does not model as 3D objects).
+ */
+export function cleanDomTerrain(dom: TerrainGrid, dgm: TerrainGrid, buildingPolys: Array<Array<[number, number]>>, thresholdM = 1.5): TerrainGrid {
+  const n = dom.n;
+  const cell = dom.sizeM / n;
+  const index = new BuildingIndex(buildingPolys);
+  const heightsDm: number[] = [];
+  for (let j = 0; j <= n; j++) {
+    for (let i = 0; i <= n; i++) {
+      const k = j * (n + 1) + i;
+      const d = dom.heightsDm[k];
+      const g = dgm.heightsDm[k];
+      if (d - g > thresholdM * 10 && !index.collides(dom.originX + i * cell, dom.originY + j * cell, 0.5)) {
+        heightsDm.push(g);
+      } else {
+        heightsDm.push(d);
+      }
+    }
+  }
+  return { n, sizeM: dom.sizeM, originX: dom.originX, originY: dom.originY, heightsDm };
+}
+
 export interface RoadSegment {
   ax: number; ay: number; bx: number; by: number;
   elevA: number; elevB: number;
