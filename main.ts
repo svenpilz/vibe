@@ -422,6 +422,7 @@ function draw() {
     }
   }
   if (scene) g.renderScene(scene);
+  if (loading && scene) hideLoadUi();
 }
 
 /** tessellate everything LOD-visible in the whole dataset into the scene
@@ -500,6 +501,7 @@ function setupHeights(): void {
 
 function buildGeometry() {
   const bbox = datasetBounds ?? viewBboxQ();
+  if (loading) uiPhase("tessellating geometry", 70);
 
   // Bird's eye: draw ALL classes in ascending layer order, so a higher layer
   // occludes everything below it regardless of feature class (previously
@@ -559,7 +561,9 @@ function buildGeometry() {
     lodVisible("kerbs") && kerbWayIndex ? queryIndex(kerbWayIndex, bbox) : [];
   const kns = lodVisible("kerbs") && kerbGrid ? kerbsInBbox(bbox) : [];
 
-  for (const layer of layersToDraw) {
+  layersToDraw.forEach((layer, li) => {
+    if (loading)
+      uiPhase("tessellating geometry", 70 + Math.round((25 * li) / Math.max(1, layersToDraw.length)));
     const onLayer = (f: { layer?: number; level?: number }) =>
       (f.layer ?? 0) === layer && layerVisible(f);
 
@@ -825,7 +829,7 @@ function buildGeometry() {
         g.circle([x, y], br, rgba("#2f3134"), lineZAt(b)); // dark anthracite
       }
     }
-  }
+  });
 }
 
 /** all values of a point grid (the scene graph covers the whole dataset) */
@@ -2731,6 +2735,30 @@ function fitToBounds(bounds: [number, number, number, number]) {
 }
 
 let currentWorker: Worker | null = null;
+/** true while a dataset load is in progress (worker + DEM + tessellation) */
+let loading = false;
+
+/** report a loading phase on the progress bar / spinner (no-op when not loading) */
+function uiPhase(phase: string, pct: number, msg = ""): void {
+  if (!loading) return;
+  const pfill = document.getElementById("pbrfill") as HTMLDivElement;
+  const plabel = document.getElementById("pbrlabel")!;
+  const spinnerTxt = document.getElementById("spinnertxt")!;
+  pfill.style.width = `${Math.min(100, pct).toFixed(1)}%`;
+  plabel.textContent = `${phase} — ${Math.min(100, pct).toFixed(0)}%${msg ? ` (${msg})` : ""}`;
+  spinnerTxt.textContent = `${phase} — ${Math.min(100, pct).toFixed(0)}%`;
+  statusEl.textContent = `${phase}…`;
+}
+
+function hideLoadUi(): void {
+  loading = false;
+  document.getElementById("progressbar")!.style.display = "none";
+  document.getElementById("spinner")!.style.display = "none";
+  document.getElementById("dropzone")!.style.display = "block";
+  document.getElementById("layers")!.style.display = "block";
+  document.getElementById("zoomhint")!.style.display = "block";
+  document.getElementById("legend")!.style.display = "block";
+}
 
 function loadPbfFile(file: File) {
   file.arrayBuffer().then((buf) => loadPbfBuffer(buf, file.name));
@@ -2740,9 +2768,29 @@ function loadPbfFile(file: File) {
  *  with it; false when there is none (plain drag & drop then). With no URL
  *  hash, ingestResult falls back to fitToBounds(), so the camera centers on
  *  the loaded data and something is visible immediately. */
+/** post-worker load steps with spinner phases: height model (DEM occlusion +
+ *  inpaint + area registration), then the first tessellated frame */
+async function finishLoadAsync(name: string): Promise<void> {
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  uiPhase("height model (DEM occlusion + inpaint)", 65);
+  await tick();
+  setupHeights();
+  // strokes/points without an explicit zAt (kerbs, lane markings, lamps, ...)
+  // stick to the road/landuse area they belong to
+  g.zAtDefault = hf && hf.ready ? stickZAt : null;
+  uiPhase("tessellating geometry", 80, name);
+  await tick();
+  requestDraw();
+  // hideLoadUi() runs at the end of draw() once the first frame rendered
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  if (loading) hideLoadUi();
+}
+
 async function loadBundledExample(): Promise<boolean> {
   try {
     // fetch PBF and both DEM grids in parallel — no point serializing them
+    loading = true;
+    uiPhase("loading height models (DGM+DOM)", 3);
     const h = new HeightField();
     const [res, demOk, domOk] = await Promise.all([
       fetch("data/berlin-example.osm.pbf"),
@@ -2751,7 +2799,10 @@ async function loadBundledExample(): Promise<boolean> {
     ]);
     void demOk;
     void domOk;
-    if (!res.ok) return false;
+    if (!res.ok) {
+      loading = false;
+      return false;
+    }
     hf = h.ready ? h : null;
     const buf = await res.arrayBuffer();
     loadPbfBuffer(buf, "berlin-example.osm.pbf");
@@ -2768,6 +2819,7 @@ function loadPbfBuffer(buf: ArrayBuffer, name: string) {
   });
   currentWorker = worker;
   const loadStart = performance.now();
+  loading = true;
 
   const dropzone = document.getElementById("dropzone")!;
   const pbar = document.getElementById("progressbar")!;
@@ -2785,15 +2837,13 @@ function loadPbfBuffer(buf: ArrayBuffer, name: string) {
   worker.onmessage = (e: MessageEvent) => {
     const m = e.data;
     if (m.type === "progress") {
-      pfill.style.width = `${Math.min(100, m.pct).toFixed(1)}%`;
-      plabel.textContent = `${m.phase} — ${Math.min(100, m.pct).toFixed(0)}% (${m.msg})`;
-      statusEl.textContent = `${m.phase}…`;
-      spinnerTxt.textContent = `${m.phase} — ${Math.min(100, m.pct).toFixed(0)}%`;
+      uiPhase(m.phase, m.pct, m.msg);
     } else if (m.type === "timing") {
       // step runtimes so far, newest last — logged as a whole on done
       (worker as unknown as { __timings: unknown[] }).__timings = m.timings;
     } else if (m.type === "done") {
       const t1 = performance.now();
+      uiPhase("indexing features", 55);
       ingestResult(m.result as ExtractResult, name);
       const t2 = performance.now();
       const timings = (m.timings ?? []) as { step: string; sec: number }[];
@@ -2812,13 +2862,11 @@ function loadPbfBuffer(buf: ArrayBuffer, name: string) {
       );
       worker.terminate();
       currentWorker = null;
-      pbar.style.display = "none";
-      spinner.style.display = "none";
-      dropzone.style.display = "block";
-      document.getElementById("layers")!.style.display = "block";
-      document.getElementById("zoomhint")!.style.display = "block";
-      document.getElementById("legend")!.style.display = "block";
+      // new rendering steps after the worker: height model, then tessellation
+      // on the first frame — the spinner stays up until that frame rendered
+      void finishLoadAsync(name);
     } else if (m.type === "error") {
+      loading = false;
       statusEl.textContent = `error: ${m.message}`;
       pbar.style.display = "none";
       spinner.style.display = "none";
@@ -2894,10 +2942,6 @@ function ingestResult(result: ExtractResult, name: string) {
   }
   laneMarkingIndex = buildIndex(dataset.laneMarkings);
   stopLineIndex = buildIndex(dataset.stopLines);
-  setupHeights();
-  // strokes/points without an explicit zAt (kerbs, lane markings, lamps, ...)
-  // stick to the road/landuse area they belong to
-  g.zAtDefault = hf && hf.ready ? stickZAt : null;
   kerbGrid = new Map();
   for (const k of dataset.kerbs) {
     const key = Math.floor(k.lon / 50000) * 100000 + Math.floor(k.lat / 50000);
