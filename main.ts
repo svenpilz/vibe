@@ -2660,6 +2660,14 @@ function countFor(key: keyof typeof layers): string {
 }
 
 // ---------------- boot ----------------
+// NOTE: declared before the boot calls below — loadBundledExample() runs its
+// synchronous prefix at module-eval time and assigns `loading` (a `let`);
+// declaring it later would hit the temporal dead zone and silently abort the
+// bundled-example load inside its try/catch
+let currentWorker: Worker | null = null;
+/** true while a dataset load is in progress (worker + DEM + tessellation) */
+let loading = false;
+
 let drawQueued = false;
 function requestDraw() {
   if (drawQueued) return;
@@ -2742,10 +2750,6 @@ function fitToBounds(bounds: [number, number, number, number]) {
   statusEl.textContent = `zoom ${zoomLevel().toFixed(1)} (scale ${Math.round(view.scale)}) · ${__COMMIT__}`;
   requestDraw();
 }
-
-let currentWorker: Worker | null = null;
-/** true while a dataset load is in progress (worker + DEM + tessellation) */
-let loading = false;
 
 /** report a loading phase on the progress bar / spinner (no-op when not loading) */
 function uiPhase(phase: string, pct: number, msg = ""): void {
