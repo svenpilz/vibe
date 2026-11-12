@@ -1,5 +1,5 @@
 import type { BakedData, BakedWay } from "../src3d/schema";
-import { triangulatePolygon, buildTerrainMesh, buildRoads, buildBuildings, buildGround, buildLaneMarkings, buildKerbs, buildFurniture, buildRails, buildRoutes, RouteTrack, RoadIndex, BuildingIndex, buildingPolygons, wayNodeLayers, smoothElevations, cleanDomTerrain, RAMP_M, MAX_GRADE } from "../src3d/mesh";
+import { triangulatePolygon, buildTerrainMesh, buildRoads, buildBuildings, buildGround, buildLaneMarkings, buildKerbs, buildFurniture, buildRails, buildRoutes, RouteTrack, RoadIndex, BuildingIndex, buildingPolygons, wayNodeLayers, smoothElevations, cleanDomTerrain, colorByHeight, RAMP_M, MAX_GRADE } from "../src3d/mesh";
 import { metersToLonLat, quantizeDeg } from "../src3d/geo";
 
 let failures = 0;
@@ -99,6 +99,18 @@ const terr = buildTerrainMesh({ n: 4, sizeM: 400, originX: -200, originY: -200, 
 check("terrain mesh vertices", terr.positions.length / 3 === 25, `${terr.positions.length / 3}`);
 check("terrain mesh triangles", terr.indices.length / 3 === 4 * 4 * 2, `${terr.indices.length / 3}`);
 check("terrain height 50 m", terr.positions[1] === 50);
+{
+  // colorByHeight: flat terrain -> uniform color; ramp -> low/high stops at extremes
+  const flat = buildTerrainMesh({ n: 4, sizeM: 400, originX: -200, originY: -200, heightsDm: new Array(25).fill(500) });
+  colorByHeight(flat);
+  let uniform = true;
+  for (let i = 3; i < flat.colors.length; i++) if (Math.abs(flat.colors[i] - flat.colors[i % 3]) > 1e-9) uniform = false;
+  check("colorByHeight flat terrain is uniform", uniform);
+  const ramp = buildTerrainMesh({ n: 1, sizeM: 100, originX: 0, originY: 0, heightsDm: [300, 300, 800, 800] });
+  colorByHeight(ramp);
+  check("colorByHeight lowest vertex gets low stop", Math.abs(ramp.colors[0] - 0.25) < 1e-9 && Math.abs(ramp.colors[2] - 0.75) < 1e-9, `${ramp.colors[0]},${ramp.colors[2]}`);
+  check("colorByHeight highest vertex gets high stop", Math.abs(ramp.colors[3 * 3] - 0.95) < 1e-9, `${ramp.colors[9]}`);
+}
 
 const data = mkData([
   { ptsM: [[0, 0], [100, 0]], tags: { highway: "residential" } },

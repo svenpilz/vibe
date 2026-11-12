@@ -26,6 +26,10 @@ The 2D micromapping visualizer lives on `main` (https://svenpilz.github.io/vibe/
 A north-up minimap (bottom-right) shows a 500 m radius around the car with roads, buildings,
 the car marker and the camera view direction.
 
+The camera view (location, zoom, orientation) is continuously written to the URL hash
+(`#c=x,y,z&t=x,y,z`) and restored on reload, so a shared/refreshed link keeps the view.
+In terrain-only mode (`T`) the terrain is color-coded by elevation (hypsometric ramp).
+
 The car drives on the road network (elevation-aware snapping, so it can pass **under bridges**,
 and on a `layer=1` deck it drives 5 m above the road below) and can also go **off-road** — it then
 follows the bare-earth DGM1 terrain with extra drag. Buildings block the car.

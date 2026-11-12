@@ -98,6 +98,35 @@ export function triangulatePolygon(pts: Array<[number, number]>): number[] {
   return out;
 }
 
+/** Recolor a mesh by elevation with a hypsometric ramp (used in terrain-only mode). */
+export function colorByHeight(m: MeshData): void {
+  let min = Infinity, max = -Infinity;
+  for (let i = 1; i < m.positions.length; i += 3) {
+    const y = m.positions[i];
+    if (y < min) min = y;
+    if (y > max) max = y;
+  }
+  const stops: Array<[number, [number, number, number]]> = [
+    [0.0, [0.25, 0.45, 0.75]],
+    [0.35, [0.35, 0.62, 0.35]],
+    [0.65, [0.85, 0.75, 0.45]],
+    [0.85, [0.65, 0.5, 0.35]],
+    [1.0, [0.95, 0.95, 0.98]],
+  ];
+  const span = Math.max(max - min, 1e-6);
+  for (let i = 0; i < m.positions.length; i += 3) {
+    const t = (m.positions[i + 1] - min) / span;
+    let s = 0;
+    while (s < stops.length - 2 && t > stops[s + 1][0]) s++;
+    const [t0, c0] = stops[s];
+    const [t1, c1] = stops[s + 1];
+    const f = Math.max(0, Math.min(1, (t - t0) / Math.max(t1 - t0, 1e-9)));
+    m.colors[i] = c0[0] + (c1[0] - c0[0]) * f;
+    m.colors[i + 1] = c0[1] + (c1[1] - c0[1]) * f;
+    m.colors[i + 2] = c0[2] + (c1[2] - c0[2]) * f;
+  }
+}
+
 /** Terrain heightfield mesh from the baked DEM grid. */
 export function buildTerrainMesh(g: TerrainGrid): MeshData {
   const m = emptyMesh();

@@ -7,9 +7,9 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type { BakedData, TerrainGrid } from "./schema";
-import { sampleTerrainM, wayTags } from "./schema";
+import { sampleTerrainM, wayTags, formatViewHash, parseViewHash } from "./schema";
 import { lonLatToMeters } from "./geo";
-import { buildTerrainMesh, buildRoads, buildBuildings, buildGround, buildLaneMarkings, buildKerbs, buildFurniture, buildRails, buildRoutes, RouteTrack, RoadIndex, BuildingIndex, buildingPolygons, cleanDomTerrain, type MeshData } from "./mesh";
+import { buildTerrainMesh, buildRoads, buildBuildings, buildGround, buildLaneMarkings, buildKerbs, buildFurniture, buildRails, buildRoutes, RouteTrack, RoadIndex, BuildingIndex, buildingPolygons, cleanDomTerrain, colorByHeight, type MeshData } from "./mesh";
 
 const container = document.getElementById("scene") as HTMLElement;
 const hud = {
@@ -45,6 +45,15 @@ controls.dampingFactor = 0.08;
 controls.maxPolarAngle = Math.PI * 0.495;
 controls.maxDistance = 9000;
 controls.minDistance = 5;
+
+// restore the view from the URL hash (#c=cam&t=target) so a reload keeps it
+{
+  const saved = parseViewHash(window.location.hash);
+  if (saved) {
+    camera.position.set(saved.cam[0], saved.cam[1], saved.cam[2]);
+    controls.target.set(saved.tgt[0], saved.tgt[1], saved.tgt[2]);
+  }
+}
 
 scene.add(new THREE.HemisphereLight(0xffffff, 0xa8b898, 1.25));
 const sun = new THREE.DirectionalLight(0xfff3e0, 1.5);
@@ -161,6 +170,7 @@ async function boot(): Promise<void> {
   // 1 = DGM1 bare earth, 2 = DOM1 raw surface
   const terrainModes = ["DOM1 cleaned (DGM1 filters trees/signs)", "DGM1 bare earth", "DOM1 raw surface"];
   let terrainMode = 0;
+  let terrainOnly = false;
   let activeTerrain: TerrainGrid = data.terrain;
   let terrainMesh: THREE.Mesh | undefined;
   const setTerrainMode = (mode: number) => {
@@ -168,6 +178,7 @@ async function boot(): Promise<void> {
     const grid = !data.terrainDom || mode === 1 ? data.terrain : mode === 2 ? data.terrainDom : cleanDomTerrain(data.terrainDom, data.terrain, buildingPolygons(data));
     activeTerrain = grid;
     const g = buildTerrainMesh(grid);
+    if (terrainOnly) colorByHeight(g); // terrain-only mode: color-code the heights
     if (!terrainMesh) {
       terrainMesh = new THREE.Mesh(toGeometry(g), new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
       terrainMesh.receiveShadow = true;
@@ -229,18 +240,18 @@ async function boot(): Promise<void> {
   const keys = new Set<string>();
   let follow = true;
   let driverView = false;
-  let terrainOnly = false;
   window.addEventListener("keydown", (e) => {
     keys.add(e.code);
     if (e.code === "KeyC") { follow = !follow; driverView = false; }
     if (e.code === "KeyV") { driverView = !driverView; follow = false; }
     if (e.code === "KeyH") setTerrainMode((terrainMode + 1) % terrainModes.length);
     if (e.code === "KeyT") {
-      // terrain-only mode: show just the (cleaned DOM) terrain surface
+      // terrain-only mode: show just the (cleaned DOM) terrain surface, color-coded by height
       terrainOnly = !terrainOnly;
       for (const m of overlayMeshes) m.visible = !terrainOnly;
       car.visible = !terrainOnly;
       for (const v of vehicles) v.mesh.visible = !terrainOnly;
+      setTerrainMode(terrainMode); // recolor terrain by height when entering T mode
     }
     if (e.code === "KeyR" && spawn) {
       carState.x = spawn.x;
@@ -435,9 +446,19 @@ async function boot(): Promise<void> {
     if (ql && qr) car.rotation.z = Math.atan2(ql.elev - qr.elev, 2);
   }
 
+  let urlTimer = 0;
   function animate(): void {
     requestAnimationFrame(animate);
     const dt = Math.min(0.05, clock.getDelta());
+    // write location/zoom/orientation into the URL hash (throttled)
+    urlTimer -= dt;
+    if (urlTimer <= 0) {
+      urlTimer = 0.5;
+      history.replaceState(null, "", formatViewHash(
+        [camera.position.x, camera.position.y, camera.position.z],
+        [controls.target.x, controls.target.y, controls.target.z],
+      ));
+    }
     updateCar(dt);
     for (const v of vehicles) {
       v.dist += v.speed * dt;

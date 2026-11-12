@@ -113,6 +113,22 @@ export function minHeightM(tags: Record<string, string>): number {
   return parseHeightM(tags["min_height"]) ?? 0;
 }
 
+/** Serialize the current view (camera position + orbit target = location, zoom,
+ *  orientation) into a URL hash, e.g. "#c=1600,1100,-1600&t=0,50,0". */
+export function formatViewHash(cam: [number, number, number], tgt: [number, number, number]): string {
+  const f = (v: number): number => Math.round(v * 10) / 10;
+  return `#c=${f(cam[0])},${f(cam[1])},${f(cam[2])}&t=${f(tgt[0])},${f(tgt[1])},${f(tgt[2])}`;
+}
+
+/** Parse a view hash written by formatViewHash; null when invalid. */
+export function parseViewHash(hash: string): { cam: [number, number, number]; tgt: [number, number, number] } | null {
+  const m = /^#c=(-?[\d.]+),(-?[\d.]+),(-?[\d.]+)&t=(-?[\d.]+),(-?[\d.]+),(-?[\d.]+)$/.exec(hash);
+  if (!m) return null;
+  const n = m.slice(1).map(Number);
+  if (n.some((v) => !Number.isFinite(v))) return null;
+  return { cam: [n[0], n[1], n[2]], tgt: [n[3], n[4], n[5]] };
+}
+
 /**
  * OSM layer of a way as int (default 0). bridge=yes without a layer implies
  * layer 1; tunnel=yes without a layer implies layer -1.

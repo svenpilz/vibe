@@ -1,4 +1,4 @@
-import { parseHeightM, parseLevels, buildingHeightM, minHeightM, osmLayer, layerElevationM, roadWidthM, surfaceColor, sampleTerrainM, type TerrainGrid } from "../src3d/schema";
+import { parseHeightM, parseLevels, buildingHeightM, minHeightM, osmLayer, layerElevationM, roadWidthM, surfaceColor, sampleTerrainM, formatViewHash, parseViewHash, type TerrainGrid } from "../src3d/schema";
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -50,6 +50,12 @@ const g3 = grid([0, 1000, 1000, 0]); // (0,0)=0 (100,0)=100 (0,100)=100 (100,100
 check("terrain matches mesh triangle tx>ty", Math.abs(sampleTerrainM(g3, 75, 25) - 50) < 1e-9);
 check("terrain matches mesh triangle tx<ty", Math.abs(sampleTerrainM(g3, 25, 75) - 50) < 1e-9);
 check("terrain on mesh diagonal", Math.abs(sampleTerrainM(g3, 50, 50) - 0) < 1e-9);
+
+const vh = formatViewHash([1600.04, 1100, -1600], [0, 50.26, 0]);
+check("view hash format", vh === "#c=1600,1100,-1600&t=0,50.3,0", vh);
+const vp = parseViewHash(vh);
+check("view hash round-trip", vp !== null && vp.cam[0] === 1600 && vp.cam[2] === -1600 && vp.tgt[1] === 50.3, JSON.stringify(vp));
+check("view hash rejects garbage", parseViewHash("#foo") === null && parseViewHash("") === null);
 
 if (failures > 0) {
   console.error(`${failures} test(s) failed`);
